@@ -1,8 +1,12 @@
 """
 Client-side cryptographic operations using LightPHE Paillier.
+
+Supports parallel encryption and decryption for improved performance.
 """
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import multiprocessing as mp
 import numpy as np
 from lightphe import LightPHE
 from lightphe.models.Tensor import EncryptedTensor
@@ -104,18 +108,80 @@ class CryptoClient:
 
     def decrypt_scores(
         self,
-        encrypted_scores: List[EncryptedTensor]
+        encrypted_scores: List[EncryptedTensor],
+        parallel: bool = False,
+        num_workers: Optional[int] = None,
     ) -> List[float]:
         """
         Decrypt multiple encrypted scores.
 
         Args:
             encrypted_scores: List of encrypted dot products
+            parallel: Use parallel decryption (ThreadPoolExecutor)
+            num_workers: Number of workers (defaults to CPU count)
 
         Returns:
             List of decrypted similarity scores
         """
-        return [self.decrypt_score(score) for score in encrypted_scores]
+        if not parallel or len(encrypted_scores) <= 4:
+            return [self.decrypt_score(score) for score in encrypted_scores]
+
+        # Use ThreadPoolExecutor for parallel decryption
+        # ThreadPool works because Python GIL is released during bignum operations
+        if num_workers is None:
+            num_workers = min(mp.cpu_count(), len(encrypted_scores))
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            results = list(executor.map(self.decrypt_score, encrypted_scores))
+
+        return results
+
+    def decrypt_scores_chunked(
+        self,
+        encrypted_scores: List[EncryptedTensor],
+        chunk_size: int = 10,
+        num_workers: Optional[int] = None,
+    ) -> List[float]:
+        """
+        Decrypt scores in parallel chunks for better performance.
+
+        Processes scores in chunks, with each chunk decrypted sequentially
+        but chunks processed in parallel. This can be more efficient than
+        per-score parallelization due to reduced overhead.
+
+        Args:
+            encrypted_scores: List of encrypted dot products
+            chunk_size: Number of scores per chunk
+            num_workers: Number of parallel workers
+
+        Returns:
+            List of decrypted similarity scores
+        """
+        if len(encrypted_scores) <= chunk_size:
+            return [self.decrypt_score(score) for score in encrypted_scores]
+
+        if num_workers is None:
+            num_workers = mp.cpu_count()
+
+        # Create chunks
+        chunks = [
+            encrypted_scores[i:i + chunk_size]
+            for i in range(0, len(encrypted_scores), chunk_size)
+        ]
+
+        def decrypt_chunk(chunk: List[EncryptedTensor]) -> List[float]:
+            return [self.decrypt_score(score) for score in chunk]
+
+        # Process chunks in parallel
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            chunk_results = list(executor.map(decrypt_chunk, chunks))
+
+        # Flatten results
+        return [score for chunk_result in chunk_results for score in chunk_result]
+
+    def get_keys_dict(self) -> dict:
+        """Export keys as a dictionary for multiprocessing."""
+        return self._cs.cs.keys.copy()
 
     def export_public_key(self, path: Union[str, Path]) -> None:
         """Export public key to file."""
@@ -173,3 +239,70 @@ class CryptoClient:
         Useful for advanced operations or debugging.
         """
         return self._cs
+
+
+# Global worker state for multiprocessing
+_worker_crypto: Optional[CryptoClient] = None
+
+
+def _init_worker(keys: dict, precision: int):
+    """Initialize crypto client in worker process."""
+    global _worker_crypto
+    _worker_crypto = CryptoClient(keys=keys, precision=precision)
+
+
+def _decrypt_single(encrypted_score: EncryptedTensor) -> float:
+    """Decrypt a single score (for use in worker process)."""
+    global _worker_crypto
+    return _worker_crypto.decrypt_score(encrypted_score)
+
+
+def _decrypt_chunk(args: Tuple[List[EncryptedTensor], dict, int]) -> List[float]:
+    """Decrypt a chunk of scores with own crypto instance."""
+    chunk, keys, precision = args
+    crypto = CryptoClient(keys=keys, precision=precision)
+    return [crypto.decrypt_score(score) for score in chunk]
+
+
+def parallel_decrypt_multiprocess(
+    encrypted_scores: List[EncryptedTensor],
+    keys: dict,
+    precision: int = 5,
+    num_workers: Optional[int] = None,
+    chunk_size: int = 5,
+) -> List[float]:
+    """
+    Decrypt scores using true multiprocessing for CPU parallelism.
+
+    Creates separate processes, each with its own crypto instance,
+    to bypass Python's GIL.
+
+    Args:
+        encrypted_scores: List of encrypted dot products
+        keys: Key dictionary from CryptoClient.get_keys_dict()
+        precision: Decimal precision
+        num_workers: Number of worker processes
+        chunk_size: Scores per chunk
+
+    Returns:
+        List of decrypted similarity scores
+    """
+    if len(encrypted_scores) <= chunk_size:
+        crypto = CryptoClient(keys=keys, precision=precision)
+        return [crypto.decrypt_score(score) for score in encrypted_scores]
+
+    if num_workers is None:
+        num_workers = mp.cpu_count()
+
+    # Create chunks with keys/precision for each
+    chunks = []
+    for i in range(0, len(encrypted_scores), chunk_size):
+        chunk = encrypted_scores[i:i + chunk_size]
+        chunks.append((chunk, keys, precision))
+
+    # Process in parallel using ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        chunk_results = list(executor.map(_decrypt_chunk, chunks))
+
+    # Flatten
+    return [score for chunk_result in chunk_results for score in chunk_result]

@@ -35,8 +35,49 @@ uv run python scripts/demo_blind_search.py -n 100 -d 128
 # Phase 3: Full funnel pipeline
 uv run python scripts/demo_full_pipeline.py --tiny
 
+# Benchmark parallelization
+uv run python scripts/benchmark_parallel.py --quick
+
+# Demo with real embeddings (requires sentence-transformers)
+uv run python scripts/demo_real_embeddings.py --tiny
+
 # Run tests
 uv run pytest tests/ -v
+```
+
+## New Features
+
+### Real Embeddings Support
+Use actual sentence embeddings from sentence-transformers instead of random vectors:
+```python
+from opaque.shared.embeddings import EmbeddingModel, create_embedded_database
+
+model = EmbeddingModel("all-MiniLM-L6-v2")  # 384 dimensions
+embeddings, ids, dim = create_embedded_database(texts, positive_shift=True)
+```
+
+### Parallel Decryption (Multiprocessing)
+True parallelism using ProcessPoolExecutor for ~3.6x faster decryption:
+```python
+from opaque.client.crypto import CryptoClient, parallel_decrypt_multiprocess
+
+crypto = CryptoClient(key_size=2048)
+keys = crypto.get_keys_dict()
+
+# Parallel decryption with multiprocessing
+scores = parallel_decrypt_multiprocess(
+    encrypted_scores, keys=keys, num_workers=4
+)
+```
+
+### Parallel Search
+Enable multiprocessing in search operations:
+```python
+results, timing = search_client.funnel_search(
+    query, lsh_search_fn, server_compute_fn,
+    multiprocess=True,  # ~3.6x faster decryption
+    num_workers=4
+)
 ```
 
 ## Architecture

@@ -19,6 +19,17 @@ from opaque.shared.reduction import (
     determine_optimal_dimension,
 )
 
+# Embeddings are optional (requires sentence-transformers)
+try:
+    from opaque.shared.embeddings import (
+        EmbeddingModel,
+        load_sample_dataset,
+        create_embedded_database,
+    )
+    _HAS_EMBEDDINGS = True
+except ImportError:
+    _HAS_EMBEDDINGS = False
+
 __all__ = [
     "VectorDimension",
     "BenchmarkResult",
@@ -34,3 +45,10 @@ __all__ = [
     "PCAReducer",
     "determine_optimal_dimension",
 ]
+
+if _HAS_EMBEDDINGS:
+    __all__.extend([
+        "EmbeddingModel",
+        "load_sample_dataset",
+        "create_embedded_database",
+    ])

@@ -6,11 +6,13 @@ Coordinates the full search flow:
 2. Send to server (via function call or API)
 3. Receive encrypted scores
 4. Decrypt and rank results
+
+Supports parallel decryption for improved performance.
 """
 import numpy as np
-from typing import List, Tuple, Callable, Any
+from typing import List, Tuple, Callable, Any, Optional
 
-from opaque.client.crypto import CryptoClient
+from opaque.client.crypto import CryptoClient, parallel_decrypt_multiprocess
 from opaque.shared.utils import Timer, top_k_indices
 from opaque.shared.protocol import SearchResult
 
@@ -37,6 +39,9 @@ class SearchClient:
         server_compute_fn: Callable,
         top_k: int = 10,
         verbose: bool = False,
+        parallel: bool = False,
+        multiprocess: bool = False,
+        num_workers: Optional[int] = None,
     ) -> Tuple[List[SearchResult], dict]:
         """
         Perform blind search (Phase 2 - no LSH filtering).
@@ -49,6 +54,9 @@ class SearchClient:
                                Signature: (encrypted_query) -> (encrypted_scores, ids, time_ms)
             top_k: Number of top results to return
             verbose: Print timing information
+            parallel: Use parallel decryption (ThreadPoolExecutor)
+            multiprocess: Use multiprocessing decryption (ProcessPoolExecutor, fastest)
+            num_workers: Number of parallel workers
 
         Returns:
             Tuple of (search results, timing info)
@@ -72,11 +80,25 @@ class SearchClient:
         if verbose:
             print(f"  Server computation took {server_time_ms:.2f}ms")
 
-        # Step 3: Decrypt scores
+        # Step 3: Decrypt scores (with optional parallelization)
         if verbose:
-            print("Step 3: Decrypting scores...")
+            mode = "multiprocess" if multiprocess else ("parallel" if parallel else "sequential")
+            print(f"Step 3: Decrypting scores ({mode})...")
         with Timer() as t:
-            scores = self.crypto.decrypt_scores(encrypted_scores)
+            if multiprocess:
+                keys = self.crypto.get_keys_dict()
+                scores = parallel_decrypt_multiprocess(
+                    encrypted_scores,
+                    keys=keys,
+                    precision=self.crypto.precision,
+                    num_workers=num_workers,
+                )
+            elif parallel:
+                scores = self.crypto.decrypt_scores(
+                    encrypted_scores, parallel=True, num_workers=num_workers
+                )
+            else:
+                scores = self.crypto.decrypt_scores(encrypted_scores)
         timing["decrypt_ms"] = t.elapsed_ms
         if verbose:
             print(f"  Decryption took {t.elapsed_ms:.2f}ms")
@@ -115,6 +137,9 @@ class SearchClient:
         num_candidates: int = 1000,
         top_k: int = 10,
         verbose: bool = False,
+        parallel: bool = False,
+        multiprocess: bool = False,
+        num_workers: Optional[int] = None,
     ) -> Tuple[List[SearchResult], dict]:
         """
         Perform full funnel search (Phase 3 - with LSH filtering).
@@ -131,6 +156,9 @@ class SearchClient:
             num_candidates: Number of LSH candidates
             top_k: Final number of results
             verbose: Print progress
+            parallel: Use parallel decryption (ThreadPoolExecutor)
+            multiprocess: Use multiprocessing decryption (ProcessPoolExecutor, fastest)
+            num_workers: Number of parallel workers
 
         Returns:
             Tuple of (results, timing)
@@ -161,9 +189,23 @@ class SearchClient:
         timing["server_compute_ms"] = server_time
 
         if verbose:
-            print("Stage 2: Decrypting scores...")
+            mode = "multiprocess" if multiprocess else ("parallel" if parallel else "sequential")
+            print(f"Stage 2: Decrypting scores ({mode})...")
         with Timer() as t:
-            scores = self.crypto.decrypt_scores(encrypted_scores)
+            if multiprocess:
+                keys = self.crypto.get_keys_dict()
+                scores = parallel_decrypt_multiprocess(
+                    encrypted_scores,
+                    keys=keys,
+                    precision=self.crypto.precision,
+                    num_workers=num_workers,
+                )
+            elif parallel:
+                scores = self.crypto.decrypt_scores(
+                    encrypted_scores, parallel=True, num_workers=num_workers
+                )
+            else:
+                scores = self.crypto.decrypt_scores(encrypted_scores)
         timing["decrypt_ms"] = t.elapsed_ms
 
         # Rank and return
