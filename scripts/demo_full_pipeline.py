@@ -73,8 +73,9 @@ def run_full_pipeline_demo(
     with Timer() as t:
         pca = PCAReducer(input_dimension, reduced_dimension)
         db_vectors_reduced = pca.fit_transform(db_vectors_full)
-        # Re-normalize after PCA
-        db_vectors_reduced = normalize_vectors(db_vectors_reduced)
+        # Shift to positive range (required for LightPHE PHE operations)
+        # PCA can produce negative values, so we shift to [0.01, ...]
+        db_vectors_reduced = db_vectors_reduced - db_vectors_reduced.min() + 0.01
     print(f"    PCA fit + transform in {t.elapsed_ms:.0f}ms")
     if pca.total_explained_variance_ratio is not None:
         print(f"    Explained variance: {pca.total_explained_variance_ratio:.1%}")
@@ -106,9 +107,10 @@ def run_full_pipeline_demo(
 
     # 6. Generate query
     print("\n[6] Generating query vector...")
-    query_full = generate_random_vectors(1, input_dimension, normalize=True, seed=999)[0]
+    query_full = generate_random_vectors(1, input_dimension, normalize=True, seed=999, positive=True)[0]
     query_reduced = pca.transform(query_full.reshape(1, -1))[0]
-    query_reduced = query_reduced / np.linalg.norm(query_reduced)
+    # Shift to positive range (same transformation as database)
+    query_reduced = query_reduced - query_reduced.min() + 0.01
 
     # =========================================================================
     # SEARCH PHASE
