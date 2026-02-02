@@ -136,6 +136,7 @@ class SearchClient:
         server_compute_fn: Callable,
         num_candidates: int = 1000,
         top_k: int = 10,
+        decrypt_top_n: Optional[int] = None,
         verbose: bool = False,
         parallel: bool = False,
         multiprocess: bool = False,
@@ -155,6 +156,9 @@ class SearchClient:
                                Signature: (encrypted_query, candidate_ids) -> (scores, ids, time)
             num_candidates: Number of LSH candidates
             top_k: Final number of results
+            decrypt_top_n: Only decrypt top N candidates by LSH distance (default: all).
+                          Set to 2*top_k or 3*top_k for speed vs accuracy tradeoff.
+                          If None, decrypts all candidates.
             verbose: Print progress
             parallel: Use parallel decryption (ThreadPoolExecutor)
             multiprocess: Use multiprocessing decryption (ProcessPoolExecutor, fastest)
@@ -173,6 +177,14 @@ class SearchClient:
         timing["lsh_ms"] = t.elapsed_ms
         if verbose:
             print(f"  Retrieved {len(candidate_ids)} candidates in {t.elapsed_ms:.2f}ms")
+
+        # Optimization: Only process top-N by LSH distance (already sorted by LSH)
+        # This exploits the fact that LSH ranking approximates true similarity
+        if decrypt_top_n is not None and decrypt_top_n < len(candidate_ids):
+            skipped = len(candidate_ids) - decrypt_top_n
+            candidate_ids = candidate_ids[:decrypt_top_n]
+            if verbose:
+                print(f"  Optimization: Only decrypting top {decrypt_top_n} by LSH (skipping {skipped})")
 
         # Stage 2: PHE Scoring (Fine)
         if verbose:
