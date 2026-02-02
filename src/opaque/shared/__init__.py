@@ -14,6 +14,10 @@ from opaque.shared.utils import (
     top_k_indices,
     Timer,
 )
+from opaque.shared.reduction import (
+    PCAReducer,
+    determine_optimal_dimension,
+)
 
 __all__ = [
     "VectorDimension",
@@ -27,4 +31,6 @@ __all__ = [
     "compute_plaintext_similarity",
     "top_k_indices",
     "Timer",
+    "PCAReducer",
+    "determine_optimal_dimension",
 ]
