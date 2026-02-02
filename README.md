@@ -38,7 +38,7 @@ uv run python scripts/demo_full_pipeline.py --tiny
 # Benchmark parallelization
 uv run python scripts/benchmark_parallel.py --quick
 
-# Demo with real embeddings (requires sentence-transformers)
+# Demo with real embeddings (uses ONNX Runtime, no torch needed)
 uv run python scripts/demo_real_embeddings.py --tiny
 
 # Run tests
@@ -47,14 +47,20 @@ uv run pytest tests/ -v
 
 ## New Features
 
-### Real Embeddings Support
-Use actual sentence embeddings from sentence-transformers instead of random vectors:
+### Real Embeddings Support (ONNX Runtime)
+Use actual sentence embeddings via HuggingFace + ONNX Runtime (no torch required):
 ```python
 from opaque.shared.embeddings import EmbeddingModel, create_embedded_database
 
+# Uses ONNX Runtime backend for stable, fast inference
 model = EmbeddingModel("all-MiniLM-L6-v2")  # 384 dimensions
 embeddings, ids, dim = create_embedded_database(texts, positive_shift=True)
 ```
+
+**Benefits of ONNX Runtime:**
+- No segmentation faults (torch/multiprocessing conflicts on macOS)
+- Faster inference with CoreML acceleration on Apple Silicon
+- Smaller dependency footprint (no 2GB+ torch installation)
 
 ### Parallel Decryption (Multiprocessing)
 True parallelism using ProcessPoolExecutor for ~3.6x faster decryption:
