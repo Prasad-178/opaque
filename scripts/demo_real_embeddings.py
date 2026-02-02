@@ -92,14 +92,17 @@ def run_real_embeddings_demo(
         embeddings_reduced = pca.fit_transform(embeddings)
         # Shift to positive range for PHE
         embeddings_reduced = embeddings_reduced - embeddings_reduced.min() + 0.01
+        # Get actual output dimension (may be less if n_samples < requested dim)
+        actual_dim = pca.output_dim
     print(f"    PCA done in {t.elapsed_ms:.0f}ms")
+    print(f"    Actual dimension: {actual_dim} (shape: {embeddings_reduced.shape})")
     if pca.total_explained_variance_ratio:
         print(f"    Explained variance: {pca.total_explained_variance_ratio:.1%}")
 
     # 5. Build LSH index
     print("\n[5] Building LSH index...")
     with Timer() as t:
-        lsh_index = LSHIndex(reduced_dim, nbits=128)
+        lsh_index = LSHIndex(actual_dim, nbits=128)
         lsh_index.add(embeddings_reduced, doc_ids)
     print(f"    Indexed {lsh_index.ntotal} vectors in {t.elapsed_ms:.0f}ms")
     print(f"    Backend: {lsh_index.backend}")
@@ -142,19 +145,11 @@ def run_real_embeddings_demo(
         return lsh_index.search(query, k)
 
     def phe_compute(encrypted_query, candidate_ids):
-        if parallel:
-            return compute_engine.compute_encrypted_scores_parallel(
-                encrypted_query,
-                vector_ids=candidate_ids,
-                num_workers=num_workers,
-                verbose=False,
-            )
-        else:
-            return compute_engine.compute_encrypted_scores(
-                encrypted_query,
-                vector_ids=candidate_ids,
-                verbose=False,
-            )
+        return compute_engine.compute_encrypted_scores(
+            encrypted_query,
+            vector_ids=candidate_ids,
+            verbose=False,
+        )
 
     # =========================================================================
     # PRIVACY-PRESERVING SEARCH

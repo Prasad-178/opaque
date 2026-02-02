@@ -1,6 +1,6 @@
 [project]
 name = "opaque"
-version = "0.1.0"
+version = "0.2.0"
 description = "Privacy-preserving vector search engine using PHE and LSH"
 readme = "PRD.md"
 requires-python = ">=3.10"
@@ -14,7 +14,11 @@ dependencies = [
     "uvicorn>=0.23.0",
     "pydantic>=2.0.0",
     "httpx>=0.24.0",
-    "sentence-transformers>=2.2.0",
+    # HuggingFace with ONNX Runtime (no torch dependency, more stable on macOS)
+    "transformers>=4.30.0",
+    "tokenizers>=0.13.0",
+    "onnxruntime>=1.15.0",
+    "huggingface-hub>=0.16.0",
     "datasets>=2.14.0",
 ]
 

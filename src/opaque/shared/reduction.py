@@ -57,6 +57,15 @@ class PCAReducer:
                 f"Expected {self.input_dim} dims, got {vectors.shape[1]}"
             )
 
+        n_samples = len(vectors)
+        
+        # Adjust output_dim if we have fewer samples than requested dimensions
+        # SVD can only produce min(n_samples, n_features) components
+        effective_output_dim = min(self.output_dim, n_samples, self.input_dim)
+        if effective_output_dim != self.output_dim:
+            # Update output_dim to reflect actual number of components we can produce
+            self.output_dim = effective_output_dim
+
         # Center the data
         self._mean = np.mean(vectors, axis=0)
         centered = vectors - self._mean
@@ -64,7 +73,7 @@ class PCAReducer:
         # Compute SVD (more numerically stable than covariance for large matrices)
         # For n_samples < n_features, use full SVD
         # For n_samples >= n_features, truncated is fine
-        if len(vectors) > self.input_dim:
+        if n_samples > self.input_dim:
             # Use randomized SVD for efficiency with large datasets
             try:
                 from sklearn.decomposition import PCA
@@ -76,12 +85,12 @@ class PCAReducer:
                 # Fallback to numpy SVD
                 U, S, Vt = np.linalg.svd(centered, full_matrices=False)
                 self._components = Vt[:self.output_dim]
-                self._explained_variance = (S[:self.output_dim] ** 2) / (len(vectors) - 1)
+                self._explained_variance = (S[:self.output_dim] ** 2) / (n_samples - 1)
         else:
             # For small datasets, use full SVD
             U, S, Vt = np.linalg.svd(centered, full_matrices=False)
             self._components = Vt[:self.output_dim]
-            self._explained_variance = (S[:self.output_dim] ** 2) / max(len(vectors) - 1, 1)
+            self._explained_variance = (S[:self.output_dim] ** 2) / max(n_samples - 1, 1)
 
         self._is_fitted = True
         return self
