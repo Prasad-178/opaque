@@ -179,8 +179,13 @@ class RandomProjectionLSH(BaseLSHIndex):
 
         # Get top-k by minimum Hamming distance
         k = min(k, len(self.ids))
-        top_indices = np.argpartition(distances, k)[:k]
-        top_indices = top_indices[np.argsort(distances[top_indices])]
+
+        if k == len(self.ids):
+            # Return all vectors sorted by distance
+            top_indices = np.argsort(distances)
+        else:
+            top_indices = np.argpartition(distances, k)[:k]
+            top_indices = top_indices[np.argsort(distances[top_indices])]
 
         candidate_ids = [self.ids[i] for i in top_indices]
 

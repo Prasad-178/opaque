@@ -10,7 +10,8 @@ def generate_random_vectors(
     num_vectors: int,
     dimension: int,
     normalize: bool = True,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    positive: bool = True,
 ) -> np.ndarray:
     """
     Generate random vectors for testing.
@@ -20,6 +21,7 @@ def generate_random_vectors(
         dimension: Dimension of each vector
         normalize: Whether to L2-normalize vectors
         seed: Random seed for reproducibility
+        positive: Whether to ensure all values are positive (required for PHE)
 
     Returns:
         Array of shape (num_vectors, dimension)
@@ -31,6 +33,11 @@ def generate_random_vectors(
 
     if normalize:
         vectors = normalize_vectors(vectors)
+
+    if positive:
+        # Shift to positive range: normalized vectors are in [-1, 1]
+        # Shift to [0.01, 1.01] to avoid zeros
+        vectors = (vectors + 1.0) / 2.0 + 0.01
 
     return vectors
 
