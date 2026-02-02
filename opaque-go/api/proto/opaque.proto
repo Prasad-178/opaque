@@ -1,0 +1,174 @@
+syntax = "proto3";
+
+package opaque.v1;
+
+option go_package = "github.com/opaque/opaque-go/api/proto;proto";
+
+// OpaqueSearch is the main service for privacy-preserving vector search.
+service OpaqueSearch {
+  // RegisterKey registers a client's public key and creates a session.
+  rpc RegisterKey(RegisterKeyRequest) returns (RegisterKeyResponse);
+
+  // GetPlanes retrieves the LSH hyperplanes for client-side hashing.
+  rpc GetPlanes(GetPlanesRequest) returns (GetPlanesResponse);
+
+  // GetCandidates performs LSH lookup to find candidate vectors.
+  rpc GetCandidates(CandidateRequest) returns (CandidateResponse);
+
+  // ComputeScores computes encrypted similarity scores for candidates.
+  rpc ComputeScores(ScoreRequest) returns (ScoreResponse);
+
+  // ComputeScoresStream streams encrypted scores one at a time (for large responses).
+  rpc ComputeScoresStream(ScoreRequest) returns (stream ScoreChunk);
+
+  // Search performs the complete search flow in one call (convenience method).
+  rpc Search(SearchRequest) returns (SearchResponse);
+
+  // HealthCheck checks service health.
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// RegisterKeyRequest contains the client's public key for session creation.
+message RegisterKeyRequest {
+  // Serialized public key (Lattigo format)
+  bytes public_key = 1;
+
+  // Requested session TTL in seconds (server may enforce max)
+  int32 session_ttl_seconds = 2;
+}
+
+// RegisterKeyResponse returns the session ID for subsequent requests.
+message RegisterKeyResponse {
+  // Unique session identifier
+  string session_id = 1;
+
+  // Actual TTL granted (may be less than requested)
+  int32 session_ttl_seconds = 2;
+}
+
+// GetPlanesRequest requests the LSH hyperplanes.
+message GetPlanesRequest {
+  string session_id = 1;
+}
+
+// GetPlanesResponse contains the LSH hyperplanes for client-side hashing.
+message GetPlanesResponse {
+  // Flattened hyperplanes (num_planes * dimension floats)
+  repeated double planes = 1;
+
+  // Number of planes (hash bits)
+  int32 num_planes = 2;
+
+  // Vector dimension
+  int32 dimension = 3;
+}
+
+// CandidateRequest requests candidate vectors by LSH hash.
+message CandidateRequest {
+  // Session identifier
+  string session_id = 1;
+
+  // LSH hash computed by client
+  bytes lsh_hash = 2;
+
+  // Maximum number of candidates to return
+  int32 num_candidates = 3;
+
+  // Use multi-probe LSH (check neighboring buckets)
+  bool multi_probe = 4;
+
+  // Number of probes for multi-probe LSH
+  int32 num_probes = 5;
+}
+
+// CandidateResponse contains candidate vector IDs.
+message CandidateResponse {
+  // Candidate vector IDs
+  repeated string ids = 1;
+
+  // Hamming distances to query hash
+  repeated int32 distances = 2;
+}
+
+// ScoreRequest requests encrypted similarity scores.
+message ScoreRequest {
+  // Session identifier
+  string session_id = 1;
+
+  // Encrypted query vector (serialized ciphertext)
+  bytes encrypted_query = 2;
+
+  // Candidate IDs to score
+  repeated string candidate_ids = 3;
+}
+
+// ScoreResponse contains encrypted similarity scores.
+message ScoreResponse {
+  // Encrypted scores (serialized ciphertexts)
+  repeated bytes encrypted_scores = 1;
+
+  // Corresponding IDs (same order as scores)
+  repeated string ids = 2;
+}
+
+// ScoreChunk is a single encrypted score for streaming.
+message ScoreChunk {
+  // Vector ID
+  string id = 1;
+
+  // Encrypted score (serialized ciphertext)
+  bytes encrypted_score = 2;
+}
+
+// SearchRequest combines all steps into one request (convenience).
+message SearchRequest {
+  // Session identifier
+  string session_id = 1;
+
+  // LSH hash computed by client
+  bytes lsh_hash = 2;
+
+  // Encrypted query vector
+  bytes encrypted_query = 3;
+
+  // Maximum candidates to consider
+  int32 max_candidates = 4;
+
+  // Number of scores to compute and return
+  int32 top_n = 5;
+}
+
+// SearchResponse contains the complete search results.
+message SearchResponse {
+  // Encrypted scores
+  repeated bytes encrypted_scores = 1;
+
+  // Corresponding IDs
+  repeated string ids = 2;
+
+  // LSH distances (for debugging/analysis)
+  repeated int32 lsh_distances = 3;
+}
+
+// HealthCheckRequest for service health check.
+message HealthCheckRequest {}
+
+// HealthCheckResponse indicates service health.
+message HealthCheckResponse {
+  enum Status {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+  }
+
+  Status status = 1;
+
+  // Additional info
+  string message = 2;
+
+  // Number of active sessions
+  int64 active_sessions = 3;
+
+  // Number of vectors in index
+  int64 vector_count = 4;
+}
