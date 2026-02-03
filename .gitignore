@@ -48,3 +48,7 @@ data/
 .coverage
 htmlcov/
 .benchmarks/
+
+# Planning docs (local only)
+GO_PRODUCTION_PLAN.md
+PRD.md
