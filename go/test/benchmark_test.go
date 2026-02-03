@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opaque/opaque-go/pkg/crypto"
-	"github.com/opaque/opaque-go/pkg/lsh"
+	"github.com/opaque/opaque/go/pkg/crypto"
+	"github.com/opaque/opaque/go/pkg/lsh"
 )
 
 // BenchmarkResult stores benchmark results for comparison

@@ -1,4 +1,4 @@
-module github.com/opaque/opaque-go
+module github.com/opaque/opaque/go
 
 go 1.25.5
 

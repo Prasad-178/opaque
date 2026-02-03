@@ -19,8 +19,8 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	"github.com/opaque/opaque-go/internal/service"
-	"github.com/opaque/opaque-go/internal/store"
+	"github.com/opaque/opaque/go/internal/service"
+	"github.com/opaque/opaque/go/internal/store"
 )
 
 var (

@@ -1,10 +1,10 @@
-# Opaque-Go
+# Opaque Go
 
 Privacy-preserving vector search using homomorphic encryption, implemented in Go.
 
 ## Overview
 
-Opaque-Go allows clients to search encrypted queries against a vector database without revealing query content to the server. It uses:
+Opaque Go allows clients to search encrypted queries against a vector database without revealing query content to the server. It uses:
 
 - **Lattigo BFV** for homomorphic encryption (128-bit security)
 - **Locality-Sensitive Hashing (LSH)** for fast candidate retrieval
@@ -13,7 +13,7 @@ Opaque-Go allows clients to search encrypted queries against a vector database w
 ## Project Structure
 
 ```
-opaque-go/
+go/
 ├── cmd/
 │   ├── search-service/  # gRPC server
 │   └── cli/             # CLI testing tool

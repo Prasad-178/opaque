@@ -43,14 +43,14 @@
 ```
 goos: darwin
 goarch: arm64
-pkg: github.com/opaque/opaque-go/pkg/crypto
+pkg: github.com/opaque/opaque/go/pkg/crypto
 cpu: Apple M4 Pro
 
 BenchmarkEncryption-12             240    5,205,188 ns/op   2,381,208 B/op    141 allocs/op
 BenchmarkDecryption-12           1,324      931,470 ns/op     790,464 B/op     58 allocs/op
 BenchmarkSerialization-12        5,475      226,692 ns/op   4,196,050 B/op     38 allocs/op
 
-pkg: github.com/opaque/opaque-go/pkg/lsh
+pkg: github.com/opaque/opaque/go/pkg/lsh
 BenchmarkHash-12               201,565        6,013 ns/op           8 B/op      1 allocs/op
 BenchmarkSearch-12               2,949      393,153 ns/op     942,178 B/op     11 allocs/op
 ```
@@ -168,7 +168,7 @@ The optimized configuration uses two-stage retrieval for better accuracy AND spe
 
 ```bash
 # Standard benchmarks
-cd opaque-go
+cd go
 go test -bench=. -benchmem ./pkg/crypto/... ./pkg/lsh/...
 
 # Comprehensive benchmark

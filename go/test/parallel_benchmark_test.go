@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opaque/opaque-go/pkg/crypto"
-	"github.com/opaque/opaque-go/pkg/lsh"
+	"github.com/opaque/opaque/go/pkg/crypto"
+	"github.com/opaque/opaque/go/pkg/lsh"
 )
 
 // WorkerPool manages multiple crypto engines for true parallelism

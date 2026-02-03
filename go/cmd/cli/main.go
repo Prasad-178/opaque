@@ -11,11 +11,11 @@ import (
 	"sort"
 	"time"
 
-	"github.com/opaque/opaque-go/internal/service"
-	"github.com/opaque/opaque-go/internal/store"
-	"github.com/opaque/opaque-go/pkg/client"
-	"github.com/opaque/opaque-go/pkg/crypto"
-	"github.com/opaque/opaque-go/pkg/lsh"
+	"github.com/opaque/opaque/go/internal/service"
+	"github.com/opaque/opaque/go/internal/store"
+	"github.com/opaque/opaque/go/pkg/client"
+	"github.com/opaque/opaque/go/pkg/crypto"
+	"github.com/opaque/opaque/go/pkg/lsh"
 )
 
 var (

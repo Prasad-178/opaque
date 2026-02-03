@@ -2,7 +2,7 @@
 name = "opaque"
 version = "0.2.0"
 description = "Privacy-preserving vector search engine using PHE and LSH"
-readme = "PRD.md"
+readme = "../README.md"
 requires-python = ">=3.10"
 dependencies = [
     "lightphe>=0.0.20",

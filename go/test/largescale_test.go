@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opaque/opaque-go/pkg/client"
-	"github.com/opaque/opaque-go/pkg/crypto"
-	"github.com/opaque/opaque-go/pkg/lsh"
+	"github.com/opaque/opaque/go/pkg/client"
+	"github.com/opaque/opaque/go/pkg/crypto"
+	"github.com/opaque/opaque/go/pkg/lsh"
 )
 
 func TestLargeScale100K(t *testing.T) {

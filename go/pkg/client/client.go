@@ -9,8 +9,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/opaque/opaque-go/pkg/crypto"
-	"github.com/opaque/opaque-go/pkg/lsh"
+	"github.com/opaque/opaque/go/pkg/crypto"
+	"github.com/opaque/opaque/go/pkg/lsh"
 )
 
 // Config holds client configuration.

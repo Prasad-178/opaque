@@ -75,7 +75,7 @@ Total: ~66ms (local) | ~134ms (with network)
 ### Go (Production)
 
 ```bash
-cd opaque-go
+cd go
 
 # Run benchmarks
 go test -v ./test/... -run TestOptimizedTwoStageSearch
@@ -90,7 +90,7 @@ go run ./cmd/search-service/main.go -demo-vectors 1000
 ### Python (Reference Implementation)
 
 ```bash
-cd opaque
+cd python
 uv sync
 
 # Benchmark PHE performance
@@ -104,7 +104,7 @@ uv run python scripts/demo_real_embeddings.py --tiny
 
 ```
 opaque/
-├── opaque-go/                    # Production Go implementation
+├── go/                           # Production Go implementation
 │   ├── pkg/
 │   │   ├── crypto/crypto.go      # Lattigo BFV encryption
 │   │   ├── lsh/lsh.go            # Locality-sensitive hashing
@@ -116,17 +116,21 @@ opaque/
 │   ├── api/proto/opaque.proto    # gRPC definitions
 │   ├── cmd/
 │   │   ├── search-service/       # Server entry point
-│   │   └── cli/                   # CLI tool
-│   ├── test/                      # Benchmarks & tests
+│   │   └── cli/                  # CLI tool
+│   ├── test/                     # Benchmarks & tests
 │   └── BENCHMARKS.md             # Detailed performance data
 │
-├── src/opaque/                   # Python reference implementation
-│   ├── client/                   # Paillier encryption
-│   ├── server/                   # FastAPI server
-│   └── shared/                   # Utilities
+├── python/                       # Python reference implementation
+│   ├── src/opaque/
+│   │   ├── client/               # Paillier encryption
+│   │   ├── server/               # FastAPI server
+│   │   └── shared/               # Utilities
+│   ├── scripts/                  # Demo & benchmark scripts
+│   ├── tests/                    # Test suite
+│   └── pyproject.toml            # Python dependencies
 │
-├── scripts/                      # Demo & benchmark scripts
 ├── GO_PRODUCTION_PLAN.md         # Implementation roadmap
+├── PRD.md                        # Product requirements
 └── README.md
 ```
 
@@ -189,9 +193,9 @@ Server returns encrypted scores; client decrypts and ranks locally. Server never
 
 ```go
 import (
-    "github.com/opaque/opaque-go/pkg/client"
-    "github.com/opaque/opaque-go/pkg/crypto"
-    "github.com/opaque/opaque-go/pkg/lsh"
+    "github.com/opaque/opaque/go/pkg/client"
+    "github.com/opaque/opaque/go/pkg/crypto"
+    "github.com/opaque/opaque/go/pkg/lsh"
 )
 
 // Create client with encryption capabilities
@@ -213,8 +217,8 @@ scores := c.DecryptScores(encryptedScores)
 
 ```go
 import (
-    "github.com/opaque/opaque-go/internal/service"
-    "github.com/opaque/opaque-go/internal/store"
+    "github.com/opaque/opaque/go/internal/service"
+    "github.com/opaque/opaque/go/internal/store"
 )
 
 // Create search service

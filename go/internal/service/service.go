@@ -12,9 +12,9 @@ import (
 	"github.com/tuneinsight/lattigo/v5/core/rlwe"
 	"github.com/tuneinsight/lattigo/v5/schemes/bfv"
 
-	"github.com/opaque/opaque-go/internal/session"
-	"github.com/opaque/opaque-go/internal/store"
-	"github.com/opaque/opaque-go/pkg/lsh"
+	"github.com/opaque/opaque/go/internal/session"
+	"github.com/opaque/opaque/go/internal/store"
+	"github.com/opaque/opaque/go/pkg/lsh"
 )
 
 // Config holds service configuration.

@@ -8,8 +8,8 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/opaque/opaque-go/pkg/client"
-	"github.com/opaque/opaque-go/pkg/lsh"
+	"github.com/opaque/opaque/go/pkg/client"
+	"github.com/opaque/opaque/go/pkg/lsh"
 )
 
 const (

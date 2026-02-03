@@ -1634,14 +1634,14 @@ opaque_memory_bytes
 
 ## Appendix: Reference Implementation
 
-Full working code available at: `github.com/yourorg/opaque-go` (to be created)
+Full working code available at: `github.com/yourorg/opaque/go` (to be created)
 
 ### Quick Start
 
 ```bash
 # Clone
-git clone https://github.com/yourorg/opaque-go
-cd opaque-go
+git clone https://github.com/yourorg/opaque/go
+cd opaque/go
 
 # Run tests
 go test ./...
