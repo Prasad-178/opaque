@@ -129,8 +129,6 @@ opaque/
 │   ├── tests/                    # Test suite
 │   └── pyproject.toml            # Python dependencies
 │
-├── GO_PRODUCTION_PLAN.md         # Implementation roadmap
-├── PRD.md                        # Product requirements
 └── README.md
 ```
 
