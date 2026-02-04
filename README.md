@@ -6,13 +6,14 @@ Privacy-preserving vector search using Homomorphic Encryption and Locality Sensi
 
 ## Performance Highlights
 
-| Metric | Go (Production) | Python (Reference) |
-|--------|-----------------|-------------------|
-| Query Latency (100K vectors) | **66 ms** | ~24,000 ms |
-| Encryption (128D) | **5 ms** | 1,912 ms |
-| Queries Per Second | **15.1** | 0.04 |
+| Metric | Value |
+|--------|-------|
+| Query Latency (100K vectors) | **66 ms** |
+| Encryption (128D vector) | **5 ms** |
+| Queries Per Second | **15.1** |
+| Cryptographic Security | **128-bit** (BFV/RLWE) |
 
-The Go implementation achieves **~360x faster performance** than Python, making real-time privacy-preserving search practical.
+Built in Go using [Lattigo](https://github.com/tuneinsight/lattigo) for homomorphic encryption.
 
 ## How It Works
 
@@ -72,8 +73,6 @@ Total: ~66ms (local) | ~134ms (with network)
 
 ## Quick Start
 
-### Go (Production)
-
 ```bash
 cd go
 
@@ -87,61 +86,40 @@ go run ./examples/search/main.go
 go run ./cmd/search-service/main.go -demo-vectors 1000
 ```
 
-### Python (Reference Implementation)
-
-```bash
-cd python
-uv sync
-
-# Benchmark PHE performance
-uv run python scripts/benchmark_phe.py --quick
-
-# Demo with real embeddings
-uv run python scripts/demo_real_embeddings.py --tiny
-```
-
 ## Project Structure
 
 ```
 opaque/
-├── go/                           # Production Go implementation
+├── go/
 │   ├── pkg/
-│   │   ├── crypto/crypto.go      # Lattigo BFV encryption
-│   │   ├── lsh/lsh.go            # Locality-sensitive hashing
-│   │   └── client/client.go      # Client SDK
+│   │   ├── crypto/               # Lattigo BFV encryption
+│   │   ├── lsh/                  # Locality-sensitive hashing
+│   │   └── client/               # Client SDK
 │   ├── internal/
-│   │   ├── service/service.go    # Search service
-│   │   ├── session/session.go    # Session management
-│   │   └── store/store.go        # Vector storage
-│   ├── api/proto/opaque.proto    # gRPC definitions
+│   │   ├── service/              # Search service
+│   │   ├── session/              # Session management
+│   │   └── store/                # Vector storage
+│   ├── api/proto/                # gRPC definitions
 │   ├── cmd/
 │   │   ├── search-service/       # Server entry point
 │   │   └── cli/                  # CLI tool
 │   ├── test/                     # Benchmarks & tests
 │   └── BENCHMARKS.md             # Detailed performance data
 │
-├── python/                       # Python reference implementation
-│   ├── src/opaque/
-│   │   ├── client/               # Paillier encryption
-│   │   ├── server/               # FastAPI server
-│   │   └── shared/               # Utilities
-│   ├── scripts/                  # Demo & benchmark scripts
-│   ├── tests/                    # Test suite
-│   └── pyproject.toml            # Python dependencies
-│
+├── python/                       # Reference implementation (experimental)
 └── README.md
 ```
 
 ## Benchmark Results
 
-### Go vs Python Comparison
+### Core Operations
 
-| Operation | Go (Lattigo) | Python (LightPHE) | Speedup |
-|-----------|--------------|-------------------|---------|
-| Encryption (128D) | 5.2 ms | 1,912 ms | **367x** |
-| Decryption (128D) | 0.8 ms | 140 ms | **175x** |
-| HE Dot Product | 33 ms | 91 ms | **2.8x** |
-| LSH Hash | 0.006 ms | ~1 ms | **166x** |
+| Operation | Latency |
+|-----------|---------|
+| Encryption (128D) | 5.2 ms |
+| Decryption (128D) | 0.8 ms |
+| HE Dot Product | 33 ms |
+| LSH Hash | 0.006 ms |
 
 ### End-to-End Latency (100K Vectors)
 
@@ -160,9 +138,8 @@ opaque/
 
 | Configuration | QPS | Latency p50 |
 |---------------|-----|-------------|
-| Go Optimized (single node) | 15.1 | 66 ms |
-| Go (3-node cluster) | ~45 | 66 ms |
-| Python | 0.04 | ~24,000 ms |
+| Single node | 15.1 | 66 ms |
+| 3-node cluster | ~45 | 66 ms |
 
 ## Key Features
 
@@ -211,7 +188,7 @@ encryptedQuery := c.EncryptQuery(query)
 scores := c.DecryptScores(encryptedScores)
 ```
 
-### Go Server
+### Server
 
 ```go
 import (
@@ -226,16 +203,6 @@ svc := service.NewSearchService(vectorStore, 12) // 12 worker cores
 // Handle search request
 candidates := svc.GetCandidates(sessionID, maskedHash, 200)
 encryptedScores := svc.ComputeScores(sessionID, encryptedQuery, candidates[:10])
-```
-
-### Python Client
-
-```python
-from opaque.client import CryptoClient, SearchClient
-
-crypto = CryptoClient(key_size=2048)
-encrypted_query = crypto.encrypt_vector(query_vector)
-scores = crypto.decrypt_scores(encrypted_scores)
 ```
 
 ## Security Model
@@ -296,11 +263,6 @@ session_ttl: 24h         # Key rotation
 - [ ] Streaming gRPC for large result sets
 
 ## FAQ
-
-### Why is Go so much faster than Python?
-1. **Lattigo** uses optimized assembly for BFV operations vs LightPHE's pure Python
-2. **Goroutines** provide true parallelism vs Python's GIL
-3. **No GC pauses** during crypto operations
 
 ### Can this scale to millions of vectors?
 Yes. LSH scales to millions with sub-millisecond lookup. The bottleneck is HE operations, but with two-stage filtering (200 → 10), you only compute 10 HE dot products regardless of database size.
