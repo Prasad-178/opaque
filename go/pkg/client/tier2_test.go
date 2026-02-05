@@ -241,9 +241,10 @@ func TestNormalizeVector(t *testing.T) {
 		t.Errorf("normalized vector should have unit length, got %f", norm)
 	}
 
-	// Direction should be preserved
-	if normalized[0]/normalized[1] != 0.75 {
-		t.Error("normalization changed direction")
+	// Direction should be preserved (3/4 = 0.75)
+	ratio := normalized[0] / normalized[1]
+	if math.Abs(ratio-0.75) > 1e-10 {
+		t.Errorf("normalization changed direction: ratio = %f, expected 0.75", ratio)
 	}
 }
 
