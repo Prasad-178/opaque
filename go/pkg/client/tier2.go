@@ -63,6 +63,12 @@ type Tier2Client struct {
 	store     blob.Store
 	lshIndex  *lsh.Index
 
+	// Privacy features
+	privacyConfig    PrivacyConfig
+	timingObfuscator *TimingObfuscator
+	dummyRunner      *DummyQueryRunner
+	privacyMetrics   *PrivacyMetrics
+
 	mu sync.RWMutex
 }
 
@@ -333,7 +339,196 @@ func (c *Tier2Client) GetLSHPlanes() [][]float64 {
 
 // Close closes the underlying store.
 func (c *Tier2Client) Close() error {
+	c.StopDummyQueries()
 	return c.store.Close()
+}
+
+// SetPrivacyConfig configures privacy features.
+func (c *Tier2Client) SetPrivacyConfig(cfg PrivacyConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.privacyConfig = cfg
+	c.timingObfuscator = NewTimingObfuscator(cfg.MinLatency, cfg.JitterRange)
+	c.privacyMetrics = &PrivacyMetrics{}
+}
+
+// GetPrivacyMetrics returns privacy-related metrics.
+func (c *Tier2Client) GetPrivacyMetrics() *PrivacyMetrics {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.privacyMetrics
+}
+
+// StartDummyQueries starts sending background dummy queries.
+func (c *Tier2Client) StartDummyQueries() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.dummyRunner != nil {
+		return // Already running
+	}
+
+	interval := c.privacyConfig.DummyQueryInterval
+	if interval == 0 {
+		interval = 30 * 1e9 // 30 seconds default
+	}
+
+	c.dummyRunner = NewDummyQueryRunner(c, interval)
+	c.dummyRunner.Start()
+}
+
+// StopDummyQueries stops sending background dummy queries.
+func (c *Tier2Client) StopDummyQueries() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.dummyRunner != nil {
+		c.dummyRunner.Stop()
+		c.dummyRunner = nil
+	}
+}
+
+// SearchWithPrivacy performs a search with full privacy enhancements.
+// Uses timing obfuscation, decoy buckets, and shuffling based on PrivacyConfig.
+func (c *Tier2Client) SearchWithPrivacy(ctx context.Context, query []float64, topK int) ([]Result, error) {
+	c.mu.RLock()
+	cfg := c.privacyConfig
+	obfuscator := c.timingObfuscator
+	metrics := c.privacyMetrics
+	c.mu.RUnlock()
+
+	// Start timing obfuscation
+	var done func()
+	if obfuscator != nil {
+		done = obfuscator.ObfuscateContext(ctx)
+	}
+
+	// Build search options with privacy settings
+	opts := SearchOptions{
+		TopK:          topK,
+		NumBuckets:    3, // Multiple buckets for better recall
+		DecoyBuckets:  cfg.DecoyBuckets,
+		UseMultiProbe: true,
+	}
+
+	results, err := c.searchWithPrivacyInternal(ctx, query, opts, cfg.ShuffleBeforeProcess)
+
+	// Complete timing obfuscation
+	if done != nil {
+		done()
+	}
+
+	// Record metrics
+	if metrics != nil && obfuscator != nil {
+		delay := cfg.MinLatency + cfg.JitterRange/2 // Approximate
+		metrics.RecordQuery(false, cfg.DecoyBuckets, delay)
+	}
+
+	return results, err
+}
+
+// searchWithPrivacyInternal performs the search with optional shuffling.
+func (c *Tier2Client) searchWithPrivacyInternal(ctx context.Context, query []float64, opts SearchOptions, shuffle bool) ([]Result, error) {
+	if len(query) != c.config.Dimension {
+		return nil, fmt.Errorf("query has wrong dimension: %d (expected %d)", len(query), c.config.Dimension)
+	}
+
+	// Normalize query
+	normalizedQuery := normalizeVector(query)
+
+	// Compute LSH hash
+	lshHash := c.lshIndex.HashBytes(normalizedQuery)
+	primaryBucket := hex.EncodeToString(lshHash)
+
+	// Determine which buckets to fetch
+	bucketsToFetch := []string{primaryBucket}
+
+	// Add neighboring buckets if multi-probe enabled
+	if opts.UseMultiProbe && opts.NumBuckets > 1 {
+		neighbors := c.findNeighborBuckets(lshHash, opts.NumBuckets-1)
+		bucketsToFetch = append(bucketsToFetch, neighbors...)
+	}
+
+	// Add decoy buckets for privacy
+	if opts.DecoyBuckets > 0 {
+		decoys, err := c.getRandomBuckets(ctx, opts.DecoyBuckets, bucketsToFetch)
+		if err == nil {
+			bucketsToFetch = append(bucketsToFetch, decoys...)
+		}
+	}
+
+	// Shuffle bucket order before fetching (hides which is primary)
+	if shuffle {
+		shuffleSlice(bucketsToFetch)
+	}
+
+	// Fetch blobs from all buckets
+	blobs, err := c.store.GetBuckets(ctx, bucketsToFetch)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch buckets: %w", err)
+	}
+
+	if len(blobs) == 0 {
+		return []Result{}, nil
+	}
+
+	// Shuffle blobs before processing (hides processing order)
+	if shuffle {
+		shuffleSlice(blobs)
+	}
+
+	// Decrypt and score in parallel
+	type scoredResult struct {
+		id    string
+		score float64
+		err   error
+	}
+
+	results := make([]scoredResult, len(blobs))
+	var wg sync.WaitGroup
+
+	for i, b := range blobs {
+		wg.Add(1)
+		go func(idx int, blobItem *blob.Blob) {
+			defer wg.Done()
+
+			// Decrypt vector
+			vector, err := c.encryptor.DecryptVectorWithID(blobItem.Ciphertext, blobItem.ID)
+			if err != nil {
+				results[idx] = scoredResult{id: blobItem.ID, err: err}
+				return
+			}
+
+			// Normalize and compute similarity
+			normalizedVec := normalizeVector(vector)
+			score := dotProduct(normalizedQuery, normalizedVec)
+
+			results[idx] = scoredResult{id: blobItem.ID, score: score}
+		}(i, b)
+	}
+
+	wg.Wait()
+
+	// Collect valid results
+	validResults := make([]Result, 0, len(results))
+	for _, r := range results {
+		if r.err == nil {
+			validResults = append(validResults, Result{ID: r.id, Score: r.score})
+		}
+	}
+
+	// Sort by score descending
+	sort.Slice(validResults, func(i, j int) bool {
+		return validResults[i].Score > validResults[j].Score
+	})
+
+	// Return top-K
+	if opts.TopK > 0 && len(validResults) > opts.TopK {
+		validResults = validResults[:opts.TopK]
+	}
+
+	return validResults, nil
 }
 
 // Helper functions

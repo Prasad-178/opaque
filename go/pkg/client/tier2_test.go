@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/opaque/opaque/go/pkg/blob"
 	"github.com/opaque/opaque/go/pkg/encrypt"
@@ -307,4 +308,113 @@ func BenchmarkTier2Client_Search(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, _ = client.Search(ctx, query, 10)
 	}
+}
+
+func TestTier2Client_SearchWithPrivacy(t *testing.T) {
+	key, _ := encrypt.GenerateKey()
+	enc, _ := encrypt.NewAESGCM(key)
+	store := blob.NewMemoryStore()
+
+	cfg := DefaultTier2Config()
+	cfg.Dimension = 8
+
+	client, _ := NewTier2Client(cfg, enc, store)
+	ctx := context.Background()
+
+	// Enable privacy features
+	client.SetPrivacyConfig(DefaultPrivacyConfig())
+
+	// Insert vectors
+	for i := 0; i < 50; i++ {
+		vec := make([]float64, 8)
+		for j := range vec {
+			vec[j] = rand.Float64()
+		}
+		client.Insert(ctx, string(rune('a'+i)), vec, nil)
+	}
+
+	// Search with privacy
+	query := []float64{0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5}
+	results, err := client.SearchWithPrivacy(ctx, query, 5)
+
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+
+	// Should return results
+	if len(results) == 0 {
+		t.Error("expected some results")
+	}
+
+	// Check metrics were recorded
+	metrics := client.GetPrivacyMetrics()
+	if metrics == nil {
+		t.Fatal("privacy metrics should be set")
+	}
+	if metrics.TotalQueries != 1 {
+		t.Errorf("expected 1 query recorded, got %d", metrics.TotalQueries)
+	}
+}
+
+func TestTier2Client_PrivacyTimingObfuscation(t *testing.T) {
+	key, _ := encrypt.GenerateKey()
+	enc, _ := encrypt.NewAESGCM(key)
+	store := blob.NewMemoryStore()
+
+	cfg := DefaultTier2Config()
+	cfg.Dimension = 4
+
+	client, _ := NewTier2Client(cfg, enc, store)
+	ctx := context.Background()
+
+	// Configure with minimum latency
+	privacyCfg := LowLatencyConfig()
+	privacyCfg.MinLatency = 50 * 1000000 // 50ms
+	client.SetPrivacyConfig(privacyCfg)
+
+	// Insert a single vector
+	client.Insert(ctx, "doc-1", []float64{1, 0, 0, 0}, nil)
+
+	// Search with timing
+	start := time.Now()
+	_, err := client.SearchWithPrivacy(ctx, []float64{1, 0, 0, 0}, 1)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+
+	// Should take at least minLatency
+	if elapsed < 50*time.Millisecond {
+		t.Errorf("expected at least 50ms latency, got %v", elapsed)
+	}
+}
+
+func TestTier2Client_DummyQueryRunner(t *testing.T) {
+	key, _ := encrypt.GenerateKey()
+	enc, _ := encrypt.NewAESGCM(key)
+	store := blob.NewMemoryStore()
+
+	cfg := DefaultTier2Config()
+	cfg.Dimension = 4
+
+	client, _ := NewTier2Client(cfg, enc, store)
+	ctx := context.Background()
+
+	// Insert a vector so dummy queries can work
+	client.Insert(ctx, "doc-1", []float64{1, 2, 3, 4}, nil)
+
+	// Configure with short interval for testing
+	privacyCfg := DefaultPrivacyConfig()
+	privacyCfg.EnableDummyQueries = true
+	privacyCfg.DummyQueryInterval = 10 * time.Millisecond
+	client.SetPrivacyConfig(privacyCfg)
+
+	// Start and then stop dummy queries
+	client.StartDummyQueries()
+	time.Sleep(50 * time.Millisecond) // Let some queries run
+	client.StopDummyQueries()
+
+	// Should have recorded some activity (metrics won't show dummy queries yet)
+	// This tests that start/stop don't panic
 }
