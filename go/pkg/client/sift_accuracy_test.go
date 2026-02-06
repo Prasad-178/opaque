@@ -11,9 +11,11 @@ import (
 
 	"github.com/opaque/opaque/go/pkg/auth"
 	"github.com/opaque/opaque/go/pkg/blob"
+	"github.com/opaque/opaque/go/pkg/crypto"
 	"github.com/opaque/opaque/go/pkg/embeddings"
 	"github.com/opaque/opaque/go/pkg/enterprise"
 	"github.com/opaque/opaque/go/pkg/hierarchical"
+	"github.com/opaque/opaque/go/pkg/lsh"
 )
 
 // getSIFTDataPath returns the path to the SIFT dataset
@@ -489,6 +491,476 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// TestSIFTHEvPlaintext compares HE centroid ranking vs plaintext centroid ranking
+func TestSIFTHEvPlaintext(t *testing.T) {
+	dataPath := getSIFTDataPath()
+	if dataPath == "" {
+		t.Skip("SIFT dataset not found")
+	}
+
+	ctx := context.Background()
+
+	// Load SIFT10K dataset
+	dataset, err := embeddings.SIFT10K(dataPath)
+	if err != nil {
+		t.Fatalf("Failed to load SIFT10K: %v", err)
+	}
+
+	stats := dataset.Stats()
+	fmt.Println("\n" + "=" + "=================================================================")
+	fmt.Println("SIFT10K: HE vs PLAINTEXT CENTROID RANKING COMPARISON")
+	fmt.Println("=" + "=================================================================")
+
+	numSuperBuckets := 32
+	numQueries := 10
+
+	// Build index to get centroids
+	enterpriseCfg, _ := enterprise.NewConfig("he-test", stats.Dimension, numSuperBuckets)
+	store := blob.NewMemoryStore()
+	cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
+	cfg.SubBucketsPerSuper = 4
+	cfg.NumDecoys = 8
+
+	builder, _ := hierarchical.NewEnterpriseBuilder(cfg, enterpriseCfg)
+	builder.Build(ctx, dataset.IDs, dataset.Vectors, store)
+	enterpriseCfg = builder.GetEnterpriseConfig()
+	centroids := enterpriseCfg.Centroids
+
+	fmt.Printf("\nConfig: %d super-buckets, %d centroids, %d queries\n",
+		numSuperBuckets, len(centroids), numQueries)
+
+	// Create HE engine
+	heEngine, _ := crypto.NewClientEngine()
+
+	fmt.Println("\n┌─────────┬──────────────────────────┬──────────────────────────┬─────────┐")
+	fmt.Println("│ Query   │    Plaintext Top-4       │      HE Top-4            │ Match   │")
+	fmt.Println("├─────────┼──────────────────────────┼──────────────────────────┼─────────┤")
+
+	totalMatch := 0
+	for q := 0; q < numQueries; q++ {
+		query := dataset.Queries[q]
+		normalizedQuery := crypto.NormalizeVector(query)
+
+		// Plaintext centroid scoring
+		plainScores := make([]float64, len(centroids))
+		for i, c := range centroids {
+			plainScores[i] = siftCosineSim(normalizedQuery, c)
+		}
+
+		// HE centroid scoring
+		encQuery, _ := heEngine.EncryptVector(normalizedQuery)
+		heScores := make([]float64, len(centroids))
+		for i, c := range centroids {
+			encResult, _ := heEngine.HomomorphicDotProduct(encQuery, c)
+			heScores[i], _ = heEngine.DecryptScalar(encResult)
+		}
+
+		// Get top-4 for each
+		plainTop := getTopKIndices(plainScores, 4)
+		heTop := getTopKIndices(heScores, 4)
+
+		// Check match
+		matchCount := 0
+		for _, pt := range plainTop {
+			for _, ht := range heTop {
+				if pt == ht {
+					matchCount++
+				}
+			}
+		}
+
+		match := "  ✓"
+		if matchCount < 4 {
+			match = fmt.Sprintf("%d/4", matchCount)
+		} else {
+			totalMatch++
+		}
+
+		fmt.Printf("│   %2d    │ %v │ %v │   %s   │\n",
+			q, plainTop, heTop, match)
+	}
+
+	fmt.Println("└─────────┴──────────────────────────┴──────────────────────────┴─────────┘")
+	fmt.Printf("\nPerfect top-4 match: %d/%d (%.1f%%)\n",
+		totalMatch, numQueries, float64(totalMatch)/float64(numQueries)*100)
+}
+
+func getTopKIndices(scores []float64, k int) []int {
+	type idxScore struct {
+		idx   int
+		score float64
+	}
+	items := make([]idxScore, len(scores))
+	for i, s := range scores {
+		items[i] = idxScore{i, s}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].score > items[j].score
+	})
+
+	result := make([]int, k)
+	for i := 0; i < k && i < len(items); i++ {
+		result[i] = items[i].idx
+	}
+	return result
+}
+
+// TestSIFTSubBucketConsistency verifies builder and client use same LSH
+func TestSIFTSubBucketConsistency(t *testing.T) {
+	dataPath := getSIFTDataPath()
+	if dataPath == "" {
+		t.Skip("SIFT dataset not found")
+	}
+
+	ctx := context.Background()
+
+	dataset, err := embeddings.SIFT10K(dataPath)
+	if err != nil {
+		t.Fatalf("Failed to load SIFT10K: %v", err)
+	}
+
+	fmt.Println("\n" + "=" + "=================================================================")
+	fmt.Println("SUB-BUCKET ASSIGNMENT CONSISTENCY CHECK")
+	fmt.Println("=" + "=================================================================")
+
+	numSuperBuckets := 32
+	numSubBuckets := 64
+
+	// Build index
+	enterpriseCfg, _ := enterprise.NewConfig("sub-test", dataset.Dimension, numSuperBuckets)
+	enterpriseCfg.NumSubBuckets = numSubBuckets
+	store := blob.NewMemoryStore()
+	cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
+
+	builder, _ := hierarchical.NewEnterpriseBuilder(cfg, enterpriseCfg)
+	idx, _ := builder.Build(ctx, dataset.IDs, dataset.Vectors, store)
+	enterpriseCfg = builder.GetEnterpriseConfig()
+
+	// Get credentials (same as client would)
+	enterpriseStore := enterprise.NewMemoryStore()
+	enterpriseStore.Put(ctx, enterpriseCfg)
+	authService := auth.NewService(auth.DefaultServiceConfig(), enterpriseStore)
+	authService.RegisterUser(ctx, "user", "sub-test", []byte("pass"), []string{auth.ScopeSearch})
+	creds, _ := authService.Authenticate(ctx, "user", []byte("pass"))
+
+	fmt.Printf("\nConfig: %d super-buckets, %d sub-buckets\n", numSuperBuckets, numSubBuckets)
+	fmt.Printf("LSH hyperplanes from auth: %d planes, %d dimensions\n",
+		len(creds.LSHHyperplanes), len(creds.LSHHyperplanes[0]))
+	fmt.Printf("Enterprise NumSubBuckets: %d\n", enterpriseCfg.NumSubBuckets)
+	fmt.Printf("Enterprise SubLSHBits: %d\n", enterpriseCfg.GetSubLSHBits())
+
+	// Create client LSH hasher
+	clientHasher := lsh.NewEnterpriseHasher(creds.LSHHyperplanes)
+
+	// Check a sample of vectors - does client's sub-bucket match builder's?
+	numCheck := 100
+	matches := 0
+
+	fmt.Println("\n┌────────┬────────────────┬────────────────┬─────────┐")
+	fmt.Println("│ Vector │ Builder SubID  │ Client SubID   │  Match  │")
+	fmt.Println("├────────┼────────────────┼────────────────┼─────────┤")
+
+	for i := 0; i < numCheck; i++ {
+		id := dataset.IDs[i]
+		vec := dataset.Vectors[i]
+		normalizedVec := crypto.NormalizeVector(vec)
+
+		// Builder's sub-bucket (from the built index)
+		loc := idx.VectorLocations[id]
+		builderSubID := loc.SubID
+
+		// Client's sub-bucket (computed with LSH hasher from credentials)
+		clientSubID := clientHasher.HashToIndex(normalizedVec, numSubBuckets)
+
+		match := "  ✓"
+		if builderSubID != clientSubID {
+			match = "  ❌"
+		} else {
+			matches++
+		}
+
+		if i < 15 { // Show first 15
+			fmt.Printf("│  %4d  │      %3d       │      %3d       │   %s   │\n",
+				i, builderSubID, clientSubID, match)
+		}
+	}
+
+	fmt.Println("└────────┴────────────────┴────────────────┴─────────┘")
+	fmt.Printf("\nConsistency: %d/%d (%.1f%%)\n", matches, numCheck, float64(matches)/float64(numCheck)*100)
+
+	if matches < numCheck*9/10 { // Less than 90% match
+		t.Errorf("Sub-bucket assignment inconsistent: only %d/%d match", matches, numCheck)
+	}
+}
+
+// TestSIFTSubBucketCoverage tests if sub-bucket fetching covers the ground truth
+func TestSIFTSubBucketCoverage(t *testing.T) {
+	dataPath := getSIFTDataPath()
+	if dataPath == "" {
+		t.Skip("SIFT dataset not found")
+	}
+
+	ctx := context.Background()
+	dataset, _ := embeddings.SIFT10K(dataPath)
+
+	fmt.Println("\n" + "=" + "=================================================================")
+	fmt.Println("SUB-BUCKET COVERAGE ANALYSIS")
+	fmt.Println("=" + "=================================================================")
+
+	numSuperBuckets := 32
+	numSubBuckets := 64
+	numQueries := 50
+
+	// Build index
+	enterpriseCfg, _ := enterprise.NewConfig("coverage-test", dataset.Dimension, numSuperBuckets)
+	enterpriseCfg.NumSubBuckets = numSubBuckets
+	store := blob.NewMemoryStore()
+	cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
+
+	builder, _ := hierarchical.NewEnterpriseBuilder(cfg, enterpriseCfg)
+	idx, _ := builder.Build(ctx, dataset.IDs, dataset.Vectors, store)
+	enterpriseCfg = builder.GetEnterpriseConfig()
+
+	enterpriseStore := enterprise.NewMemoryStore()
+	enterpriseStore.Put(ctx, enterpriseCfg)
+	authService := auth.NewService(auth.DefaultServiceConfig(), enterpriseStore)
+	authService.RegisterUser(ctx, "user", "coverage-test", []byte("pass"), []string{auth.ScopeSearch})
+	creds, _ := authService.Authenticate(ctx, "user", []byte("pass"))
+	clientHasher := lsh.NewEnterpriseHasher(creds.LSHHyperplanes)
+
+	fmt.Printf("\nConfig: %d super-buckets, %d sub-buckets\n", numSuperBuckets, numSubBuckets)
+
+	// For each SubBucketsPerSuper setting, check coverage
+	subBucketOptions := []int{1, 2, 4, 8, 16, 32, 64}
+
+	fmt.Println("\n┌──────────────────┬───────────────┬───────────────┬───────────────┐")
+	fmt.Println("│ SubBktsPerSuper  │ Same SubBkt   │ Query Finds   │ % Coverage    │")
+	fmt.Println("│                  │ as GT Top-1   │ GT Sub-Bkt    │               │")
+	fmt.Println("├──────────────────┼───────────────┼───────────────┼───────────────┤")
+
+	for _, subBktsPerSuper := range subBucketOptions {
+		sameSubBucket := 0
+		queryCovered := 0
+
+		for q := 0; q < numQueries; q++ {
+			query := dataset.Queries[q]
+			normalizedQuery := crypto.NormalizeVector(query)
+			groundTruthIdx := dataset.GroundTruth[q][0]
+			gtID := fmt.Sprintf("sift_%d", groundTruthIdx)
+
+			// Get ground truth vector's sub-bucket
+			gtLoc := idx.VectorLocations[gtID]
+			gtSubID := gtLoc.SubID
+
+			// Get query's computed sub-bucket
+			querySubID := clientHasher.HashToIndex(normalizedQuery, numSubBuckets)
+
+			// Check if same sub-bucket
+			if gtSubID == querySubID {
+				sameSubBucket++
+			}
+
+			// Check if query's neighbors include GT sub-bucket
+			// This simulates what the client does
+			covered := false
+			for i := 0; i < subBktsPerSuper; i++ {
+				neighborID := (querySubID + i) % numSubBuckets
+				if neighborID == gtSubID {
+					covered = true
+					break
+				}
+			}
+			if covered {
+				queryCovered++
+			}
+		}
+
+		pctSame := float64(sameSubBucket) / float64(numQueries) * 100
+		pctCovered := float64(queryCovered) / float64(numQueries) * 100
+
+		fmt.Printf("│       %2d         │    %5.1f%%     │    %5.1f%%     │    %5.1f%%     │\n",
+			subBktsPerSuper, pctSame, pctCovered, pctCovered)
+	}
+
+	fmt.Println("└──────────────────┴───────────────┴───────────────┴───────────────┘")
+	fmt.Println("\nNote: 'Query Finds GT Sub-Bkt' shows % of queries where the sub-bucket")
+	fmt.Println("range fetched by the client would include the ground truth vector's sub-bucket.")
+}
+
+// TestSIFTSubBucketDistance shows the distribution of sub-bucket ID differences
+func TestSIFTSubBucketDistance(t *testing.T) {
+	dataPath := getSIFTDataPath()
+	if dataPath == "" {
+		t.Skip("SIFT dataset not found")
+	}
+
+	ctx := context.Background()
+	dataset, _ := embeddings.SIFT10K(dataPath)
+
+	fmt.Println("\n" + "=" + "=================================================================")
+	fmt.Println("SUB-BUCKET ID DISTANCE DISTRIBUTION")
+	fmt.Println("=" + "=================================================================")
+
+	numSubBuckets := 64
+	enterpriseCfg, _ := enterprise.NewConfig("dist-test", dataset.Dimension, 32)
+	enterpriseCfg.NumSubBuckets = numSubBuckets
+	store := blob.NewMemoryStore()
+	cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
+
+	builder, _ := hierarchical.NewEnterpriseBuilder(cfg, enterpriseCfg)
+	idx, _ := builder.Build(ctx, dataset.IDs, dataset.Vectors, store)
+	enterpriseCfg = builder.GetEnterpriseConfig()
+
+	enterpriseStore := enterprise.NewMemoryStore()
+	enterpriseStore.Put(ctx, enterpriseCfg)
+	authService := auth.NewService(auth.DefaultServiceConfig(), enterpriseStore)
+	authService.RegisterUser(ctx, "user", "dist-test", []byte("pass"), []string{auth.ScopeSearch})
+	creds, _ := authService.Authenticate(ctx, "user", []byte("pass"))
+	clientHasher := lsh.NewEnterpriseHasher(creds.LSHHyperplanes)
+
+	// For each query, compute distance to GT sub-bucket
+	distances := make(map[int]int)
+	numQueries := 100
+
+	for q := 0; q < numQueries; q++ {
+		query := dataset.Queries[q]
+		normalizedQuery := crypto.NormalizeVector(query)
+		gtIdx := dataset.GroundTruth[q][0]
+		gtID := fmt.Sprintf("sift_%d", gtIdx)
+
+		gtLoc := idx.VectorLocations[gtID]
+		gtSubID := gtLoc.SubID
+		querySubID := clientHasher.HashToIndex(normalizedQuery, numSubBuckets)
+
+		// Circular distance
+		dist := querySubID - gtSubID
+		if dist < 0 {
+			dist = -dist
+		}
+		if dist > numSubBuckets/2 {
+			dist = numSubBuckets - dist
+		}
+		distances[dist]++
+	}
+
+	fmt.Println("\nDistance from query sub-bucket to GT sub-bucket:")
+	fmt.Println("(If neighbors were useful, we'd see high counts at small distances)")
+	fmt.Println("\n┌──────────────┬──────────────┬──────────────┐")
+	fmt.Println("│ Distance     │   Count      │  Cumulative  │")
+	fmt.Println("├──────────────┼──────────────┼──────────────┤")
+
+	cumulative := 0
+	for d := 0; d <= 32; d++ {
+		cumulative += distances[d]
+		if distances[d] > 0 || d < 10 {
+			fmt.Printf("│     %2d       │     %3d      │    %5.1f%%    │\n",
+				d, distances[d], float64(cumulative)/float64(numQueries)*100)
+		}
+	}
+	fmt.Println("└──────────────┴──────────────┴──────────────┘")
+
+	fmt.Println("\nConclusion: If counts are spread evenly across distances,")
+	fmt.Println("then fetching 'neighbor' sub-buckets by ID increment is useless.")
+	fmt.Println("Sub-bucket ID has no correlation with vector similarity.")
+}
+
+// TestSIFTSubBucketsPerSuperImpact tests how SubBucketsPerSuper affects accuracy
+func TestSIFTSubBucketsPerSuperImpact(t *testing.T) {
+	dataPath := getSIFTDataPath()
+	if dataPath == "" {
+		t.Skip("SIFT dataset not found")
+	}
+
+	ctx := context.Background()
+	dataset, _ := embeddings.SIFT10K(dataPath)
+
+	fmt.Println("\n" + "=" + "=================================================================")
+	fmt.Println("IMPACT OF SubBucketsPerSuper ON ACCURACY")
+	fmt.Println("=" + "=================================================================")
+
+	numSuperBuckets := 32
+	numSubBuckets := 64
+	topSuperBuckets := 16
+	topK := 10
+	numQueries := 30
+
+	fmt.Printf("\nFixed: %d super-buckets, %d sub-buckets, top %d selected\n",
+		numSuperBuckets, numSubBuckets, topSuperBuckets)
+
+	subBktOptions := []int{1, 4, 8, 16, 32, 64} // Number of sub-buckets to fetch per super
+
+	fmt.Println("\n┌────────────────────┬──────────┬────────────┬────────────┬───────────┐")
+	fmt.Println("│ SubBktsPerSuper    │ Recall@1 │  Recall@10 │  Vectors   │ % Dataset │")
+	fmt.Println("├────────────────────┼──────────┼────────────┼────────────┼───────────┤")
+
+	for _, subBktsPerSuper := range subBktOptions {
+		// Build index
+		enterpriseCfg, _ := enterprise.NewConfig("impact-test", dataset.Dimension, numSuperBuckets)
+		enterpriseCfg.NumSubBuckets = numSubBuckets
+		store := blob.NewMemoryStore()
+		cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
+		cfg.TopSuperBuckets = topSuperBuckets
+		cfg.SubBucketsPerSuper = subBktsPerSuper
+		cfg.NumDecoys = 8
+
+		builder, _ := hierarchical.NewEnterpriseBuilder(cfg, enterpriseCfg)
+		builder.Build(ctx, dataset.IDs, dataset.Vectors, store)
+		enterpriseCfg = builder.GetEnterpriseConfig()
+
+		enterpriseStore := enterprise.NewMemoryStore()
+		enterpriseStore.Put(ctx, enterpriseCfg)
+		authService := auth.NewService(auth.DefaultServiceConfig(), enterpriseStore)
+		authService.RegisterUser(ctx, "user", "impact-test", []byte("pass"), []string{auth.ScopeSearch})
+		creds, _ := authService.Authenticate(ctx, "user", []byte("pass"))
+		client, _ := NewEnterpriseHierarchicalClient(cfg, creds, store)
+
+		var totalRecall1, totalRecall10 float64
+		var totalScanned int
+
+		for q := 0; q < numQueries; q++ {
+			query := dataset.Queries[q]
+			result, _ := client.Search(ctx, query, topK)
+
+			gtSet := make(map[int]bool)
+			for i := 0; i < topK && i < len(dataset.GroundTruth[q]); i++ {
+				gtSet[dataset.GroundTruth[q][i]] = true
+			}
+
+			if len(result.Results) > 0 {
+				var idx int
+				fmt.Sscanf(result.Results[0].ID, "sift_%d", &idx)
+				if idx == dataset.GroundTruth[q][0] {
+					totalRecall1++
+				}
+			}
+
+			found := 0
+			for _, r := range result.Results {
+				var idx int
+				fmt.Sscanf(r.ID, "sift_%d", &idx)
+				if gtSet[idx] {
+					found++
+				}
+			}
+			totalRecall10 += float64(found) / float64(min(topK, len(gtSet)))
+			totalScanned += result.Stats.VectorsScored
+		}
+
+		avgScanned := totalScanned / numQueries
+		pctScanned := float64(avgScanned) / float64(len(dataset.Vectors)) * 100
+
+		fmt.Printf("│        %2d          │  %5.1f%%  │   %5.1f%%   │   %6d   │   %5.2f%%  │\n",
+			subBktsPerSuper,
+			totalRecall1/float64(numQueries)*100,
+			totalRecall10/float64(numQueries)*100,
+			avgScanned,
+			pctScanned)
+	}
+
+	fmt.Println("└────────────────────┴──────────┴────────────┴────────────┴───────────┘")
+	fmt.Println("\nConclusion: Higher SubBucketsPerSuper = better recall but more vectors scanned.")
 }
 
 // TestSIFTCentroidQualityWithLSH tests centroid quality using actual LSH (fast, no HE)
