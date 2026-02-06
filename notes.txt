@@ -76,3 +76,5 @@ QUERY: Query → HE(query) → Server: HE(query)·centroids → HE(scores) → C
 
 UPDATE: New vector → Find nearest centroid → Assign bucket → Encrypt → Store → Update centroid
 ```
+
+3 things to optimize - speed, accuracy, privacy
