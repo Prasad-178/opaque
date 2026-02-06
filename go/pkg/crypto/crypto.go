@@ -245,6 +245,47 @@ func (e *Engine) HomomorphicDotProduct(encQuery *rlwe.Ciphertext, vector []float
 	return result, nil
 }
 
+// HomomorphicDotProductCached computes E(q · v) using a pre-encoded plaintext.
+// This is faster than HomomorphicDotProduct when centroids are cached as plaintexts.
+func (e *Engine) HomomorphicDotProductCached(encQuery *rlwe.Ciphertext, encodedVector *rlwe.Plaintext) (*rlwe.Ciphertext, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if encodedVector == nil {
+		return nil, errors.New("encoded vector is nil")
+	}
+
+	// Multiply: E(q) * v = E(q * v) component-wise
+	result, err := e.evaluator.MulNew(encQuery, encodedVector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to multiply: %w", err)
+	}
+
+	// Rescale after multiplication to manage scale growth
+	if err := e.evaluator.Rescale(result, result); err != nil {
+		return nil, fmt.Errorf("failed to rescale: %w", err)
+	}
+
+	// Sum all slots using tree-based rotation and addition
+	maxSlots := e.params.MaxSlots()
+	for i := 1; i < maxSlots; i *= 2 {
+		rotated, err := e.evaluator.RotateNew(result, i)
+		if err != nil {
+			return nil, fmt.Errorf("failed to rotate by %d: %w", i, err)
+		}
+		if err := e.evaluator.Add(result, rotated, result); err != nil {
+			return nil, fmt.Errorf("failed to add: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
+// GetEncoder returns the HE encoder for external caching purposes.
+func (e *Engine) GetEncoder() *hefloat.Encoder {
+	return e.encoder
+}
+
 // SerializeCiphertext serializes a ciphertext to bytes for transmission
 func (e *Engine) SerializeCiphertext(ct *rlwe.Ciphertext) ([]byte, error) {
 	buf := new(bytes.Buffer)

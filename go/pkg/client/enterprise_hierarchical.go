@@ -12,6 +12,7 @@ import (
 
 	"github.com/opaque/opaque/go/pkg/auth"
 	"github.com/opaque/opaque/go/pkg/blob"
+	"github.com/opaque/opaque/go/pkg/cache"
 	"github.com/opaque/opaque/go/pkg/crypto"
 	"github.com/opaque/opaque/go/pkg/encrypt"
 	"github.com/opaque/opaque/go/pkg/hierarchical"
@@ -37,6 +38,10 @@ type EnterpriseHierarchicalClient struct {
 	// Derived from credentials
 	encryptor *encrypt.AESGCM
 	heEngine  *crypto.Engine
+
+	// Centroid cache for faster HE operations
+	// Pre-encodes centroids as HE plaintexts
+	centroidCache *cache.CentroidCache
 
 	// Storage backend
 	store blob.Store
@@ -80,12 +85,22 @@ func NewEnterpriseHierarchicalClient(
 		cfg.NumSuperBuckets = credentials.NumSuperBuckets
 	}
 
+	// Create centroid cache and pre-load centroids
+	centroidCache := cache.NewCentroidCache(heEngine.GetParams(), heEngine.GetEncoder())
+	if len(credentials.Centroids) > 0 {
+		// Pre-encode all centroids (expensive but done once)
+		if err := centroidCache.LoadCentroids(credentials.Centroids, heEngine.GetParams().MaxLevel()); err != nil {
+			return nil, fmt.Errorf("failed to load centroids into cache: %w", err)
+		}
+	}
+
 	return &EnterpriseHierarchicalClient{
-		config:      cfg,
-		credentials: credentials,
-		encryptor:   encryptor,
-		heEngine:    heEngine,
-		store:       store,
+		config:        cfg,
+		credentials:   credentials,
+		encryptor:     encryptor,
+		heEngine:      heEngine,
+		centroidCache: centroidCache,
+		store:         store,
 	}, nil
 }
 
@@ -126,11 +141,16 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	result.Timing.HEEncryptQuery = time.Since(startEncrypt)
 
 	// Step 1b: Compute HE scores for ALL centroids (parallel)
+	// Uses cached pre-encoded plaintexts for faster computation
 	// In a real client-server setup, this would be done on the server
 	startHE := time.Now()
 	centroids := c.credentials.Centroids
 	encScores := make([]*rlwe.Ciphertext, len(centroids))
 	scoreErrs := make([]error, len(centroids))
+
+	// Get cached plaintexts (pre-encoded centroids)
+	cachedPlaintexts := c.centroidCache.GetAll(len(centroids))
+	useCached := cachedPlaintexts != nil && len(cachedPlaintexts) == len(centroids) && cachedPlaintexts[0] != nil
 
 	var wg sync.WaitGroup
 	numWorkers := 4
@@ -141,7 +161,13 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 		go func() {
 			defer wg.Done()
 			for i := range workChan {
-				encScores[i], scoreErrs[i] = c.heEngine.HomomorphicDotProduct(encQuery, centroids[i])
+				if useCached {
+					// Use cached pre-encoded plaintext (faster)
+					encScores[i], scoreErrs[i] = c.heEngine.HomomorphicDotProductCached(encQuery, cachedPlaintexts[i])
+				} else {
+					// Fallback to encoding on-the-fly
+					encScores[i], scoreErrs[i] = c.heEngine.HomomorphicDotProduct(encQuery, centroids[i])
+				}
 			}
 		}()
 	}
@@ -325,6 +351,7 @@ func (c *EnterpriseHierarchicalClient) GetCredentials() *auth.ClientCredentials 
 
 // UpdateCredentials updates the client with refreshed credentials.
 // Call this after refreshing the token with the auth service.
+// Also reloads centroid cache if centroids changed.
 func (c *EnterpriseHierarchicalClient) UpdateCredentials(creds *auth.ClientCredentials) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -336,6 +363,15 @@ func (c *EnterpriseHierarchicalClient) UpdateCredentials(creds *auth.ClientCrede
 
 	c.credentials = creds
 	c.encryptor = encryptor
+
+	// Reload centroid cache if centroids changed
+	if c.centroidCache != nil && len(creds.Centroids) > 0 {
+		if c.centroidCache.NeedsRefresh(creds.Centroids) {
+			if err := c.centroidCache.LoadCentroids(creds.Centroids, c.heEngine.GetParams().MaxLevel()); err != nil {
+				return fmt.Errorf("failed to reload centroid cache: %w", err)
+			}
+		}
+	}
 
 	return nil
 }
