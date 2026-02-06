@@ -25,22 +25,23 @@ Build the most comprehensive privacy-preserving vector search SDK, offering mult
 │                                                                     │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌───────────┐ │
 │  │   TIER 1    │  │   TIER 2    │  │  TIER 2.5   │  │  TIER 3   │ │
-│  │   Query     │  │    Data     │  │ Hierarchical│  │  Enclave  │ │
-│  │  Private    │  │  Private    │  │     FHE     │  │  Private  │ │
+│  │   Query     │  │    Data     │  │Hierarchical │  │  Enclave  │ │
+│  │  Private    │  │  Private    │  │   Private   │  │  Private  │ │
 │  ├─────────────┤  ├─────────────┤  ├─────────────┤  ├───────────┤ │
-│  │ HE query    │  │ Encrypted   │  │ Full FHE    │  │ TEE-based │ │
-│  │ LSH filter  │  │ blobs       │  │ buckets     │  │ isolation │ │
-│  │ ~66ms       │  │ ~200-500ms  │  │ ~2-5s       │  │ ~10-50ms  │ │
+│  │ HE query    │  │ AES blobs   │  │ HE+AES+LSH  │  │ TEE-based │ │
+│  │ LSH filter  │  │ Local score │  │ 3-level     │  │ isolation │ │
+│  │ ~66ms       │  │ ~50-200ms   │  │ ~700ms      │  │ ~10-50ms  │ │
+│  │ ✅ Done     │  │ ✅ Done     │  │ ✅ Done     │  │ 📋 Planned│ │
 │  └─────────────┘  └─────────────┘  └─────────────┘  └───────────┘ │
 │                                                                     │
 │  Privacy:  ████░░░░░░    ████████░░    ██████████    ██████████    │
-│            Partial       High          Maximum       Maximum        │
+│            Query only    Data only     Query+Data    Query+Data    │
 │                                                                     │
-│  Speed:    ██████████    ██████░░░░    ████░░░░░░    ██████████    │
-│            Fast          Medium        Slow          Fast           │
+│  Speed:    ██████████    ████████░░    ██████░░░░    ██████████    │
+│            Fast          Medium        Good          Fast           │
 │                                                                     │
-│  Trust:    Server sees   Server sees   Server sees   Trust HW       │
-│            vectors       nothing       nothing       (Intel/AWS)    │
+│  Trust:    Server sees   Server can't  Server can't  Trust HW       │
+│            vectors       see vectors   see anything  (Intel/AWS)    │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -51,15 +52,17 @@ Build the most comprehensive privacy-preserving vector search SDK, offering mult
 
 | Aspect | Tier 1 | Tier 2 | Tier 2.5 | Tier 3 |
 |--------|--------|--------|----------|--------|
-| **Name** | Query-Private | Data-Private | Hierarchical FHE | Enclave-Private |
-| **Query encrypted** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Vectors encrypted** | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Name** | Query-Private | Data-Private | Hierarchical Private | Enclave-Private |
+| **Query encrypted** | ✅ Yes (HE) | ✅ Yes (local) | ✅ Yes (HE) | ✅ Yes |
+| **Vectors encrypted** | ❌ No | ✅ Yes (AES) | ✅ Yes (AES) | ✅ Yes |
 | **Scores hidden** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Access patterns hidden** | ❌ No | ⚠️ Partial | ⚠️ Partial | ⚠️ Partial |
+| **Bucket selection hidden** | ❌ No | ❌ No | ✅ Yes (HE decrypt) | ✅ Yes |
+| **Access patterns hidden** | ❌ No | ⚠️ Partial (decoys) | ⚠️ Partial (decoys) | ⚠️ Partial |
 | **Server trust required** | Yes (sees vectors) | No | No | Hardware only |
-| **Latency** | ~66ms | ~200-500ms | ~2-5s | ~10-50ms |
-| **Max vectors** | Millions | Thousands/bucket | 100K+ | 50M+ |
-| **Best for** | Shared DBs | Blockchain, Zero-trust | Max privacy | Enterprise |
+| **Latency** | ~66ms | ~50-200ms | **~700ms** | ~10-50ms |
+| **Max vectors** | Millions | Thousands/bucket | 100K-10M | 50M+ |
+| **Best for** | Shared DBs | Blockchain, Zero-trust | **Max crypto privacy** | Enterprise |
+| **Status** | ✅ Complete | ✅ Complete | ✅ Complete | 📋 Planned |
 
 ---
 
@@ -416,48 +419,78 @@ func main() {
 
 ---
 
-## Tier 2.5: Hierarchical FHE
+## Tier 2.5: Hierarchical Private Search
 
-### Status: 📋 Research/Planned
+### Status: ✅ Core Complete
 
 ### What It Does
-- Organize vectors into buckets with representative centroids
-- Use FHE to compare query against ALL bucket representatives
-- Client picks top buckets (server doesn't know which)
-- Use FHE to score vectors in selected buckets
-- Maximum privacy without hardware trust
+- Three-level hierarchical architecture for both query AND data privacy
+- Level 1: HE scoring on 64 super-bucket centroids (server can't see query or selection)
+- Level 2: Decoy-based bucket fetch (server can't distinguish real from decoy)
+- Level 3: Local AES decrypt + scoring (all computation client-side)
 
 ### Architecture
 
 ```
-100K vectors organized into 100 buckets
+100K vectors organized into 64 super-buckets
            │
            ▼
-┌─────────────────────────────────────────────┐
-│  Stage 1: FHE on 100 centroids (~500ms)     │
-│  Server returns 100 encrypted scores        │
-│  Client decrypts, picks top 5 buckets       │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  Level 1: HE on 64 centroids (~640ms)                           │
+│  Server computes HE(query) · centroid for all 64               │
+│  Client decrypts privately, selects top-8                       │
+│  SERVER NEVER SEES WHICH BUCKETS WERE SELECTED                  │
+└─────────────────────────────────────────────────────────────────┘
            │
            ▼
-┌─────────────────────────────────────────────┐
-│  Stage 2: FHE on 5000 vectors (~2-3s)       │
-│  Server returns 5000 encrypted scores       │
-│  Client decrypts, ranks locally             │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  Level 2: Decoy-based bucket fetch (~10ms)                      │
+│  Client requests: 8 real + 8 decoy buckets (shuffled)          │
+│  Server can't tell which are real                               │
+│  Optional: PIR for cryptographic guarantee                      │
+└─────────────────────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Level 3: Local AES decrypt + scoring (~20ms)                   │
+│  Decrypt ~1500 vectors with AES-256-GCM                        │
+│  Compute cosine similarity locally                              │
+│  Server sees NOTHING                                            │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Privacy Level
-- Server sees: Which buckets were requested (but can add decoys)
-- Server doesn't see: Query, scores, final ranking
-- With decoys: Server learns almost nothing
+### Privacy Guarantees
+
+| What | Protected From | How |
+|------|----------------|-----|
+| Query vector | Server | HE encryption |
+| Super-bucket selection | Server | Client-side HE decryption |
+| Sub-bucket interest | Server | Decoys + shuffling |
+| Vector values | Storage | AES-256-GCM |
+| Final scores | Everyone | Local computation |
+
+### Key Design Decisions
+- **Per-enterprise LSH**: Each enterprise has secret LSH hyperplanes (prevents bucket→query mapping)
+- **HE for centroids**: Future-proofs for large centroid sets, enables server computation
+- **Decoys over PIR**: Simpler, faster, sufficient for k-anonymity (PIR available as optional upgrade)
+- **Option B auth**: Token-based key distribution with rotation support
+
+### Performance (100K vectors, 128D)
+
+| Metric | Value |
+|--------|-------|
+| Total latency | ~700ms |
+| HE operations | 64 (not 100K!) |
+| Vectors decrypted | ~1500 |
+| Speedup vs naive Tier 1 | ~20x |
 
 ### Use Cases
-- Maximum privacy for sensitive applications
+- Maximum privacy for sensitive applications (medical, legal, financial)
 - When hardware trust (TEE) is not acceptable
-- Acceptable for agentic AI (2-5s latency OK)
+- When both query AND data must be protected
 
-### Effort Estimate: 3-4 weeks
+### Documentation
+See [docs/TIER_2_5_ARCHITECTURE.md](docs/TIER_2_5_ARCHITECTURE.md) for complete architecture details.
 
 ---
 
@@ -527,24 +560,27 @@ func main() {
 ## Implementation Roadmap
 
 ```
-2024 Q1                    2024 Q2                    2024 Q3
-───────────────────────────────────────────────────────────────────
+COMPLETED                           IN PROGRESS                 PLANNED
+─────────────────────────────────────────────────────────────────────────
 
-TIER 1 POLISH              TIER 2                     TIER 3
-├─ gRPC wiring             ├─ Core encryption         ├─ Nitro setup
-├─ TLS setup               ├─ Client-side search      ├─ KMS integration
-├─ Go module               ├─ Storage backends        ├─ Enclave code
-├─ Examples                ├─ Privacy features        ├─ Attestation
-├─ Docs                    ├─ Blockchain demo         ├─ Enterprise docs
-│                          │                          │
-▼                          ▼                          ▼
-MVP Release                Tier 2 Release             Enterprise Release
-
-
-                           TIER 2.5 (parallel)
-                           ├─ Hierarchical FHE
-                           ├─ Bucket clustering
-                           └─ Benchmarks
+TIER 1 ✅                           TIER 2.5 ENHANCEMENTS       TIER 3
+├─ BFV encryption                   ├─ Per-enterprise LSH       ├─ Nitro setup
+├─ LSH index                        ├─ Auth service (Option B)  ├─ KMS integration
+├─ Client SDK                       ├─ Key rotation             ├─ Enclave code
+├─ gRPC proto                       ├─ PIR integration (opt)    ├─ Attestation
+├─ Session management               │                           ├─ Enterprise docs
+│                                   │                           │
+TIER 2 ✅                           │                           │
+├─ AES-256-GCM                      │                           │
+├─ Blob storage                     │                           │
+├─ File backend                     │                           │
+├─ Privacy features                 │                           │
+│                                   │                           │
+TIER 2.5 ✅ (Core)                  │                           │
+├─ 3-level hierarchy                │                           │
+├─ HE centroid scoring              │                           │
+├─ Decoy-based fetch                │                           │
+├─ Local AES+scoring                │                           │
 ```
 
 ---
@@ -552,21 +588,25 @@ MVP Release                Tier 2 Release             Enterprise Release
 ## Success Metrics
 
 ### Tier 1 (Query-Private)
-- [ ] <100ms latency at 100K vectors
-- [ ] >10 QPS sustained
-- [ ] Zero plaintext query leakage
+- [x] <100ms latency at 100K vectors (~66ms achieved)
+- [x] >10 QPS sustained (15.1 QPS achieved)
+- [x] Zero plaintext query leakage
 - [ ] Published Go module
 
 ### Tier 2 (Data-Private)
-- [ ] <500ms latency for typical bucket sizes
-- [ ] Zero plaintext vector leakage
+- [x] <500ms latency for typical bucket sizes (~50-200ms achieved)
+- [x] Zero plaintext vector leakage
 - [ ] Working blockchain demo
 - [ ] S3 + IPFS backends
 
-### Tier 2.5 (Hierarchical FHE)
-- [ ] <5s latency at 100K vectors
-- [ ] Privacy: server learns only bucket access pattern
-- [ ] Benchmarks showing privacy/speed tradeoff
+### Tier 2.5 (Hierarchical Private)
+- [x] <1s latency at 100K vectors (~700ms achieved)
+- [x] Query hidden from server (HE encryption)
+- [x] Super-bucket selection hidden (client-side HE decrypt)
+- [x] Vectors hidden from storage (AES-256-GCM)
+- [ ] Per-enterprise LSH implementation
+- [ ] Authentication service (Option B)
+- [ ] Optional PIR integration
 
 ### Tier 3 (Enclave-Private)
 - [ ] <50ms latency inside enclave
@@ -578,10 +618,11 @@ MVP Release                Tier 2 Release             Enterprise Release
 
 ## Open Questions
 
-1. **Tier 2 bucket sizing**: Optimal bucket size for privacy vs download speed?
-2. **Tier 2.5 parallelization**: How many cores needed for acceptable latency?
-3. **Tier 3 cold start**: How long to load vectors into enclave on startup?
-4. **Cross-tier**: Can we combine tiers? (e.g., Tier 2 + Tier 3)
+1. **PIR integration**: When to use PIR vs decoys? Runtime decision based on sensitivity?
+2. **Centroid updates**: How to update centroids when new vectors are added?
+3. **Key rotation**: Process for rotating LSH/AES keys without downtime?
+4. **Cross-tier**: Can we combine tiers? (e.g., Tier 2.5 + Tier 3 for maximum security)
+5. **Tier 3 cold start**: How long to load vectors into enclave on startup?
 
 ---
 

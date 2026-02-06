@@ -1,17 +1,38 @@
 # Project Opaque
 
-Privacy-preserving vector search using Homomorphic Encryption and Locality Sensitive Hashing.
+Privacy-preserving vector search using Homomorphic Encryption, AES-256-GCM, and Locality Sensitive Hashing.
 
-**Query a remote vector database without revealing your query. The server computes on encrypted data and never sees what you're searching for.**
+**Query a remote vector database without revealing your query OR the data. The server computes on encrypted data and never sees what you're searching for.**
+
+## Privacy Tiers
+
+| Tier | Name | Query Private | Data Private | Latency (100K) |
+|------|------|---------------|--------------|----------------|
+| **Tier 1** | Query-Private | Yes (HE) | No | ~66ms |
+| **Tier 2** | Data-Private | Yes (local) | Yes (AES) | ~50-200ms |
+| **Tier 2.5** | Hierarchical Private | Yes (HE) | Yes (AES) | **~700ms** |
+
+### Tier 2.5: Maximum Privacy (Recommended)
+
+The flagship tier combines HE + AES + LSH in a three-level hierarchy:
+
+```
+Level 1: HE scoring on 64 centroids → Server can't see query or bucket selection
+Level 2: Decoy-based bucket fetch   → Server can't distinguish real from fake
+Level 3: Local AES decrypt + score  → All final computation is client-side
+```
+
+**See [docs/TIER_2_5_ARCHITECTURE.md](docs/TIER_2_5_ARCHITECTURE.md) for complete architecture details.**
 
 ## Performance Highlights
 
-| Metric | Value |
-|--------|-------|
-| Query Latency (100K vectors) | **66 ms** |
-| Encryption (128D vector) | **5 ms** |
-| Queries Per Second | **15.1** |
-| Cryptographic Security | **128-bit** (BFV/RLWE) |
+| Metric | Tier 1 | Tier 2.5 |
+|--------|--------|----------|
+| Query Latency (100K vectors) | **66 ms** | **~700 ms** |
+| HE Operations | 10 | 64 |
+| Cryptographic Security | 128-bit (BFV) | 128-bit (BFV) + 256-bit (AES) |
+| Query Privacy | Yes | Yes |
+| Data Privacy | No | **Yes** |
 
 Built in Go using [Lattigo](https://github.com/tuneinsight/lattigo) for homomorphic encryption.
 
@@ -27,6 +48,59 @@ This is achieved through a two-stage "funnel" approach:
 2. **Fine Stage (HE)**: Cryptographically secure scoring using homomorphic encryption (~56ms)
 
 ## Architecture
+
+### Tier 2.5: Hierarchical Private Search
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                           CLIENT                                    │
+├────────────────────────────────────────────────────────────────────┤
+│  Receives from Auth Service:                                       │
+│    - AES-256 key (decrypt vectors)                                │
+│    - LSH hyperplanes (per-enterprise, secret)                     │
+│    - Centroids (64 vectors, cached)                               │
+│    - HE keypair (session-based)                                   │
+└────────────────────────────────────────────────────────────────────┘
+                                  │
+┌─────────────────────────────────┼─────────────────────────────────┐
+│  LEVEL 1: HE CENTROID SCORING   │                                 │
+│                                 ▼                                 │
+│  Client: HE(query) ───────────────────────────► Server            │
+│                                                    │              │
+│                               Compute: HE(query) · centroid[i]    │
+│                               for ALL 64 centroids (blindly)      │
+│                                                    │              │
+│  Client: decrypt 64 scores ◄──────────────────────┘              │
+│          select top-K buckets                                     │
+│          SERVER NEVER SEES SELECTION                              │
+└───────────────────────────────────────────────────────────────────┘
+                                  │
+┌─────────────────────────────────┼─────────────────────────────────┐
+│  LEVEL 2: DECOY-BASED FETCH     │                                 │
+│                                 ▼                                 │
+│  Client: compute LSH(query) → bucket ID                          │
+│          add decoy bucket IDs                                     │
+│          shuffle all bucket IDs                                   │
+│                                 │                                 │
+│  Request: [bucket_07, bucket_23, ...] ─────► Storage              │
+│           (real + decoy, shuffled)              │                 │
+│                                                 │                 │
+│  Client ◄────────────── encrypted blobs ────────┘                │
+│          (server can't tell real from decoy)                      │
+└───────────────────────────────────────────────────────────────────┘
+                                  │
+┌─────────────────────────────────┼─────────────────────────────────┐
+│  LEVEL 3: LOCAL SCORING         │                                 │
+│                                 ▼                                 │
+│  Client: AES decrypt all vectors                                  │
+│          compute cosine similarity                                │
+│          return top-K results                                     │
+│                                                                   │
+│  ALL COMPUTATION IS LOCAL - SERVER SEES NOTHING                   │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+### Tier 1: Query-Private Search (Simpler, Faster)
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -90,11 +164,16 @@ go run ./cmd/search-service/main.go -demo-vectors 1000
 
 ```
 opaque/
+├── docs/
+│   └── TIER_2_5_ARCHITECTURE.md  # Detailed Tier 2.5 architecture
 ├── go/
 │   ├── pkg/
-│   │   ├── crypto/               # Lattigo BFV encryption
+│   │   ├── crypto/               # Lattigo BFV encryption (HE)
+│   │   ├── encrypt/              # AES-256-GCM encryption
 │   │   ├── lsh/                  # Locality-sensitive hashing
-│   │   └── client/               # Client SDK
+│   │   ├── blob/                 # Encrypted blob storage
+│   │   ├── hierarchical/         # Tier 2.5 hierarchical index
+│   │   └── client/               # Client SDK (Tier 1, 2, 2.5)
 │   ├── internal/
 │   │   ├── service/              # Search service
 │   │   ├── session/              # Session management
@@ -103,10 +182,16 @@ opaque/
 │   ├── cmd/
 │   │   ├── search-service/       # Server entry point
 │   │   └── cli/                  # CLI tool
+│   ├── examples/
+│   │   ├── search/               # Tier 1 example
+│   │   ├── tier2/                # Tier 2 example
+│   │   └── hierarchical/         # Tier 2.5 example
 │   ├── test/                     # Benchmarks & tests
 │   └── BENCHMARKS.md             # Detailed performance data
 │
 ├── python/                       # Reference implementation (experimental)
+├── ROADMAP.md                    # Product roadmap
+├── PRIVACY_MODEL_QA.md           # Privacy model Q&A
 └── README.md
 ```
 
@@ -208,24 +293,32 @@ encryptedScores := svc.ComputeScores(sessionID, encryptedQuery, candidates[:10])
 ## Security Model
 
 ### Cryptographic Guarantees
-- **BFV Encryption**: 128-bit security level (Lattigo)
-- **Semantic Security**: Ciphertexts reveal nothing about plaintexts
-- **No Query Leakage**: Server sees encrypted query, computes encrypted scores
 
-### What the Server Learns
-- LSH bucket (approximate region, not exact query)
-- Which vector IDs were scored
-- Timing information
+| Component | Security Level | Quantum-Safe |
+|-----------|----------------|--------------|
+| **BFV (HE)** | 128-bit (RLWE) | Yes |
+| **AES-256-GCM** | 256-bit | No* |
 
-### What the Server Does NOT Learn
-- Raw query vector
-- Similarity scores
-- Final ranking order
+*AES-256 provides ~128-bit post-quantum security with Grover's algorithm.
+
+### What the Server Learns (by Tier)
+
+| Information | Tier 1 | Tier 2.5 |
+|-------------|--------|----------|
+| Query vector | No (HE) | No (HE) |
+| Which buckets selected | Yes | **No** (client-side HE decrypt) |
+| Bucket access patterns | Yes | Obfuscated (decoys) |
+| Vector contents | Yes | **No** (AES) |
+| Similarity scores | No (HE) | No (HE + local) |
+| Final ranking | No | No |
 
 ### Threat Model
-- Server is honest-but-curious (follows protocol but may analyze data)
-- Client trusts its local environment
-- Network is encrypted (gRPC/TLS)
+- **Honest-but-curious server**: Follows protocol but may analyze data
+- **Trusted client**: Client environment must be secure
+- **Encrypted network**: gRPC/TLS for transport security
+- **Per-enterprise isolation**: Each enterprise has separate keys (Tier 2.5)
+
+See [PRIVACY_MODEL_QA.md](PRIVACY_MODEL_QA.md) for detailed threat analysis.
 
 ## Production Deployment
 
@@ -256,11 +349,23 @@ session_ttl: 24h         # Key rotation
 
 ## Future Improvements
 
+### Tier 2.5 Enhancements (In Progress)
+- [ ] Per-enterprise LSH (secret hyperplanes per organization)
+- [ ] Authentication service (Option B: token-based key distribution)
+- [ ] Optional PIR integration (for cryptographic bucket access privacy)
+- [ ] Key rotation support
+
+### General Improvements
 - [ ] HNSW index (95%+ recall vs 70-80% with LSH)
 - [ ] GPU acceleration (Lattigo supports CUDA)
 - [ ] PCA dimensionality reduction (128D → 64D)
 - [ ] Redis session store (for distributed deployments)
 - [ ] Streaming gRPC for large result sets
+
+### Tier 3 (Planned)
+- [ ] AWS Nitro Enclave support
+- [ ] KMS integration
+- [ ] Cryptographic attestation
 
 ## FAQ
 

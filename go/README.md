@@ -10,7 +10,7 @@ Opaque Go provides flexible privacy levels for vector search, from query-private
 |------|------|-------------|----------|
 | **Tier 1** | Query-Private | Vectors, encrypted query | Traditional vector DB with query privacy |
 | **Tier 2** | Data-Private | Encrypted blobs, LSH buckets | Blockchain, zero-trust storage |
-| **Tier 3** | Hierarchical Private | Encrypted blobs, HE centroids | High-scale with both query & data privacy |
+| **Tier 2.5** | Hierarchical Private | Encrypted blobs, HE centroids, bucket access | Maximum crypto privacy for query + data |
 
 ### Technologies Used
 
@@ -167,24 +167,28 @@ type Store interface {
 | Access patterns (which buckets) | Similarity scores |
 | Blob count per bucket | Which results you selected |
 
-## Tier 3: Hierarchical Private Search
+## Tier 2.5: Hierarchical Private Search
 
-Tier 3 combines **query privacy** (HE) with **data privacy** (AES) using a three-level hierarchy:
+Tier 2.5 combines **query privacy** (HE) with **data privacy** (AES) using a three-level hierarchy:
 
 ```
 Level 1: HE on super-bucket centroids (64 operations)
          ↓ Client privately selects top super-buckets
+         ↓ SERVER NEVER SEES WHICH BUCKETS WERE SELECTED
 Level 2: Decoy-based sub-bucket fetch
          ↓ Server can't distinguish real from decoy
+         ↓ Optional: PIR for cryptographic guarantee
 Level 3: Local AES decrypt + scoring
+         ↓ All computation is client-side
 ```
 
 ### Key Benefits
 
-- **~4000x faster** than naive Tier 1 (100K vectors)
-- **Query privacy**: Server never sees query vector (HE)
-- **Data privacy**: Storage never sees vectors (AES)
-- **Selection privacy**: Server doesn't know which super-buckets selected
+- **~20x faster** than naive Tier 1 (100K vectors)
+- **Query privacy**: Server never sees query vector (HE encrypted)
+- **Data privacy**: Storage never sees vectors (AES-256-GCM)
+- **Selection privacy**: Server doesn't know which super-buckets selected (client-side HE decrypt)
+- **Per-enterprise isolation**: Each enterprise has secret LSH mapping (planned)
 
 ### Quick Start
 
@@ -210,7 +214,9 @@ hClient, _ := client.NewHierarchicalClient(idx)
 result, _ := hClient.Search(ctx, query, 10)
 
 // Access timing breakdown
-fmt.Printf("HE time: %v\n", result.Timing.HECentroidScores)
+fmt.Printf("HE centroid scoring: %v\n", result.Timing.HECentroidScores)
+fmt.Printf("Bucket fetch: %v\n", result.Timing.BucketFetch)
+fmt.Printf("Local scoring: %v\n", result.Timing.LocalScoring)
 fmt.Printf("Total: %v\n", result.Timing.Total)
 ```
 
@@ -224,20 +230,38 @@ go run ./examples/hierarchical/main.go
 
 | Metric | Value |
 |--------|-------|
-| Query time | ~800ms |
-| HE operations | 64 (vs 100K naive) |
-| Vectors scored | ~8000 |
-| Speedup | ~4000x |
+| Total query time | ~700ms |
+| HE operations | 64 (not 100K!) |
+| Vectors decrypted | ~1500 |
+| Speedup vs naive Tier 1 | ~20x |
 
 ### Privacy Guarantees
 
 | What | Protected From | How |
 |------|---------------|-----|
-| Query vector | Server | HE encryption |
-| Super-bucket selection | Server | Client-side decrypt |
-| Sub-bucket interest | Server | Decoy buckets |
-| Vector values | Storage | AES-256-GCM |
-| Final scores | Everyone | Local computation |
+| Query vector | Server | HE encryption (BFV, 128-bit) |
+| Super-bucket selection | Server | Client-side HE decryption |
+| Sub-bucket interest | Server | Decoy buckets + shuffling |
+| Vector values | Storage | AES-256-GCM encryption |
+| Final scores | Everyone | Local computation only |
+
+### What Server Sees vs Cannot See
+
+| Server Sees | Server Cannot See |
+|-------------|-------------------|
+| HE(query) - encrypted blob | Query vector contents |
+| 64 HE(scores) - computed blindly | Score values |
+| Bucket IDs fetched | Which are real vs decoy |
+| Encrypted blobs | Vector contents |
+| Timing info | Final search results |
+
+### Future Enhancements (Planned)
+
+- **Per-enterprise LSH**: Each enterprise gets secret LSH hyperplanes
+- **Authentication service**: Token-based key distribution (Option B)
+- **Optional PIR**: For cryptographic bucket access privacy
+
+See [docs/TIER_2_5_ARCHITECTURE.md](../docs/TIER_2_5_ARCHITECTURE.md) for complete architecture details.
 
 ## Performance
 
@@ -310,13 +334,14 @@ See [BENCHMARKS.md](BENCHMARKS.md) for detailed benchmark results and methodolog
 
 ### Privacy Comparison
 
-| Aspect | Tier 1 | Tier 2 |
-|--------|--------|--------|
-| Query vectors | Hidden (HE) | Hidden (local) |
-| Database vectors | Visible | Hidden (AES) |
-| Similarity scores | Hidden (HE) | Hidden (local) |
-| LSH buckets | Visible | Visible |
-| Access patterns | Visible | Can be obfuscated |
+| Aspect | Tier 1 | Tier 2 | Tier 2.5 |
+|--------|--------|--------|----------|
+| Query vectors | Hidden (HE) | Hidden (local) | Hidden (HE) |
+| Database vectors | Visible | Hidden (AES) | Hidden (AES) |
+| Similarity scores | Hidden (HE) | Hidden (local) | Hidden (HE + local) |
+| Bucket selection | Visible | Visible | Hidden (client-side HE decrypt) |
+| LSH buckets | Visible | Visible | Visible (but opaque with per-enterprise LSH) |
+| Access patterns | Visible | Can be obfuscated | Obfuscated (decoys) |
 
 ## Configuration
 
