@@ -204,9 +204,10 @@ func (e *Engine) DecryptScalar(ct *rlwe.Ciphertext) (float64, error) {
 // HomomorphicDotProduct computes E(q · v) from E(q) and plaintext v.
 // This is the core operation for privacy-preserving similarity search.
 // Returns encrypted dot product that only the client can decrypt.
+// Note: Uses full lock because Lattigo evaluator is not thread-safe.
 func (e *Engine) HomomorphicDotProduct(encQuery *rlwe.Ciphertext, vector []float64) (*rlwe.Ciphertext, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
 	// Pad vector to max slots with 0 (same as EncryptVector)
 	maxSlots := e.params.MaxSlots()
@@ -247,9 +248,10 @@ func (e *Engine) HomomorphicDotProduct(encQuery *rlwe.Ciphertext, vector []float
 
 // HomomorphicDotProductCached computes E(q · v) using a pre-encoded plaintext.
 // This is faster than HomomorphicDotProduct when centroids are cached as plaintexts.
+// Note: Uses full lock because Lattigo evaluator is not thread-safe.
 func (e *Engine) HomomorphicDotProductCached(encQuery *rlwe.Ciphertext, encodedVector *rlwe.Plaintext) (*rlwe.Ciphertext, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
 	if encodedVector == nil {
 		return nil, errors.New("encoded vector is nil")
