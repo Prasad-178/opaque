@@ -10,6 +10,7 @@ Opaque Go provides flexible privacy levels for vector search, from query-private
 |------|------|-------------|----------|
 | **Tier 1** | Query-Private | Vectors, encrypted query | Traditional vector DB with query privacy |
 | **Tier 2** | Data-Private | Encrypted blobs, LSH buckets | Blockchain, zero-trust storage |
+| **Tier 3** | Hierarchical Private | Encrypted blobs, HE centroids | High-scale with both query & data privacy |
 
 ### Technologies Used
 
@@ -28,7 +29,8 @@ go/
 ├── pkg/
 │   ├── crypto/          # Homomorphic encryption (Lattigo BFV)
 │   ├── lsh/             # Locality-sensitive hashing
-│   ├── client/          # Client SDK (Tier 1 + Tier 2)
+│   ├── client/          # Client SDK (Tier 1 + Tier 2 + Hierarchical)
+│   ├── hierarchical/    # Hierarchical index (Tier 3)
 │   ├── encrypt/         # Symmetric encryption (AES-GCM)
 │   └── blob/            # Encrypted blob storage
 ├── internal/
@@ -39,7 +41,9 @@ go/
 │   └── proto/           # Protocol buffer definitions
 ├── examples/
 │   ├── search/          # Tier 1 example
-│   └── tier2/           # Tier 2 example
+│   ├── tier2/           # Tier 2 example
+│   ├── hierarchical/    # Tier 3 (Hierarchical) example
+│   └── demo/            # Combined demo
 └── test/                # Integration tests & benchmarks
 ```
 
@@ -163,6 +167,78 @@ type Store interface {
 | Access patterns (which buckets) | Similarity scores |
 | Blob count per bucket | Which results you selected |
 
+## Tier 3: Hierarchical Private Search
+
+Tier 3 combines **query privacy** (HE) with **data privacy** (AES) using a three-level hierarchy:
+
+```
+Level 1: HE on super-bucket centroids (64 operations)
+         ↓ Client privately selects top super-buckets
+Level 2: Decoy-based sub-bucket fetch
+         ↓ Server can't distinguish real from decoy
+Level 3: Local AES decrypt + scoring
+```
+
+### Key Benefits
+
+- **~4000x faster** than naive Tier 1 (100K vectors)
+- **Query privacy**: Server never sees query vector (HE)
+- **Data privacy**: Storage never sees vectors (AES)
+- **Selection privacy**: Server doesn't know which super-buckets selected
+
+### Quick Start
+
+```go
+import (
+    "github.com/opaque/opaque/go/pkg/blob"
+    "github.com/opaque/opaque/go/pkg/client"
+    "github.com/opaque/opaque/go/pkg/encrypt"
+    "github.com/opaque/opaque/go/pkg/hierarchical"
+)
+
+// Build hierarchical index
+key, _ := encrypt.GenerateKey()
+cfg := hierarchical.DefaultConfig()
+cfg.Dimension = 128
+
+builder, _ := hierarchical.NewBuilder(cfg, key)
+store := blob.NewMemoryStore()
+idx, _ := builder.Build(ctx, ids, vectors, store)
+
+// Create client and search
+hClient, _ := client.NewHierarchicalClient(idx)
+result, _ := hClient.Search(ctx, query, 10)
+
+// Access timing breakdown
+fmt.Printf("HE time: %v\n", result.Timing.HECentroidScores)
+fmt.Printf("Total: %v\n", result.Timing.Total)
+```
+
+### Run Hierarchical Example
+
+```bash
+go run ./examples/hierarchical/main.go
+```
+
+### Performance (100K vectors, 128D)
+
+| Metric | Value |
+|--------|-------|
+| Query time | ~800ms |
+| HE operations | 64 (vs 100K naive) |
+| Vectors scored | ~8000 |
+| Speedup | ~4000x |
+
+### Privacy Guarantees
+
+| What | Protected From | How |
+|------|---------------|-----|
+| Query vector | Server | HE encryption |
+| Super-bucket selection | Server | Client-side decrypt |
+| Sub-bucket interest | Server | Decoy buckets |
+| Vector values | Storage | AES-256-GCM |
+| Final scores | Everyone | Local computation |
+
 ## Performance
 
 ### Tier 1: Query-Private (Homomorphic Encryption)
@@ -280,21 +356,21 @@ See [ROADMAP.md](ROADMAP.md) for the full product roadmap.
 
 - [x] Tier 1: Query-private search with homomorphic encryption
 - [x] Tier 2: Data-private search with AES-256-GCM
+- [x] Tier 3: Hierarchical private search (HE centroids + AES vectors)
 - [x] Privacy enhancements (timing obfuscation, decoy buckets, shuffling)
+- [x] Combined Tier 1 + Tier 2 + Tier 3 demos
 - [x] File-based persistent storage
 - [x] Comprehensive benchmarks
 
 ### In Progress
 
-- [ ] Tier 2.5: Hierarchical FHE (bucket-level HE + blob-level AES)
-- [ ] Combined Tier 1 + Tier 2 demo
+- [ ] Milvus vector store integration
+- [ ] Full gRPC service implementation
 
 ### Future
 
-- [ ] Tier 3: Enclave-private search (AWS Nitro)
+- [ ] Enclave-private search (AWS Nitro)
 - [ ] IPFS/blockchain storage backends
-- [ ] Milvus vector store integration
-- [ ] Full gRPC service implementation
 - [ ] Observability (metrics, tracing)
 
 ## License

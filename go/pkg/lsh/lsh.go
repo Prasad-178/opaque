@@ -478,3 +478,31 @@ func GenerateSessionKey(numBytes int) []byte {
 	rand.Read(key)
 	return key
 }
+
+// HashToIndex converts a hash to a bucket index in range [0, numBuckets).
+// Uses the hash bytes directly to compute a bucket index.
+// This is useful for hierarchical indexing where we need to map
+// vectors to a fixed number of buckets.
+func HashToIndex(hash []byte, numBuckets int) int {
+	if numBuckets <= 0 {
+		return 0
+	}
+	if numBuckets == 1 {
+		return 0
+	}
+
+	// Simple and effective: interpret hash bytes as a number
+	// and use modulo to get bucket index
+	var hashVal uint64
+	for i, b := range hash {
+		hashVal |= uint64(b) << (uint(i) * 8)
+	}
+
+	return int(hashVal % uint64(numBuckets))
+}
+
+// HashToIndexFromVector computes hash and returns bucket index.
+func (idx *Index) HashToIndexFromVector(vector []float64, numBuckets int) int {
+	hash := idx.HashBytes(vector)
+	return HashToIndex(hash, numBuckets)
+}
