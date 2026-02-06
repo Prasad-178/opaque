@@ -120,10 +120,12 @@ func (s *Service) Authenticate(ctx context.Context, userID string, password []by
 	}
 	s.tokens[tokenID] = token
 
-	// Generate LSH hyperplanes from the secret seed
+	// Generate LSH hyperplanes from the SUB-BUCKET seed
+	// The client uses LSH only for sub-bucket selection (super-buckets are selected via HE)
+	// Use the same number of bits as the builder calculates (from enterprise config)
 	hyperplanes := lsh.GenerateHyperplanes(
-		enterpriseCfg.GetLSHSeedAsInt64(),
-		s.config.LSHBits,
+		enterpriseCfg.GetSubLSHSeedAsInt64(), // Use sub-bucket seed
+		enterpriseCfg.GetSubLSHBits(),        // Match builder's bit calculation
 		enterpriseCfg.Dimension,
 	)
 
@@ -136,6 +138,7 @@ func (s *Service) Authenticate(ctx context.Context, userID string, password []by
 		EnterpriseID:    user.EnterpriseID,
 		Dimension:       enterpriseCfg.Dimension,
 		NumSuperBuckets: enterpriseCfg.NumSuperBuckets,
+		NumSubBuckets:   enterpriseCfg.NumSubBuckets,
 	}, nil
 }
 
@@ -208,10 +211,10 @@ func (s *Service) RefreshToken(ctx context.Context, tokenID string) (*ClientCred
 	}
 	s.tokens[newTokenID] = newToken
 
-	// Generate fresh hyperplanes
+	// Generate fresh hyperplanes from SUB-BUCKET seed
 	hyperplanes := lsh.GenerateHyperplanes(
-		enterpriseCfg.GetLSHSeedAsInt64(),
-		s.config.LSHBits,
+		enterpriseCfg.GetSubLSHSeedAsInt64(), // Use sub-bucket seed
+		enterpriseCfg.GetSubLSHBits(),        // Match builder's bit calculation
 		enterpriseCfg.Dimension,
 	)
 
@@ -224,6 +227,7 @@ func (s *Service) RefreshToken(ctx context.Context, tokenID string) (*ClientCred
 		EnterpriseID:    token.EnterpriseID,
 		Dimension:       enterpriseCfg.Dimension,
 		NumSuperBuckets: enterpriseCfg.NumSuperBuckets,
+		NumSubBuckets:   enterpriseCfg.NumSubBuckets,
 	}, nil
 }
 

@@ -39,16 +39,19 @@ func NewEnterpriseBuilder(cfg Config, enterpriseCfg *enterprise.Config) (*Enterp
 		return nil, fmt.Errorf("invalid enterprise config: %w", err)
 	}
 
-	// Override config dimension from enterprise config if not set
+	// Override config from enterprise config if not set
 	if cfg.Dimension <= 0 {
 		cfg.Dimension = enterpriseCfg.Dimension
 	}
 	if cfg.NumSuperBuckets <= 0 {
 		cfg.NumSuperBuckets = enterpriseCfg.NumSuperBuckets
 	}
-	if cfg.NumSubBuckets <= 0 {
-		cfg.NumSubBuckets = 1 // Default to single sub-bucket
+	// Use enterprise config's NumSubBuckets to ensure consistency
+	numSubBuckets := enterpriseCfg.NumSubBuckets
+	if numSubBuckets <= 0 {
+		numSubBuckets = 64 // Default
 	}
+	cfg.NumSubBuckets = numSubBuckets
 
 	encryptor, err := encrypt.NewAESGCM(enterpriseCfg.AESKey)
 	if err != nil {
@@ -201,12 +204,16 @@ func (b *EnterpriseBuilder) GetEnterpriseConfig() *enterprise.Config {
 // ConfigFromEnterprise creates a hierarchical Config from enterprise settings.
 // This is a helper for creating Config with enterprise defaults.
 func ConfigFromEnterprise(enterpriseCfg *enterprise.Config) Config {
+	numSubBuckets := enterpriseCfg.NumSubBuckets
+	if numSubBuckets <= 0 {
+		numSubBuckets = 64 // Default
+	}
 	return Config{
 		Dimension:          enterpriseCfg.Dimension,
 		NumSuperBuckets:    enterpriseCfg.NumSuperBuckets,
-		NumSubBuckets:      1, // Default to single sub-bucket
+		NumSubBuckets:      numSubBuckets,
 		TopSuperBuckets:    8, // Default to top 8
-		SubBucketsPerSuper: 1,
+		SubBucketsPerSuper: 2,
 		NumDecoys:          8,
 		LSHSuperSeed:       enterpriseCfg.GetLSHSeedAsInt64(),
 		LSHSubSeed:         enterpriseCfg.GetSubLSHSeedAsInt64(),

@@ -99,6 +99,9 @@ type ClientCredentials struct {
 
 	// NumSuperBuckets for bucket computation
 	NumSuperBuckets int
+
+	// NumSubBuckets for sub-bucket computation
+	NumSubBuckets int
 }
 
 // IsExpired returns true if the credentials have expired.

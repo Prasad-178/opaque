@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"time"
 )
@@ -43,6 +44,9 @@ type Config struct {
 	// NumSuperBuckets is the number of super-buckets
 	NumSuperBuckets int
 
+	// NumSubBuckets is the number of sub-buckets (within each super-bucket)
+	NumSubBuckets int
+
 	// Metadata
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -51,7 +55,13 @@ type Config struct {
 }
 
 // NewConfig creates a new enterprise configuration with fresh secrets.
+// Uses default of 64 sub-buckets.
 func NewConfig(enterpriseID string, dimension int, numSuperBuckets int) (*Config, error) {
+	return NewConfigWithSubBuckets(enterpriseID, dimension, numSuperBuckets, 64)
+}
+
+// NewConfigWithSubBuckets creates a new enterprise configuration with custom sub-bucket count.
+func NewConfigWithSubBuckets(enterpriseID string, dimension int, numSuperBuckets int, numSubBuckets int) (*Config, error) {
 	if enterpriseID == "" {
 		return nil, fmt.Errorf("enterprise ID is required")
 	}
@@ -60,6 +70,9 @@ func NewConfig(enterpriseID string, dimension int, numSuperBuckets int) (*Config
 	}
 	if numSuperBuckets <= 0 {
 		return nil, fmt.Errorf("numSuperBuckets must be positive")
+	}
+	if numSubBuckets <= 0 {
+		numSubBuckets = 64 // Default
 	}
 
 	// Generate cryptographically secure AES key
@@ -88,6 +101,7 @@ func NewConfig(enterpriseID string, dimension int, numSuperBuckets int) (*Config
 		Centroids:       centroids,
 		Dimension:       dimension,
 		NumSuperBuckets: numSuperBuckets,
+		NumSubBuckets:   numSubBuckets,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 		Version:         1,
@@ -112,6 +126,20 @@ func (c *Config) GetLSHSeedAsInt64() int64 {
 // Uses XOR with a constant to derive a different but deterministic seed.
 func (c *Config) GetSubLSHSeedAsInt64() int64 {
 	return c.GetLSHSeedAsInt64() ^ 0x12345678DEADBEEF
+}
+
+// GetSubLSHBits returns the number of LSH bits for sub-buckets.
+// This must match what the builder uses for consistent hashing.
+func (c *Config) GetSubLSHBits() int {
+	numSubBuckets := c.NumSubBuckets
+	if numSubBuckets <= 0 {
+		numSubBuckets = 64 // Default
+	}
+	bits := int(math.Ceil(math.Log2(float64(numSubBuckets)))) + 2
+	if bits < 6 {
+		bits = 6
+	}
+	return bits
 }
 
 // Fingerprint returns a safe identifier for logging (not the full key).
@@ -158,6 +186,7 @@ func (c *Config) Clone() *Config {
 		Centroids:       make([][]float64, len(c.Centroids)),
 		Dimension:       c.Dimension,
 		NumSuperBuckets: c.NumSuperBuckets,
+		NumSubBuckets:   c.NumSubBuckets,
 		CreatedAt:       c.CreatedAt,
 		UpdatedAt:       c.UpdatedAt,
 		Version:         c.Version,
