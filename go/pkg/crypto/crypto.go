@@ -1,4 +1,5 @@
-// Package crypto provides homomorphic encryption operations using Lattigo BFV scheme.
+// Package crypto provides homomorphic encryption operations using Lattigo CKKS scheme.
+// CKKS is ideal for approximate arithmetic on encrypted real numbers.
 package crypto
 
 import (
@@ -9,60 +10,16 @@ import (
 	"sync"
 
 	"github.com/tuneinsight/lattigo/v5/core/rlwe"
-	"github.com/tuneinsight/lattigo/v5/schemes/bfv"
+	"github.com/tuneinsight/lattigo/v5/he/hefloat"
 )
 
-const (
-	// PlaintextModulus is the BFV plaintext modulus (from ExampleParameters128BitLogN14LogQP438)
-	PlaintextModulus = 65537 // 0x10001
-
-	// ScaleFactor for fixed-point encoding
-	// CRITICAL: BFV multiplication is modular, so scale^2 must be < PlaintextModulus
-	// sqrt(65537) ≈ 256, so we use 200 to have margin for accumulation
-	// With values in [-1, 1], offset of 1 gives [0, 2]
-	// Scale of 200 gives [0, 400] per slot
-	// After multiply: max per slot = 400 * 400 = 160000
-	// For 128-dim vectors, sum = 128 * 160000 = 20.5M < need modular handling
-	//
-	// Actually for accumulation to work, we need per-slot product to stay small.
-	// Using scale=200, offset=1: encoded values in [0, 400]
-	// Product: 400 * 400 = 160000, which exceeds 65537!
-	//
-	// To stay safe: scale = 100, offset = 1 → [0, 200]
-	// Product: 200 * 200 = 40000 < 65537 ✓
-	// Sum of 128 products: 128 * 40000 = 5.12M > 65537 (wraps)
-	//
-	// For proper operation without wrap, we need scale such that:
-	// n * scale^2 * 4 < 65537 (where 4 is max (v+1)^2)
-	// For n=128: scale < sqrt(65537 / 128 / 4) ≈ 11.3
-	//
-	// This is too small for useful precision. BFV with this plaintext modulus
-	// cannot support our dot product approach directly.
-	//
-	// WORKAROUND: Use scale=100 and accept some wrapping.
-	// Rankings may still be approximately correct due to modular relationships.
-	ScaleFactor = float64(100)
-
-	// Offset is added to make negative values positive before encoding
-	Offset = 1.0
-)
-
-// Parameters holds the BFV parameters for the encryption scheme
-type Parameters struct {
-	bfv.Parameters
-}
-
-// KeyPair contains the secret and public keys
-type KeyPair struct {
-	SecretKey *rlwe.SecretKey
-	PublicKey *rlwe.PublicKey
-}
-
-// Engine provides homomorphic encryption operations
+// Engine provides homomorphic encryption operations using CKKS scheme.
+// CKKS allows approximate arithmetic on encrypted floating-point numbers,
+// which is ideal for computing dot products for similarity search.
 type Engine struct {
-	params    bfv.Parameters
-	encoder   *bfv.Encoder
-	evaluator *bfv.Evaluator
+	params    hefloat.Parameters
+	encoder   *hefloat.Encoder
+	evaluator *hefloat.Evaluator
 
 	// Only set on client side
 	secretKey *rlwe.SecretKey
@@ -75,18 +32,26 @@ type Engine struct {
 	mu sync.RWMutex
 }
 
-// NewParameters creates BFV parameters with the specified security level.
-// Uses ExampleParameters128BitLogN14LogQP438 for 128-bit security with good performance.
-func NewParameters() (bfv.Parameters, error) {
-	// ExampleParameters128BitLogN14LogQP438 provides:
-	// - 128-bit security
-	// - LogN=14 supports vectors up to 8192 dimensions
-	// - Good balance of speed and capability
-	return bfv.NewParametersFromLiteral(bfv.ExampleParameters128BitLogN14LogQP438)
+// NewParameters creates CKKS parameters optimized for vector dot products.
+// Uses 128-bit security with LogN=14 supporting vectors up to 8192 dimensions.
+func NewParameters() (hefloat.Parameters, error) {
+	// CKKS parameters for 128-bit security
+	// LogN=14 gives 2^14 = 16384 slots (enough for 8192-dim complex or 16384-dim real)
+	// LogDefaultScale=45 provides good precision for normalized vectors
+	params, err := hefloat.NewParametersFromLiteral(hefloat.ParametersLiteral{
+		LogN:            14,                                    // Ring degree 2^14 = 16384
+		LogQ:            []int{60, 45, 45, 45, 45, 45, 45, 45}, // Ciphertext modulus chain
+		LogP:            []int{61, 61},                         // Special primes for key-switching
+		LogDefaultScale: 45,                                    // Scale for encoding (2^45)
+	})
+	if err != nil {
+		return hefloat.Parameters{}, fmt.Errorf("failed to create CKKS parameters: %w", err)
+	}
+	return params, nil
 }
 
 // NewClientEngine creates an encryption engine for client-side operations.
-// Generates a new key pair.
+// Generates a new key pair for encryption/decryption.
 func NewClientEngine() (*Engine, error) {
 	params, err := NewParameters()
 	if err != nil {
@@ -102,8 +67,8 @@ func NewClientEngine() (*Engine, error) {
 
 	return &Engine{
 		params:    params,
-		encoder:   bfv.NewEncoder(params),
-		evaluator: bfv.NewEvaluator(params, evk),
+		encoder:   hefloat.NewEncoder(params),
+		evaluator: hefloat.NewEvaluator(params, evk),
 		secretKey: sk,
 		publicKey: pk,
 		encryptor: rlwe.NewEncryptor(params, pk),
@@ -112,7 +77,7 @@ func NewClientEngine() (*Engine, error) {
 }
 
 // NewServerEngine creates an encryption engine for server-side operations.
-// Does not have access to the secret key.
+// Does not have access to the secret key - can only perform homomorphic operations.
 func NewServerEngine(publicKeyBytes []byte) (*Engine, error) {
 	params, err := NewParameters()
 	if err != nil {
@@ -127,15 +92,15 @@ func NewServerEngine(publicKeyBytes []byte) (*Engine, error) {
 
 	return &Engine{
 		params:    params,
-		encoder:   bfv.NewEncoder(params),
-		evaluator: bfv.NewEvaluator(params, nil),
+		encoder:   hefloat.NewEncoder(params),
+		evaluator: hefloat.NewEvaluator(params, nil),
 		publicKey: pk,
 	}, nil
 }
 
-// galoisElements returns the Galois elements needed for rotations
-func galoisElements(params bfv.Parameters) []uint64 {
-	// We need rotations by powers of 2 for the summation
+// galoisElements returns the Galois elements needed for rotations in dot product
+func galoisElements(params hefloat.Parameters) []uint64 {
+	// We need rotations by powers of 2 for the tree-based summation
 	logN := params.LogN()
 	elements := make([]uint64, logN)
 	for i := 0; i < logN; i++ {
@@ -144,7 +109,7 @@ func galoisElements(params bfv.Parameters) []uint64 {
 	return elements
 }
 
-// GetPublicKeyBytes returns the serialized public key
+// GetPublicKeyBytes returns the serialized public key for distribution
 func (e *Engine) GetPublicKeyBytes() ([]byte, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -160,8 +125,9 @@ func (e *Engine) GetPublicKeyBytes() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// EncryptVector encrypts a float64 vector using fixed-point encoding.
-// Values are expected to be in range [-1, 1] (normalized vectors).
+// EncryptVector encrypts a float64 vector using CKKS.
+// Values should be normalized to [-1, 1] range for best precision.
+// CKKS directly handles floating-point values without offset encoding.
 func (e *Engine) EncryptVector(vector []float64) (*rlwe.Ciphertext, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -170,24 +136,16 @@ func (e *Engine) EncryptVector(vector []float64) (*rlwe.Ciphertext, error) {
 		return nil, errors.New("encryptor not available (server-side engine?)")
 	}
 
-	// CRITICAL: Pad vector to max slots with -1
-	// The offset encoding transforms: v -> (v + 1) * scale
-	// So -1 encodes to 0, meaning unused slots don't contribute to the rotation-sum.
-	// Without this, unused slots (defaulting to 0) would encode to scale,
-	// causing massive bias in the dot product result.
+	// CKKS uses complex slots, but we only use the real part
+	// Pad vector to max slots with 0 (zeros don't affect dot product sum)
 	maxSlots := e.params.MaxSlots()
 	paddedVector := make([]float64, maxSlots)
-	for i := range paddedVector {
-		paddedVector[i] = -1.0 // Encodes to 0
-	}
 	copy(paddedVector, vector)
+	// Remaining slots are 0 by default - no contribution to dot product
 
-	// Encode to fixed-point integers
-	encoded := encodeVector(paddedVector)
-
-	// Create plaintext
-	pt := bfv.NewPlaintext(e.params, e.params.MaxLevel())
-	if err := e.encoder.Encode(encoded, pt); err != nil {
+	// Encode directly as floating-point values (no offset needed in CKKS!)
+	pt := hefloat.NewPlaintext(e.params, e.params.MaxLevel())
+	if err := e.encoder.Encode(paddedVector, pt); err != nil {
 		return nil, fmt.Errorf("failed to encode vector: %w", err)
 	}
 
@@ -212,13 +170,13 @@ func (e *Engine) DecryptVector(ct *rlwe.Ciphertext, length int) ([]float64, erro
 	// Decrypt
 	pt := e.decryptor.DecryptNew(ct)
 
-	// Decode
-	encoded := make([]uint64, length)
-	if err := e.encoder.Decode(pt, encoded); err != nil {
+	// Decode to float64 slice
+	decoded := make([]float64, length)
+	if err := e.encoder.Decode(pt, decoded); err != nil {
 		return nil, fmt.Errorf("failed to decode: %w", err)
 	}
 
-	return decodeVector(encoded), nil
+	return decoded, nil
 }
 
 // DecryptScalar decrypts a ciphertext containing a single scalar value (dot product result).
@@ -234,36 +192,30 @@ func (e *Engine) DecryptScalar(ct *rlwe.Ciphertext) (float64, error) {
 	pt := e.decryptor.DecryptNew(ct)
 
 	// Decode - the result is in the first slot
-	encoded := make([]uint64, 1)
-	if err := e.encoder.Decode(pt, encoded); err != nil {
+	decoded := make([]float64, 1)
+	if err := e.encoder.Decode(pt, decoded); err != nil {
 		return 0, fmt.Errorf("failed to decode: %w", err)
 	}
 
-	// Decode from fixed-point
-	// The dot product result has been squared in scale, so we need to adjust
-	return decodeScalar(encoded[0]), nil
+	// CKKS returns the actual floating-point value directly!
+	return decoded[0], nil
 }
 
 // HomomorphicDotProduct computes E(q · v) from E(q) and plaintext v.
 // This is the core operation for privacy-preserving similarity search.
+// Returns encrypted dot product that only the client can decrypt.
 func (e *Engine) HomomorphicDotProduct(encQuery *rlwe.Ciphertext, vector []float64) (*rlwe.Ciphertext, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	// CRITICAL: Pad vector to max slots with -1 (same as EncryptVector)
-	// This ensures unused slots encode to 0 and don't contribute to the sum.
+	// Pad vector to max slots with 0 (same as EncryptVector)
 	maxSlots := e.params.MaxSlots()
 	paddedVector := make([]float64, maxSlots)
-	for i := range paddedVector {
-		paddedVector[i] = -1.0 // Encodes to 0
-	}
 	copy(paddedVector, vector)
 
 	// Encode vector as plaintext
-	encoded := encodeVector(paddedVector)
-
-	pt := bfv.NewPlaintext(e.params, encQuery.Level())
-	if err := e.encoder.Encode(encoded, pt); err != nil {
+	pt := hefloat.NewPlaintext(e.params, encQuery.Level())
+	if err := e.encoder.Encode(paddedVector, pt); err != nil {
 		return nil, fmt.Errorf("failed to encode vector: %w", err)
 	}
 
@@ -273,12 +225,17 @@ func (e *Engine) HomomorphicDotProduct(encQuery *rlwe.Ciphertext, vector []float
 		return nil, fmt.Errorf("failed to multiply: %w", err)
 	}
 
-	// Sum ALL slots using rotations (log2(maxSlots) iterations)
-	// This accumulates the sum of all component-wise products into slot 0
+	// Rescale after multiplication to manage scale growth
+	if err := e.evaluator.Rescale(result, result); err != nil {
+		return nil, fmt.Errorf("failed to rescale: %w", err)
+	}
+
+	// Sum all slots using tree-based rotation and addition
+	// This computes: slot[0] = sum(q[i] * v[i]) for all i
 	for i := 1; i < maxSlots; i *= 2 {
-		rotated, err := e.evaluator.RotateColumnsNew(result, i)
+		rotated, err := e.evaluator.RotateNew(result, i)
 		if err != nil {
-			return nil, fmt.Errorf("failed to rotate: %w", err)
+			return nil, fmt.Errorf("failed to rotate by %d: %w", i, err)
 		}
 		if err := e.evaluator.Add(result, rotated, result); err != nil {
 			return nil, fmt.Errorf("failed to add: %w", err)
@@ -288,7 +245,7 @@ func (e *Engine) HomomorphicDotProduct(encQuery *rlwe.Ciphertext, vector []float
 	return result, nil
 }
 
-// SerializeCiphertext serializes a ciphertext to bytes
+// SerializeCiphertext serializes a ciphertext to bytes for transmission
 func (e *Engine) SerializeCiphertext(ct *rlwe.Ciphertext) ([]byte, error) {
 	buf := new(bytes.Buffer)
 	if _, err := ct.WriteTo(buf); err != nil {
@@ -306,47 +263,9 @@ func (e *Engine) DeserializeCiphertext(data []byte) (*rlwe.Ciphertext, error) {
 	return ct, nil
 }
 
-// GetParams returns the BFV parameters
-func (e *Engine) GetParams() bfv.Parameters {
+// GetParams returns the CKKS parameters
+func (e *Engine) GetParams() hefloat.Parameters {
 	return e.params
-}
-
-// encodeVector converts float64 values to fixed-point uint64
-func encodeVector(vector []float64) []uint64 {
-	encoded := make([]uint64, len(vector))
-	for i, v := range vector {
-		// Add offset to make positive, then scale
-		encoded[i] = uint64((v + Offset) * ScaleFactor)
-	}
-	return encoded
-}
-
-// decodeVector converts fixed-point uint64 back to float64
-func decodeVector(encoded []uint64) []float64 {
-	decoded := make([]float64, len(encoded))
-	for i, v := range encoded {
-		decoded[i] = (float64(v) / ScaleFactor) - Offset
-	}
-	return decoded
-}
-
-// decodeScalar decodes a single scalar from a dot product result
-func decodeScalar(encoded uint64) float64 {
-	// After multiplication and rotation-sum:
-	// result = sum((qi + 1) * scale * (vi + 1) * scale) = sum((qi+1)(vi+1)) * scale^2
-	// = [sum(qi*vi) + sum(qi) + sum(vi) + n] * scale^2
-	//
-	// The scalar result needs to be decoded by dividing by scale^2 to get:
-	// sum(qi*vi) + sum(qi) + sum(vi) + n
-	//
-	// This includes bias terms that depend on the vectors.
-	// For ranking purposes, the bias from sum(qi) and n is constant across
-	// all centroids, so only sum(vi) varies and affects ranking.
-	//
-	// With the current small scale (100), there may be modular wrap-around
-	// for large dimension vectors. The decoded value may not be numerically
-	// accurate, but should preserve relative ordering for ranking.
-	return float64(encoded) / (ScaleFactor * ScaleFactor)
 }
 
 // NormalizeVector normalizes a vector to unit length
