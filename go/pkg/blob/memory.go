@@ -2,6 +2,8 @@ package blob
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -15,14 +17,19 @@ type MemoryStore struct {
 	// buckets maps bucket -> list of blob IDs
 	buckets map[string][]string
 
+	// superBuckets maps super-bucket ID -> list of blob IDs
+	// This enables efficient retrieval by super-bucket without sub-bucket filtering
+	superBuckets map[int][]string
+
 	mu sync.RWMutex
 }
 
 // NewMemoryStore creates a new in-memory blob store.
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		blobs:   make(map[string]*Blob),
-		buckets: make(map[string][]string),
+		blobs:        make(map[string]*Blob),
+		buckets:      make(map[string][]string),
+		superBuckets: make(map[int][]string),
 	}
 }
 
@@ -40,6 +47,12 @@ func (s *MemoryStore) Put(ctx context.Context, blob *Blob) error {
 
 	// Add to bucket index
 	s.buckets[blob.LSHBucket] = append(s.buckets[blob.LSHBucket], blob.ID)
+
+	// Add to super-bucket index (extract super-bucket ID from bucket key)
+	superID := extractSuperBucketID(blob.LSHBucket)
+	if superID >= 0 {
+		s.superBuckets[superID] = append(s.superBuckets[superID], blob.ID)
+	}
 
 	return nil
 }
@@ -60,6 +73,12 @@ func (s *MemoryStore) PutBatch(ctx context.Context, blobs []*Blob) error {
 	for _, blob := range blobs {
 		s.blobs[blob.ID] = blob
 		s.buckets[blob.LSHBucket] = append(s.buckets[blob.LSHBucket], blob.ID)
+
+		// Add to super-bucket index
+		superID := extractSuperBucketID(blob.LSHBucket)
+		if superID >= 0 {
+			s.superBuckets[superID] = append(s.superBuckets[superID], blob.ID)
+		}
 	}
 
 	return nil
@@ -159,6 +178,21 @@ func (s *MemoryStore) Delete(ctx context.Context, id string) error {
 		delete(s.buckets, bucket)
 	}
 
+	// Remove from super-bucket index
+	superID := extractSuperBucketID(bucket)
+	if superID >= 0 {
+		superIDs := s.superBuckets[superID]
+		for i, bid := range superIDs {
+			if bid == id {
+				s.superBuckets[superID] = append(superIDs[:i], superIDs[i+1:]...)
+				break
+			}
+		}
+		if len(s.superBuckets[superID]) == 0 {
+			delete(s.superBuckets, superID)
+		}
+	}
+
 	// Remove blob
 	delete(s.blobs, id)
 
@@ -247,6 +281,50 @@ func (s *MemoryStore) Clear() {
 
 	s.blobs = make(map[string]*Blob)
 	s.buckets = make(map[string][]string)
+	s.superBuckets = make(map[int][]string)
+}
+
+// GetSuperBuckets retrieves all blobs from the specified super-bucket IDs.
+func (s *MemoryStore) GetSuperBuckets(ctx context.Context, superBucketIDs []int) ([]*Blob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var allBlobs []*Blob
+	seen := make(map[string]bool)
+
+	for _, superID := range superBucketIDs {
+		ids := s.superBuckets[superID]
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				if blob, ok := s.blobs[id]; ok {
+					allBlobs = append(allBlobs, blob)
+				}
+			}
+		}
+	}
+
+	return allBlobs, nil
+}
+
+// extractSuperBucketID extracts the super-bucket ID from a bucket key.
+// Bucket keys can be:
+//   - "XX" (super-bucket only, new format)
+//   - "XX_YY" (super + sub-bucket, legacy format)
+//
+// Returns -1 if the format is invalid.
+func extractSuperBucketID(bucketKey string) int {
+	// Handle both "XX" and "XX_YY" formats
+	key := bucketKey
+	if idx := strings.Index(bucketKey, "_"); idx > 0 {
+		key = bucketKey[:idx]
+	}
+
+	var superID int
+	if _, err := fmt.Sscanf(key, "%d", &superID); err != nil {
+		return -1
+	}
+	return superID
 }
 
 // Ensure MemoryStore implements Store interface.

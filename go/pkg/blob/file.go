@@ -389,5 +389,36 @@ func (s *FileStore) Close() error {
 	return nil
 }
 
+// GetSuperBuckets retrieves all blobs from the specified super-bucket IDs.
+func (s *FileStore) GetSuperBuckets(ctx context.Context, superBucketIDs []int) ([]*Blob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var allBlobs []*Blob
+	seen := make(map[string]bool)
+
+	for _, superID := range superBucketIDs {
+		// Find all buckets that belong to this super-bucket
+		// Bucket keys are either "XX" (super only) or "XX_YY" (super + sub)
+		superPrefix := fmt.Sprintf("%02d", superID)
+		for bucket, ids := range s.buckets {
+			// Check if bucket belongs to this super-bucket
+			if bucket == superPrefix || strings.HasPrefix(bucket, superPrefix+"_") {
+				for _, id := range ids {
+					if !seen[id] {
+						seen[id] = true
+						blob, err := s.Get(ctx, id)
+						if err == nil && blob != nil {
+							allBlobs = append(allBlobs, blob)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return allBlobs, nil
+}
+
 // Ensure FileStore implements Store interface.
 var _ Store = (*FileStore)(nil)

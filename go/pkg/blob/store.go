@@ -35,6 +35,11 @@ type Store interface {
 	// GetBuckets retrieves blobs from multiple buckets.
 	GetBuckets(ctx context.Context, buckets []string) ([]*Blob, error)
 
+	// GetSuperBuckets retrieves all blobs from the specified super-bucket IDs.
+	// Super-bucket keys are formatted as "XX" (2-digit zero-padded).
+	// This is the primary method for fetching vectors after removing sub-buckets.
+	GetSuperBuckets(ctx context.Context, superBucketIDs []int) ([]*Blob, error)
+
 	// Delete removes a blob by ID. No error if blob doesn't exist.
 	Delete(ctx context.Context, id string) error
 
@@ -61,6 +66,7 @@ type ReadOnlyStore interface {
 	GetBatch(ctx context.Context, ids []string) ([]*Blob, error)
 	GetBucket(ctx context.Context, bucket string) ([]*Blob, error)
 	GetBuckets(ctx context.Context, buckets []string) ([]*Blob, error)
+	GetSuperBuckets(ctx context.Context, superBucketIDs []int) ([]*Blob, error)
 	ListBuckets(ctx context.Context) ([]string, error)
 	Stats(ctx context.Context) (*StoreStats, error)
 }

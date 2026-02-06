@@ -15,15 +15,18 @@ import (
 	"github.com/opaque/opaque/go/pkg/crypto"
 	"github.com/opaque/opaque/go/pkg/encrypt"
 	"github.com/opaque/opaque/go/pkg/hierarchical"
-	"github.com/opaque/opaque/go/pkg/lsh"
 	"github.com/tuneinsight/lattigo/v5/core/rlwe"
 )
 
-// EnterpriseHierarchicalClient performs hierarchical private search
+// EnterpriseHierarchicalClient performs privacy-preserving vector search
 // using enterprise-specific credentials received from the auth service.
 //
+// Architecture (no sub-buckets - simplified for better accuracy):
+//   - Level 1: HE scoring on centroids (k-means clusters)
+//   - Level 2: Fetch ALL vectors from selected super-buckets + decoys
+//   - Level 3: Local AES decrypt + scoring
+//
 // Key security properties:
-//   - Uses enterprise-specific LSH hyperplanes (not public seeds)
 //   - Uses enterprise-specific AES key for decryption
 //   - HE scoring on centroids (server never sees query or selection)
 //   - Decoy buckets hide real bucket access patterns
@@ -33,7 +36,6 @@ type EnterpriseHierarchicalClient struct {
 
 	// Derived from credentials
 	encryptor *encrypt.AESGCM
-	lshHasher *lsh.EnterpriseHasher
 	heEngine  *crypto.Engine
 
 	// Storage backend
@@ -45,7 +47,6 @@ type EnterpriseHierarchicalClient struct {
 // NewEnterpriseHierarchicalClient creates a client from authenticated credentials.
 // The credentials contain:
 //   - AES key for vector decryption
-//   - LSH hyperplanes for bucket computation
 //   - Centroids for HE scoring
 func NewEnterpriseHierarchicalClient(
 	cfg hierarchical.Config,
@@ -65,9 +66,6 @@ func NewEnterpriseHierarchicalClient(
 		return nil, fmt.Errorf("failed to create encryptor: %w", err)
 	}
 
-	// Create LSH hasher from distributed hyperplanes
-	lshHasher := lsh.NewEnterpriseHasher(credentials.LSHHyperplanes)
-
 	// Create HE engine for query encryption
 	heEngine, err := crypto.NewClientEngine()
 	if err != nil {
@@ -86,7 +84,6 @@ func NewEnterpriseHierarchicalClient(
 		config:      cfg,
 		credentials: credentials,
 		encryptor:   encryptor,
-		lshHasher:   lshHasher,
 		heEngine:    heEngine,
 		store:       store,
 	}, nil
@@ -182,37 +179,28 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	result.Stats.SuperBucketsSelected = len(topSupers)
 
 	// ==========================================
-	// LEVEL 2: Decoy-Based Sub-Bucket Fetch
+	// LEVEL 2: Decoy-Based Bucket Fetch
 	// Server can't distinguish real from decoy buckets
+	// No sub-buckets - fetch ALL vectors from selected super-buckets
 	// ==========================================
 
 	startSelection := time.Now()
 
-	// Use enterprise LSH hasher for sub-bucket computation
-	primarySubID := c.lshHasher.HashToIndex(normalizedQuery, c.config.NumSubBuckets)
+	// Generate decoy super-buckets from non-selected super-buckets
+	decoySupers := c.generateDecoySupers(topSupers, c.config.NumDecoys)
 
-	// Build list of real sub-buckets to fetch
-	realBuckets := make([]string, 0)
-	for _, superID := range topSupers {
-		subBuckets := c.getNeighborSubBuckets(superID, primarySubID, c.config.SubBucketsPerSuper-1)
-		realBuckets = append(realBuckets, subBuckets...)
-	}
+	// Combine real + decoy super-buckets and shuffle
+	allSupers := append(append([]int{}, topSupers...), decoySupers...)
+	shuffleInts(allSupers)
 
-	// Generate decoy buckets from OTHER super-buckets
-	decoyBuckets := c.generateDecoyBuckets(topSupers, c.config.NumDecoys)
-
-	// Combine and shuffle - server can't tell which are real
-	allBuckets := append(realBuckets, decoyBuckets...)
-	shuffleStrings(allBuckets)
-
-	result.Stats.RealSubBuckets = len(realBuckets)
-	result.Stats.DecoySubBuckets = len(decoyBuckets)
-	result.Stats.TotalSubBuckets = len(allBuckets)
+	result.Stats.RealSubBuckets = len(topSupers)
+	result.Stats.DecoySubBuckets = len(decoySupers)
+	result.Stats.TotalSubBuckets = len(allSupers)
 	result.Timing.BucketSelection = time.Since(startSelection)
 
-	// Fetch all sub-buckets (server can't tell which are real)
+	// Fetch ALL vectors from selected super-buckets (server can't tell which are real)
 	startFetch := time.Now()
-	blobs, err := c.store.GetBuckets(ctx, allBuckets)
+	blobs, err := c.store.GetSuperBuckets(ctx, allSupers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch buckets: %w", err)
 	}
@@ -280,8 +268,8 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	return result, nil
 }
 
-// generateDecoyBuckets generates decoy bucket keys from non-selected super-buckets.
-func (c *EnterpriseHierarchicalClient) generateDecoyBuckets(selectedSupers []int, numDecoys int) []string {
+// generateDecoySupers generates decoy super-bucket IDs from non-selected super-buckets.
+func (c *EnterpriseHierarchicalClient) generateDecoySupers(selectedSupers []int, numDecoys int) []int {
 	if numDecoys <= 0 {
 		return nil
 	}
@@ -304,43 +292,28 @@ func (c *EnterpriseHierarchicalClient) generateDecoyBuckets(selectedSupers []int
 		return nil
 	}
 
-	// Generate random decoy buckets
-	decoys := make([]string, 0, numDecoys)
-	for i := 0; i < numDecoys; i++ {
+	// Generate random decoy super-buckets
+	decoys := make([]int, 0, numDecoys)
+	for i := 0; i < numDecoys && i < len(nonSelected); i++ {
 		// Pick random non-selected super-bucket
-		superIdx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(nonSelected))))
-		superID := nonSelected[superIdx.Int64()]
+		idx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(nonSelected))))
+		superID := nonSelected[idx.Int64()]
 
-		// Pick random sub-bucket
-		subIdx, _ := rand.Int(rand.Reader, big.NewInt(int64(c.config.NumSubBuckets)))
-		subID := int(subIdx.Int64())
-
-		decoys = append(decoys, fmt.Sprintf("%02d_%02d", superID, subID))
+		// Remove from pool to avoid duplicates
+		nonSelected = append(nonSelected[:idx.Int64()], nonSelected[idx.Int64()+1:]...)
+		decoys = append(decoys, superID)
 	}
 
 	return decoys
 }
 
-// getNeighborSubBuckets returns sub-bucket keys for a super-bucket.
-func (c *EnterpriseHierarchicalClient) getNeighborSubBuckets(superID, primarySubID, numNeighbors int) []string {
-	keys := make([]string, 0, numNeighbors+1)
-
-	// Always include primary
-	keys = append(keys, fmt.Sprintf("%02d_%02d", superID, primarySubID))
-
-	// Add neighbors
-	for i := 0; i < numNeighbors && i < c.config.NumSubBuckets; i++ {
-		neighborID := (primarySubID + i + 1) % c.config.NumSubBuckets
-		key := fmt.Sprintf("%02d_%02d", superID, neighborID)
-		if key != keys[0] {
-			keys = append(keys, key)
-		}
-		if len(keys) >= numNeighbors+1 {
-			break
-		}
+// shuffleInts shuffles a slice of ints in place using crypto/rand.
+func shuffleInts(s []int) {
+	for i := len(s) - 1; i > 0; i-- {
+		jBig, _ := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		j := int(jBig.Int64())
+		s[i], s[j] = s[j], s[i]
 	}
-
-	return keys
 }
 
 // GetCredentials returns the current credentials.
@@ -363,7 +336,6 @@ func (c *EnterpriseHierarchicalClient) UpdateCredentials(creds *auth.ClientCrede
 
 	c.credentials = creds
 	c.encryptor = encryptor
-	c.lshHasher = lsh.NewEnterpriseHasher(creds.LSHHyperplanes)
 
 	return nil
 }

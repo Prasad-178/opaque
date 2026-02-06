@@ -144,8 +144,8 @@ type SubBucket struct {
 type VectorLocation struct {
 	ID        string
 	SuperID   int
-	SubID     int
-	BucketKey string
+	SubID     int    // Deprecated: Sub-buckets have been removed. Always 0.
+	BucketKey string // Format: "XX" (super-bucket only)
 }
 
 // SearchResult contains the final search results with timing breakdown.
