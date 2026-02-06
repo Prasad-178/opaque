@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -153,7 +154,12 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	useCached := cachedPlaintexts != nil && len(cachedPlaintexts) == len(centroids) && cachedPlaintexts[0] != nil
 
 	var wg sync.WaitGroup
-	numWorkers := 4
+	// Use number of CPU cores for parallel HE operations
+	// HE ops are CPU-intensive, so more workers = better utilization
+	numWorkers := runtime.NumCPU()
+	if numWorkers > len(centroids) {
+		numWorkers = len(centroids)
+	}
 	workChan := make(chan int, len(centroids))
 
 	for w := 0; w < numWorkers; w++ {
@@ -188,6 +194,7 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 
 	// Step 1c: Decrypt scores privately (only client sees this!)
 	// CKKS returns actual dot products directly - no bias correction needed!
+	// Note: Decryption is sequential because Lattigo encoder is not thread-safe
 	startDecrypt := time.Now()
 	scores := make([]float64, len(encScores))
 
