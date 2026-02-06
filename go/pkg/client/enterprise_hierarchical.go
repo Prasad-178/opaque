@@ -164,33 +164,16 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	result.Stats.HEOperations = len(centroids)
 
 	// Step 1c: Decrypt scores privately (only client sees this!)
+	// CKKS returns actual dot products directly - no bias correction needed!
 	startDecrypt := time.Now()
 	scores := make([]float64, len(encScores))
-
-	// Compute query sum for bias correction (constant across all centroids)
-	querySum := 0.0
-	for _, q := range normalizedQuery {
-		querySum += q
-	}
-	n := float64(len(normalizedQuery))
 
 	for i, encScore := range encScores {
 		score, err := c.heEngine.DecryptScalar(encScore)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt score %d: %w", i, err)
 		}
-
-		// Apply bias correction for the offset-based encoding
-		// HE result = true_dot + sum(q) + sum(v) + n
-		// We need to subtract: sum(v) + querySum + n
-		// where sum(v) is the sum of the centroid values
-		centroidSum := 0.0
-		for _, cv := range centroids[i] {
-			centroidSum += cv
-		}
-		biasCorrection := centroidSum + querySum + n
-
-		scores[i] = score - biasCorrection
+		scores[i] = score
 	}
 	result.Timing.HEDecryptScores = time.Since(startDecrypt)
 

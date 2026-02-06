@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/opaque/opaque/go/pkg/blob"
+	"github.com/opaque/opaque/go/pkg/cluster"
 	"github.com/opaque/opaque/go/pkg/encrypt"
 	"github.com/opaque/opaque/go/pkg/lsh"
 )
@@ -19,9 +20,12 @@ type Index struct {
 	SuperBuckets []*SuperBucket
 	Centroids    [][]float64 // Precomputed for efficient HE ops
 
-	// LSH indices
+	// LSH indices (used when ClusteringMode is LSH)
 	LSHSuper *lsh.Index
 	LSHSub   *lsh.Index
+
+	// K-means clustering (used when ClusteringMode is KMeans)
+	KMeans *cluster.KMeans
 
 	// Storage
 	Store     blob.Store
