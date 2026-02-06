@@ -1,0 +1,78 @@
+can use buckets - first compare buckets (one vector compared using FHE dot product to see what the score is - that way we can approximate what that bucket stores? if close then consider. else don't)
+let's say 100k vectors
+- 100 buckets - each contains 1000 vectors (which are all similar to each other somewhat).
+- query comes in -> compares itself to one vector in each bucket (this is 1000 queries/dot-products overall) - I believe this part also must be very private
+- picks top ~5-10 buckets maybe
+then we can do encrypted computation on 10k vectors? this way the server knows only an EXTREMELY approximated region -> hence the server knows basically nothing!
+
+---
+
+UPDATE: This idea has been incorporated into "Tier 2.5: Hierarchical FHE" in the roadmap.
+See ROADMAP.md for the full tiered architecture plan. 
+
+---
+
+UPDATE: New plan: Tier 3: Client-Server Architecture
+
+1. Server creates vector from the query
+2. Server uses a KMS (key management service) or authenticated request in a TEE (that is accessible through a server) to encrypt the query with HE. Note that if this is not needed and HE encryption can be safely done by the client, then that is also fine!
+3. Use a real embedding database (like sift1m). Encrypt it using AES so that the vectors are encrypted and cannot be seen by the server or the database
+4. Use clustering to find centroids/reference points of each bucket/cluster. If possible, encrypt these as well for maximum security. Otherwise also it's fine - they're only cluster centroids anyways, so even if they're plaintext and visible that is fine by me. 
+5. Use HE to find 'n' highest-scoring clusters. Need to fine-tune 'n' vs 'vectors per cluster' for highest speed+accuracy. As far as I understand privacy is maintained either way since scores and vectors are encrypted. BUT since the centroids are plaintext, try not to have too many clusters and very few vectors per cluster, else privacy is compromised and backend/DB/attacker can understand which clusters have what type of information using encoders. Also, having too many clusters/centroids will increase the time taken for HE operations on all centroids.
+6. Since HE(v) . centroid = HE(score), the scores are encrypted so that is fine. The scores are returned to the client.
+7. Rank the scores on client-side. Identify which are the most relevant buckets. 
+8. Go fetch the encrypted buckets from the server (with decoys to hide access pattern)
+9. Client receives encrypted vectors from the selected buckets
+10. Client decrypts vectors using AES key (only client has the key)
+11. Client computes local dot products: query · decrypted_vector
+12. Client ranks results and returns top-K
+13. Server never sees: plaintext query, plaintext vectors, scores, or final results
+
+---
+
+SECURITY MODEL:
+- Centroids can be plaintext (they're just cluster centers, revealing approximate regions only)
+- Vectors MUST be AES encrypted (server can't read them)
+- Query is HE encrypted (server can't read it)
+- Scores are HE encrypted (server can't read them)
+- Bucket access is hidden via decoys (server can't tell real from fake)
+
+DECOY MECHANISM:
+- When fetching buckets, client also fetches random "decoy" buckets
+- All bucket requests are shuffled together
+- Server sees: [bucket_5, bucket_23, bucket_11, bucket_7, ...]
+- Server cannot tell which buckets client actually cares about
+- Provides k-anonymity for bucket access pattern
+
+DYNAMIC UPDATES (FUTURE):
+- Add vector: Find nearest centroid, assign to bucket, encrypt, store, update centroid incrementally
+- Remove vector: Delete from bucket, update centroid
+- Centroid update formulas:
+  - Add: new_centroid = (old_centroid * count + new_vec) / (count + 1)
+  - Remove: new_centroid = (old_centroid * count - old_vec) / (count - 1)
+- Periodic full recomputation for accuracy (background job)
+
+CLUSTERING OPTIONS:
+- Option A: K-means clustering (best accuracy, slower build)
+  - Centroids ARE the cluster centers by definition
+  - Better semantic grouping
+- Option B: LSH clustering (faster build, lower accuracy)
+  - Random hyperplane-based hashing
+  - Buckets may not align with semantic similarity
+- Recommendation: Start with K-means for super-buckets, LSH for sub-buckets
+
+PERFORMANCE TARGETS (100K vectors, 128-dim):
+- Build time: < 1 minute
+- Query time: < 500ms (with full privacy)
+- Recall@10: > 80%
+- Vectors scanned: < 5% of dataset
+
+DATA FLOW:
+```
+SETUP: Download SIFT1M → Parse .fvecs → K-means cluster → AES encrypt → Store blobs + centroids
+
+QUERY: Query → HE(query) → Server: HE(query)·centroids → HE(scores) → Client: Decrypt →
+       Select buckets → Fetch (real + decoys) → AES decrypt → Local scoring → Top-K results
+
+UPDATE: New vector → Find nearest centroid → Assign bucket → Encrypt → Store → Update centroid
+```
