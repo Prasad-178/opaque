@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -38,7 +37,7 @@ type EnterpriseHierarchicalClient struct {
 
 	// Derived from credentials
 	encryptor *encrypt.AESGCM
-	heEngine  *crypto.Engine
+	hePool    *crypto.EnginePool // Pool of HE engines for parallel ops
 
 	// Centroid cache for faster HE operations
 	// Pre-encodes centroids as HE plaintexts
@@ -72,10 +71,11 @@ func NewEnterpriseHierarchicalClient(
 		return nil, fmt.Errorf("failed to create encryptor: %w", err)
 	}
 
-	// Create HE engine for query encryption
-	heEngine, err := crypto.NewClientEngine()
+	// Create HE engine pool for parallel operations
+	// Use 4 engines as a good balance between parallelism and memory
+	hePool, err := crypto.NewEnginePool(4)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HE engine: %w", err)
+		return nil, fmt.Errorf("failed to create HE engine pool: %w", err)
 	}
 
 	// Override config from credentials if not set
@@ -87,10 +87,10 @@ func NewEnterpriseHierarchicalClient(
 	}
 
 	// Create centroid cache and pre-load centroids
-	centroidCache := cache.NewCentroidCache(heEngine.GetParams(), heEngine.GetEncoder())
+	centroidCache := cache.NewCentroidCache(hePool.GetParams(), hePool.GetEncoder())
 	if len(credentials.Centroids) > 0 {
 		// Pre-encode all centroids (expensive but done once)
-		if err := centroidCache.LoadCentroids(credentials.Centroids, heEngine.GetParams().MaxLevel()); err != nil {
+		if err := centroidCache.LoadCentroids(credentials.Centroids, hePool.GetParams().MaxLevel()); err != nil {
 			return nil, fmt.Errorf("failed to load centroids into cache: %w", err)
 		}
 	}
@@ -99,7 +99,7 @@ func NewEnterpriseHierarchicalClient(
 		config:        cfg,
 		credentials:   credentials,
 		encryptor:     encryptor,
-		heEngine:      heEngine,
+		hePool:        hePool,
 		centroidCache: centroidCache,
 		store:         store,
 	}, nil
@@ -135,15 +135,14 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 
 	// Step 1a: Encrypt query with HE
 	startEncrypt := time.Now()
-	encQuery, err := c.heEngine.EncryptVector(normalizedQuery)
+	encQuery, err := c.hePool.EncryptVector(normalizedQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt query: %w", err)
 	}
 	result.Timing.HEEncryptQuery = time.Since(startEncrypt)
 
-	// Step 1b: Compute HE scores for ALL centroids (parallel)
-	// Uses cached pre-encoded plaintexts for faster computation
-	// In a real client-server setup, this would be done on the server
+	// Step 1b: Compute HE scores for ALL centroids (parallel using engine pool)
+	// Each engine in the pool has its own evaluator, enabling true parallelism
 	startHE := time.Now()
 	centroids := c.credentials.Centroids
 	encScores := make([]*rlwe.Ciphertext, len(centroids))
@@ -154,9 +153,8 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	useCached := cachedPlaintexts != nil && len(cachedPlaintexts) == len(centroids) && cachedPlaintexts[0] != nil
 
 	var wg sync.WaitGroup
-	// Use number of CPU cores for parallel HE operations
-	// HE ops are CPU-intensive, so more workers = better utilization
-	numWorkers := runtime.NumCPU()
+	// Use pool size as the number of workers (each has its own engine)
+	numWorkers := c.hePool.Size()
 	if numWorkers > len(centroids) {
 		numWorkers = len(centroids)
 	}
@@ -166,13 +164,17 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Acquire an engine from the pool for this worker
+			engine := c.hePool.Acquire()
+			defer c.hePool.Release(engine)
+
 			for i := range workChan {
 				if useCached {
 					// Use cached pre-encoded plaintext (faster)
-					encScores[i], scoreErrs[i] = c.heEngine.HomomorphicDotProductCached(encQuery, cachedPlaintexts[i])
+					encScores[i], scoreErrs[i] = engine.HomomorphicDotProductCached(encQuery, cachedPlaintexts[i])
 				} else {
 					// Fallback to encoding on-the-fly
-					encScores[i], scoreErrs[i] = c.heEngine.HomomorphicDotProduct(encQuery, centroids[i])
+					encScores[i], scoreErrs[i] = engine.HomomorphicDotProduct(encQuery, centroids[i])
 				}
 			}
 		}()
@@ -194,16 +196,38 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 
 	// Step 1c: Decrypt scores privately (only client sees this!)
 	// CKKS returns actual dot products directly - no bias correction needed!
-	// Note: Decryption is sequential because Lattigo encoder is not thread-safe
+	// With engine pool, we can also parallelize decryption
 	startDecrypt := time.Now()
 	scores := make([]float64, len(encScores))
+	decryptErrs := make([]error, len(encScores))
 
-	for i, encScore := range encScores {
-		score, err := c.heEngine.DecryptScalar(encScore)
+	// Parallel decryption using pool
+	decryptChan := make(chan int, len(encScores))
+	var decryptWg sync.WaitGroup
+
+	for w := 0; w < numWorkers; w++ {
+		decryptWg.Add(1)
+		go func() {
+			defer decryptWg.Done()
+			engine := c.hePool.Acquire()
+			defer c.hePool.Release(engine)
+
+			for i := range decryptChan {
+				scores[i], decryptErrs[i] = engine.DecryptScalar(encScores[i])
+			}
+		}()
+	}
+
+	for i := range encScores {
+		decryptChan <- i
+	}
+	close(decryptChan)
+	decryptWg.Wait()
+
+	for i, err := range decryptErrs {
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt score %d: %w", i, err)
 		}
-		scores[i] = score
 	}
 	result.Timing.HEDecryptScores = time.Since(startDecrypt)
 
@@ -375,7 +399,7 @@ func (c *EnterpriseHierarchicalClient) UpdateCredentials(creds *auth.ClientCrede
 	// Reload centroid cache if centroids changed
 	if c.centroidCache != nil && len(creds.Centroids) > 0 {
 		if c.centroidCache.NeedsRefresh(creds.Centroids) {
-			if err := c.centroidCache.LoadCentroids(creds.Centroids, c.heEngine.GetParams().MaxLevel()); err != nil {
+			if err := c.centroidCache.LoadCentroids(creds.Centroids, c.hePool.GetParams().MaxLevel()); err != nil {
 				return fmt.Errorf("failed to reload centroid cache: %w", err)
 			}
 		}
