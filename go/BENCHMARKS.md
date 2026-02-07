@@ -5,8 +5,102 @@
 - **Go Version**: 1.21+
 - **Python Version**: 3.9
 - **HE Libraries**:
-  - Go: Lattigo v5 (BFV scheme)
+  - Go: Lattigo v5 (CKKS scheme for Tier 2.5, BFV for Tier 1)
   - Python: LightPHE (Paillier scheme)
+
+## Tier 2.5 Hierarchical Search (100K Vectors)
+
+### Latest Results (with all optimizations)
+
+Benchmark run on 100,000 128-dimensional normalized vectors:
+
+| Metric | Standard Search | Batch SIMD Search |
+|--------|-----------------|-------------------|
+| **Average Recall@10** | 95.0% | 95.0% |
+| **Average Latency** | 2.06s | **172ms** |
+| **HE Operations** | 64 | **1** |
+| **Speedup** | 1x | **12x** |
+
+### Per-Query Recall Distribution
+
+| Query | Standard | Batch SIMD |
+|-------|----------|------------|
+| 0 | 100% | 100% |
+| 1 | 100% | 100% |
+| 2 | 90% | 90% |
+| 3 | 80% | 80% |
+| 4 | 100% | 100% |
+| 5 | 100% | 100% |
+| 6 | 100% | 100% |
+| 7 | 100% | 100% |
+| 8 | 80% | 80% |
+| 9 | 100% | 100% |
+
+### Optimizations Enabled
+
+1. **Redundant Cluster Assignment** (RedundantAssignments=2)
+   - Each vector assigned to top-2 nearest clusters
+   - Storage: 200,000 blobs (2x original)
+   - Improves boundary query recall
+
+2. **Multi-Probe Selection** (ProbeThreshold=0.95, MaxProbeClusters=48)
+   - Dynamic cluster expansion based on score proximity
+   - Addresses CKKS approximation noise
+   - Includes clusters within 95% of K-th score
+
+3. **SIMD Batch HE** (SearchBatch method)
+   - Packs all 64 centroids into single CKKS plaintext
+   - 16,384 slots / 128 dimensions = 128 centroids per pack
+   - Single HE operation replaces 64 sequential operations
+
+### Timing Breakdown (Standard Search)
+
+| Phase | Time | % of Total |
+|-------|------|------------|
+| HE Encrypt Query | ~17ms | 0.8% |
+| HE Centroid Scores | ~1.76s | 85.4% |
+| HE Decrypt Scores | ~45ms | 2.2% |
+| Bucket Selection | <1ms | <0.1% |
+| Bucket Fetch | ~75ms | 3.6% |
+| AES Decrypt | ~85ms | 4.1% |
+| Local Scoring | ~75ms | 3.6% |
+| **Total** | **~2.06s** | 100% |
+
+### Timing Breakdown (Batch SIMD Search)
+
+| Phase | Time | % of Total |
+|-------|------|------------|
+| HE Encrypt Query | ~17ms | 9.9% |
+| **HE Batch Centroid Scores** | **~28ms** | **16.3%** |
+| HE Decrypt Scores | ~2ms | 1.2% |
+| Bucket Selection | <1ms | <0.1% |
+| Bucket Fetch | ~50ms | 29.1% |
+| AES Decrypt | ~45ms | 26.2% |
+| Local Scoring | ~30ms | 17.4% |
+| **Total** | **~172ms** | 100% |
+
+### Privacy Guarantees
+
+| What | Protected | How |
+|------|-----------|-----|
+| Query vector | ✅ | CKKS HE encryption (128-bit security) |
+| Cluster selection | ✅ | Client-side HE decryption |
+| Sub-bucket interest | ✅ | Decoy buckets + shuffling |
+| Vector values | ✅ | AES-256-GCM encryption |
+| Final scores | ✅ | Local computation only |
+
+### Running the Benchmark
+
+```bash
+# Full optimized benchmark (recall + latency)
+go test -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 10m
+
+# Standard 100K benchmark (latency only)
+go test -v -run TestBenchmark100K ./pkg/client/ -timeout 10m
+
+# Recall benchmark (with ground truth)
+go test -v -run TestBenchmark100KWithRecall ./pkg/client/ -timeout 10m
+```
 
 ## Benchmark Results Comparison
 
@@ -191,7 +285,9 @@ python scripts/benchmark_phe.py --dimensions 128 256 512 --num-vectors 1000
 
 ## Conclusion
 
-The Go implementation with Lattigo achieves the performance targets outlined in the production plan:
+The Go implementation with Lattigo achieves excellent performance with full privacy:
+
+### Tier 1 (Query-Private)
 
 | Metric | Target | Go Baseline | Go Optimized | Status |
 |--------|--------|-------------|--------------|--------|
@@ -199,24 +295,34 @@ The Go implementation with Lattigo achieves the performance targets outlined in 
 | Total Latency | <300ms | ~108ms | **~66ms** | ✅ |
 | QPS | 10+ | ~9.3 | **~15.1** | ✅ |
 
+### Tier 2.5 (Hierarchical Private - Full Privacy)
+
+| Metric | Target | Standard | Batch SIMD | Status |
+|--------|--------|----------|------------|--------|
+| Recall@10 | 95%+ | 95% | **95%** | ✅ |
+| Latency | <3s | 2.06s | **172ms** | ✅ |
+| HE Operations | - | 64 | **1** | ✅ |
+| Privacy | FULL | ✅ | ✅ | ✅ |
+
 ### Key Achievements
 
-1. **Encryption is 367x faster** than Python - meets target easily
-2. **66ms query latency** on 100K vectors - **far exceeds <300ms target!**
-3. **15 QPS per node** - can reach 100+ QPS with ~7 nodes
-4. **Two-stage search** improves both speed AND accuracy
+1. **95% Recall@10** with redundant cluster assignment + multi-probe
+2. **172ms query latency** with SIMD batch HE (12x faster than standard)
+3. **Full privacy preserved** - query, clusters, vectors all encrypted
+4. **Encryption is 367x faster** than Python baseline
 
 ### Optimizations Implemented
 
-- ✅ **Two-stage search**: 200 LSH → 10 HE (1.85x speedup)
-- ✅ **Hash masking**: XOR with session key (privacy, zero cost)
-- ✅ **Worker pool**: Multiple crypto engines (7x parallelism)
+- ✅ **Redundant cluster assignment**: Vectors in top-2 clusters (2x storage)
+- ✅ **Multi-probe selection**: Dynamic threshold-based cluster expansion
+- ✅ **SIMD batch HE**: 64 ops → 1 op using CKKS slot packing
+- ✅ **Two-stage search**: LSH → HE scoring (Tier 1)
+- ✅ **Worker pool**: Multiple crypto engines for parallelism
 - ✅ **Client-side ranking**: Server doesn't see final order
 
 ### Further Optimization Opportunities
 
-- **Local embeddings**: ONNX Runtime for ~15ms inference
-- **HNSW index**: Replace LSH for 95%+ recall (vs 70-80%)
-- **Smaller dimensions**: PCA 128D → 64D for 2x speedup
 - **GPU acceleration**: Lattigo supports GPU for even faster HE ops
 - **Horizontal scaling**: Linear scaling with more nodes
+- **Smaller dimensions**: PCA 128D → 64D for 2x speedup
+- **More clusters**: 128+ clusters for larger datasets

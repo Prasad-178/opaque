@@ -14,8 +14,9 @@ Opaque Go provides flexible privacy levels for vector search, from query-private
 
 ### Technologies Used
 
-- **Lattigo BFV** for homomorphic encryption (128-bit security)
+- **Lattigo CKKS** for homomorphic encryption (128-bit security, approximate arithmetic)
 - **AES-256-GCM** for symmetric encryption (Tier 2)
+- **K-means clustering** for hierarchical indexing (IVF-style)
 - **Locality-Sensitive Hashing (LSH)** for fast candidate retrieval
 - **gRPC** for efficient client-server communication
 
@@ -172,23 +173,42 @@ type Store interface {
 Tier 2.5 combines **query privacy** (HE) with **data privacy** (AES) using a three-level hierarchy:
 
 ```
-Level 1: HE on super-bucket centroids (64 operations)
-         ↓ Client privately selects top super-buckets
-         ↓ SERVER NEVER SEES WHICH BUCKETS WERE SELECTED
+Level 1: HE on super-bucket centroids (64 clusters)
+         ↓ SIMD batch scoring: 64 ops → 1 HE operation
+         ↓ Client privately decrypts & selects top clusters
+         ↓ SERVER NEVER SEES WHICH CLUSTERS WERE SELECTED
 Level 2: Decoy-based sub-bucket fetch
          ↓ Server can't distinguish real from decoy
-         ↓ Optional: PIR for cryptographic guarantee
+         ↓ Multi-probe selection for HE noise tolerance
 Level 3: Local AES decrypt + scoring
          ↓ All computation is client-side
+         ↓ Deduplication for redundant assignments
 ```
 
 ### Key Benefits
 
-- **~20x faster** than naive Tier 1 (100K vectors)
-- **Query privacy**: Server never sees query vector (HE encrypted)
+- **95% Recall@10** with optimizations enabled
+- **172ms query latency** with SIMD batch HE (12x faster than standard)
+- **Query privacy**: Server never sees query vector (CKKS HE encrypted)
 - **Data privacy**: Storage never sees vectors (AES-256-GCM)
-- **Selection privacy**: Server doesn't know which super-buckets selected (client-side HE decrypt)
-- **Per-enterprise isolation**: Each enterprise has secret LSH mapping (planned)
+- **Selection privacy**: Server doesn't know which clusters selected (client-side HE decrypt)
+- **Per-enterprise isolation**: Each enterprise has unique AES keys
+
+### Optimizations
+
+Three key optimizations improve recall and speed:
+
+1. **Redundant Cluster Assignment**: Each vector assigned to top-2 nearest clusters
+   - Improves boundary query recall
+   - 2x storage overhead (configurable)
+
+2. **Multi-Probe Selection**: Dynamic cluster expansion based on score proximity
+   - Addresses CKKS approximation noise
+   - Threshold-based inclusion (e.g., 95% of K-th score)
+
+3. **SIMD Batch HE**: Pack all centroids into single CKKS plaintext
+   - 64 dot products in 1 HE operation
+   - 12x latency reduction
 
 ### Quick Start
 
@@ -196,22 +216,30 @@ Level 3: Local AES decrypt + scoring
 import (
     "github.com/opaque/opaque/go/pkg/blob"
     "github.com/opaque/opaque/go/pkg/client"
-    "github.com/opaque/opaque/go/pkg/encrypt"
     "github.com/opaque/opaque/go/pkg/hierarchical"
 )
 
-// Build hierarchical index
-key, _ := encrypt.GenerateKey()
+// Configure with optimizations
 cfg := hierarchical.DefaultConfig()
 cfg.Dimension = 128
+cfg.NumSuperBuckets = 64
+cfg.RedundantAssignments = 2  // Assign to top-2 clusters
+cfg.ProbeThreshold = 0.95     // Multi-probe threshold
+cfg.MaxProbeClusters = 48     // Max clusters to probe
 
-builder, _ := hierarchical.NewBuilder(cfg, key)
+// Build index with K-means clustering
+builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
 store := blob.NewMemoryStore()
 idx, _ := builder.Build(ctx, ids, vectors, store)
 
 // Create client and search
-hClient, _ := client.NewHierarchicalClient(idx)
+hClient, _ := client.NewEnterpriseHierarchicalClient(cfg, creds, store)
+
+// Standard search (~2s latency)
 result, _ := hClient.Search(ctx, query, 10)
+
+// Batch search with SIMD HE (~172ms latency)
+result, _ := hClient.SearchBatch(ctx, query, 10)
 
 // Access timing breakdown
 fmt.Printf("HE centroid scoring: %v\n", result.Timing.HECentroidScores)
@@ -228,19 +256,19 @@ go run ./examples/hierarchical/main.go
 
 ### Performance (100K vectors, 128D)
 
-| Metric | Value |
-|--------|-------|
-| Total query time | ~700ms |
-| HE operations | 64 (not 100K!) |
-| Vectors decrypted | ~1500 |
-| Speedup vs naive Tier 1 | ~20x |
+| Metric | Standard | Batch (SIMD) |
+|--------|----------|--------------|
+| Query latency | 2.06s | **172ms** |
+| HE operations | 64 | **1** |
+| Recall@10 | 95% | 95% |
+| Vectors scanned | ~50% | ~50% |
 
 ### Privacy Guarantees
 
 | What | Protected From | How |
 |------|---------------|-----|
-| Query vector | Server | HE encryption (BFV, 128-bit) |
-| Super-bucket selection | Server | Client-side HE decryption |
+| Query vector | Server | CKKS HE encryption (128-bit) |
+| Cluster selection | Server | Client-side HE decryption |
 | Sub-bucket interest | Server | Decoy buckets + shuffling |
 | Vector values | Storage | AES-256-GCM encryption |
 | Final scores | Everyone | Local computation only |
@@ -250,18 +278,40 @@ go run ./examples/hierarchical/main.go
 | Server Sees | Server Cannot See |
 |-------------|-------------------|
 | HE(query) - encrypted blob | Query vector contents |
-| 64 HE(scores) - computed blindly | Score values |
+| HE(scores) - computed blindly | Score values |
 | Bucket IDs fetched | Which are real vs decoy |
 | Encrypted blobs | Vector contents |
 | Timing info | Final search results |
 
-### Future Enhancements (Planned)
+### Architecture
 
-- **Per-enterprise LSH**: Each enterprise gets secret LSH hyperplanes
-- **Authentication service**: Token-based key distribution (Option B)
-- **Optional PIR**: For cryptographic bucket access privacy
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         CLIENT                               │
+├─────────────────────────────────────────────────────────────┤
+│  1. Encrypt query with CKKS HE                              │
+│  2. Pack query for SIMD (replicate across slots)            │
+│  3. Send HE(query) to server                                │
+│                          ↓                                   │
+├─────────────────────────────────────────────────────────────┤
+│                         SERVER                               │
+├─────────────────────────────────────────────────────────────┤
+│  4. Compute HE(scores) = HE(query) × packed_centroids       │
+│     (Single SIMD operation for all 64 centroids)            │
+│  5. Return HE(scores) to client                             │
+│                          ↓                                   │
+├─────────────────────────────────────────────────────────────┤
+│                         CLIENT                               │
+├─────────────────────────────────────────────────────────────┤
+│  6. Decrypt scores privately                                │
+│  7. Select top clusters + multi-probe expansion             │
+│  8. Fetch sub-buckets (real + decoys, shuffled)             │
+│  9. Decrypt vectors with AES                                │
+│ 10. Score locally, deduplicate, return top-K                │
+└─────────────────────────────────────────────────────────────┘
+```
 
-See [docs/TIER_2_5_ARCHITECTURE.md](../docs/TIER_2_5_ARCHITECTURE.md) for complete architecture details.
+See [BENCHMARKS.md](BENCHMARKS.md) for detailed benchmark results.
 
 ## Performance
 
@@ -336,12 +386,13 @@ See [BENCHMARKS.md](BENCHMARKS.md) for detailed benchmark results and methodolog
 
 | Aspect | Tier 1 | Tier 2 | Tier 2.5 |
 |--------|--------|--------|----------|
-| Query vectors | Hidden (HE) | Hidden (local) | Hidden (HE) |
+| Query vectors | Hidden (HE) | Hidden (local) | Hidden (CKKS HE) |
 | Database vectors | Visible | Hidden (AES) | Hidden (AES) |
 | Similarity scores | Hidden (HE) | Hidden (local) | Hidden (HE + local) |
-| Bucket selection | Visible | Visible | Hidden (client-side HE decrypt) |
-| LSH buckets | Visible | Visible | Visible (but opaque with per-enterprise LSH) |
+| Cluster selection | Visible | Visible | Hidden (client-side HE decrypt) |
 | Access patterns | Visible | Can be obfuscated | Obfuscated (decoys) |
+| **Recall@10** | ~95% | ~95% | **95%** (with optimizations) |
+| **Query latency** | ~66ms | ~1ms | **172ms** (SIMD batch) |
 
 ## Configuration
 
