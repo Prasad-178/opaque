@@ -210,6 +210,7 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	// Step 1d: Select top super-buckets (SERVER NEVER SEES THIS!)
 	topSupers := selectTopKIndices(scores, c.config.TopSuperBuckets)
 	result.Stats.SuperBucketsSelected = len(topSupers)
+	result.Stats.SelectedClusters = topSupers // Track for diagnostics
 
 	// ==========================================
 	// LEVEL 2: Decoy-Based Bucket Fetch

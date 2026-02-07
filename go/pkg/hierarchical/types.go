@@ -188,7 +188,7 @@ type SearchTiming struct {
 // SearchStats provides statistics about the search.
 type SearchStats struct {
 	// Level 1
-	HEOperations        int // Should be NumSuperBuckets (64)
+	HEOperations         int // Should be NumSuperBuckets (64)
 	SuperBucketsSelected int
 
 	// Level 2
@@ -199,6 +199,37 @@ type SearchStats struct {
 
 	// Level 3
 	VectorsScored int
+
+	// Cluster selection diagnostics (for accuracy analysis)
+	// These help identify WHERE recall is lost:
+	// - If ClusterCoverage >> Recall: problem is in local scoring
+	// - If ClusterCoverage ≈ Recall: problem is in cluster selection
+	SelectedClusters []int // Which clusters were selected (for analysis)
+}
+
+// ClusterDiagnostics provides detailed cluster selection analysis.
+// Used to diagnose whether recall issues are from cluster selection
+// or from post-selection vector ranking.
+type ClusterDiagnostics struct {
+	// Ground truth analysis
+	GTVectorCluster int // Which cluster contains the #1 GT vector
+	GTClusterRank   int // Rank of GT cluster in HE scoring (1=best, 0=not scored)
+
+	// Coverage analysis
+	GTTop10Clusters   []int   // Clusters containing GT top-10 vectors
+	GTInSelected      int     // How many GT top-10 are in selected clusters
+	ClusterCoverage   float64 // GTInSelected / 10 (theoretical max recall)
+	GTClusterSelected bool    // Was the #1 GT vector's cluster selected?
+
+	// HE vs Plaintext comparison
+	PlaintextTopK    []int   // Clusters that plaintext scoring would select
+	HETopK           []int   // Clusters that HE scoring actually selected
+	SelectionMatch   int     // How many clusters match between HE and plaintext
+	SelectionDivergence int  // How many clusters differ
+
+	// Per-cluster scores (for debugging)
+	ClusterScoresHE       []float64 // HE-decrypted scores for each cluster
+	ClusterScoresPlain    []float64 // Plaintext scores for each cluster
 }
 
 // IndexStats provides statistics about the index.
