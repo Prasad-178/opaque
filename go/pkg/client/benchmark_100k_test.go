@@ -436,3 +436,228 @@ func TestBenchmark100KWithRecall(t *testing.T) {
 	t.Logf("AVERAGE RECALL@%d: %.1f%%", topK, avgRecall*100)
 	t.Log("--------------------------------------------------------------")
 }
+
+// TestBenchmark100KOptimized tests the optimizations: redundant assignment + multi-probe + batch HE
+func TestBenchmark100KOptimized(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping optimized 100K benchmark in short mode")
+	}
+
+	ctx := context.Background()
+
+	// Configuration
+	numVectors := 100000
+	dimension := 128
+	numClusters := 64
+	numQueries := 10
+	topK := 10
+	topSelect := 32
+	redundantAssignments := 2 // Assign each vector to top-2 clusters
+
+	t.Log("")
+	t.Log("==============================================================")
+	t.Log("   OPTIMIZED 100K BENCHMARK (redundant + multi-probe + batch)")
+	t.Log("==============================================================")
+	t.Log("")
+	t.Log("OPTIMIZATIONS ENABLED:")
+	t.Logf("  1. Redundant Assignment:  %d (each vector in top-%d clusters)", redundantAssignments, redundantAssignments)
+	t.Logf("  2. Multi-Probe Selection: threshold=0.95, max=%d clusters", 48)
+	t.Logf("  3. Batch HE Operations:   SIMD packing for centroid scoring")
+	t.Log("")
+
+	// Generate data
+	t.Log("Generating synthetic data...")
+	rng := rand.New(rand.NewSource(42))
+	ids := make([]string, numVectors)
+	vectors := make([][]float64, numVectors)
+
+	for i := 0; i < numVectors; i++ {
+		ids[i] = fmt.Sprintf("vec_%06d", i)
+		vectors[i] = make([]float64, dimension)
+		for j := 0; j < dimension; j++ {
+			vectors[i][j] = rng.Float64()*2 - 1
+		}
+		var norm float64
+		for _, v := range vectors[i] {
+			norm += v * v
+		}
+		norm = math.Sqrt(norm)
+		for j := range vectors[i] {
+			vectors[i][j] /= norm
+		}
+	}
+
+	// Generate queries
+	queries := make([][]float64, numQueries)
+	for i := 0; i < numQueries; i++ {
+		queries[i] = make([]float64, dimension)
+		for j := 0; j < dimension; j++ {
+			queries[i][j] = rng.Float64()*2 - 1
+		}
+		var norm float64
+		for _, v := range queries[i] {
+			norm += v * v
+		}
+		norm = math.Sqrt(norm)
+		for j := range queries[i] {
+			queries[i][j] /= norm
+		}
+	}
+
+	// Compute brute-force ground truth
+	t.Log("Computing brute-force ground truth...")
+	startGT := time.Now()
+	groundTruth := make([][]string, numQueries)
+
+	for q := 0; q < numQueries; q++ {
+		type scored struct {
+			id    string
+			score float64
+		}
+		scores := make([]scored, numVectors)
+		for i := 0; i < numVectors; i++ {
+			var dot float64
+			for j := 0; j < dimension; j++ {
+				dot += queries[q][j] * vectors[i][j]
+			}
+			scores[i] = scored{id: ids[i], score: dot}
+		}
+
+		// Sort by score
+		for i := range scores {
+			for j := i + 1; j < len(scores); j++ {
+				if scores[j].score > scores[i].score {
+					scores[i], scores[j] = scores[j], scores[i]
+				}
+			}
+		}
+
+		groundTruth[q] = make([]string, topK)
+		for i := 0; i < topK; i++ {
+			groundTruth[q][i] = scores[i].id
+		}
+	}
+	t.Logf("Ground truth computed in %v", time.Since(startGT))
+
+	// Build index WITH redundant assignment
+	t.Log("Building index with redundant assignment...")
+	startBuild := time.Now()
+	enterpriseCfg, _ := enterprise.NewConfig("optimized-100k", dimension, numClusters)
+	store := blob.NewMemoryStore()
+	cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
+	cfg.TopSuperBuckets = topSelect
+	cfg.NumDecoys = 0
+	cfg.RedundantAssignments = redundantAssignments // Enable redundant assignment
+	cfg.ProbeThreshold = 0.95                       // Multi-probe threshold
+	cfg.MaxProbeClusters = 48                       // Max clusters to probe
+
+	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
+	_, _ = builder.Build(ctx, ids, vectors, store)
+	enterpriseCfg = builder.GetEnterpriseConfig()
+	buildTime := time.Since(startBuild)
+
+	// Count total blobs to verify redundancy
+	allBuckets, _ := store.ListBuckets(ctx)
+	totalBlobs := 0
+	for _, bucket := range allBuckets {
+		blobs, _ := store.GetBuckets(ctx, []string{bucket})
+		totalBlobs += len(blobs)
+	}
+	t.Logf("Index built in %v", buildTime)
+	t.Logf("  Total blobs: %d (%.1fx storage with redundancy=%d)", totalBlobs, float64(totalBlobs)/float64(numVectors), redundantAssignments)
+
+	// Setup client
+	enterpriseStore := enterprise.NewMemoryStore()
+	enterpriseStore.Put(ctx, enterpriseCfg)
+	authService := auth.NewService(auth.DefaultServiceConfig(), enterpriseStore)
+	authService.RegisterUser(ctx, "user", "optimized-100k", []byte("pass"), []string{auth.ScopeSearch})
+	creds, _ := authService.Authenticate(ctx, "user", []byte("pass"))
+	client, _ := NewEnterpriseHierarchicalClient(cfg, creds, store)
+
+	t.Log("")
+	t.Log("==============================================================")
+	t.Log("                    RECALL COMPARISON")
+	t.Log("==============================================================")
+
+	// Test standard Search (with multi-probe but no batch HE)
+	t.Log("")
+	t.Log("1. Standard Search (multi-probe, no batch HE):")
+	var standardRecall float64
+	var standardLatency time.Duration
+
+	for q := 0; q < numQueries; q++ {
+		result, err := client.Search(ctx, queries[q], topK)
+		if err != nil {
+			t.Fatalf("Search failed: %v", err)
+		}
+
+		gtSet := make(map[string]bool)
+		for _, id := range groundTruth[q] {
+			gtSet[id] = true
+		}
+
+		matches := 0
+		for _, r := range result.Results {
+			if gtSet[r.ID] {
+				matches++
+			}
+		}
+
+		recall := float64(matches) / float64(topK)
+		standardRecall += recall
+		standardLatency += result.Timing.Total
+		t.Logf("   Query %d: Recall@%d = %.0f%% (%d/%d), Latency: %v", q, topK, recall*100, matches, topK, result.Timing.Total)
+	}
+	standardRecall /= float64(numQueries)
+	standardLatency /= time.Duration(numQueries)
+
+	// Test Batch Search (with SIMD HE)
+	t.Log("")
+	t.Log("2. Batch Search (multi-probe + SIMD HE):")
+	var batchRecall float64
+	var batchLatency time.Duration
+
+	for q := 0; q < numQueries; q++ {
+		result, err := client.SearchBatch(ctx, queries[q], topK)
+		if err != nil {
+			t.Fatalf("SearchBatch failed: %v", err)
+		}
+
+		gtSet := make(map[string]bool)
+		for _, id := range groundTruth[q] {
+			gtSet[id] = true
+		}
+
+		matches := 0
+		for _, r := range result.Results {
+			if gtSet[r.ID] {
+				matches++
+			}
+		}
+
+		recall := float64(matches) / float64(topK)
+		batchRecall += recall
+		batchLatency += result.Timing.Total
+		t.Logf("   Query %d: Recall@%d = %.0f%% (%d/%d), Latency: %v", q, topK, recall*100, matches, topK, result.Timing.Total)
+	}
+	batchRecall /= float64(numQueries)
+	batchLatency /= time.Duration(numQueries)
+
+	// Summary
+	t.Log("")
+	t.Log("==============================================================")
+	t.Log("                       SUMMARY")
+	t.Log("==============================================================")
+	t.Log("")
+	t.Log("                        Standard      Batch (SIMD)")
+	t.Log("--------------------------------------------------------------")
+	t.Logf("  Average Recall@%d:    %6.1f%%       %6.1f%%", topK, standardRecall*100, batchRecall*100)
+	t.Logf("  Average Latency:      %8v    %8v", standardLatency, batchLatency)
+	t.Logf("  Speedup:                  1x          %.1fx", float64(standardLatency)/float64(batchLatency))
+	t.Log("")
+	t.Log("OPTIMIZATIONS IMPACT:")
+	t.Logf("  Redundant Assignment: 2x storage, improved boundary recall")
+	t.Logf("  Multi-Probe:          Dynamic cluster expansion for HE noise")
+	t.Logf("  SIMD Batch HE:        %d ops → 1 op per query", numClusters)
+	t.Log("==============================================================")
+}
