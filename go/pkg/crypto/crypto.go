@@ -311,6 +311,86 @@ func (e *Engine) GetParams() hefloat.Parameters {
 	return e.params
 }
 
+// HomomorphicBatchDotProduct computes multiple dot products in a single HE operation.
+// The query should be packed (replicated across slot segments) to match packed centroids.
+// Returns encrypted result where each dimension-sized segment contains one dot product.
+//
+// Layout after operation:
+//   - slots[0..dim-1]: components of dot(q, c0)
+//   - slots[dim..2*dim-1]: components of dot(q, c1)
+//   - etc.
+//
+// After partial sum within each segment:
+//   - slots[0]: dot(q, c0)
+//   - slots[dim]: dot(q, c1)
+//   - etc.
+func (e *Engine) HomomorphicBatchDotProduct(encPackedQuery *rlwe.Ciphertext, packedCentroids *rlwe.Plaintext, numCentroids, dimension int) (*rlwe.Ciphertext, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if packedCentroids == nil {
+		return nil, errors.New("packed centroids is nil")
+	}
+
+	// Multiply: E(packed_q) * packed_centroids
+	result, err := e.evaluator.MulNew(encPackedQuery, packedCentroids)
+	if err != nil {
+		return nil, fmt.Errorf("failed to multiply: %w", err)
+	}
+
+	// Rescale after multiplication
+	if err := e.evaluator.Rescale(result, result); err != nil {
+		return nil, fmt.Errorf("failed to rescale: %w", err)
+	}
+
+	// Partial sum within each centroid's dimension slots
+	// We only rotate/add within each dimension-sized segment
+	// After this, slot[0] has dot(q,c0), slot[dim] has dot(q,c1), etc.
+	for stride := 1; stride < dimension; stride *= 2 {
+		rotated, err := e.evaluator.RotateNew(result, stride)
+		if err != nil {
+			return nil, fmt.Errorf("failed to rotate by %d: %w", stride, err)
+		}
+		if err := e.evaluator.Add(result, rotated, result); err != nil {
+			return nil, fmt.Errorf("failed to add: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
+// DecryptBatchScalars decrypts and extracts multiple dot product results from a batch operation.
+// Results are at positions [0, dim, 2*dim, ...] in the decrypted slots.
+func (e *Engine) DecryptBatchScalars(ct *rlwe.Ciphertext, numCentroids, dimension int) ([]float64, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.decryptor == nil {
+		return nil, errors.New("decryptor not available (server-side engine?)")
+	}
+
+	// Decrypt
+	pt := e.decryptor.DecryptNew(ct)
+
+	// Decode all slots
+	maxSlots := e.params.MaxSlots()
+	decoded := make([]float64, maxSlots)
+	if err := e.encoder.Decode(pt, decoded); err != nil {
+		return nil, fmt.Errorf("failed to decode: %w", err)
+	}
+
+	// Extract values at positions [0, dim, 2*dim, ...]
+	results := make([]float64, numCentroids)
+	for i := 0; i < numCentroids; i++ {
+		pos := i * dimension
+		if pos < len(decoded) {
+			results[i] = decoded[pos]
+		}
+	}
+
+	return results, nil
+}
+
 // NormalizeVector normalizes a vector to unit length
 func NormalizeVector(vector []float64) []float64 {
 	var norm float64

@@ -115,3 +115,17 @@ func (p *EnginePool) DecryptScalar(ct *rlwe.Ciphertext) (float64, error) {
 	defer p.Release(engine)
 	return engine.DecryptScalar(ct)
 }
+
+// HomomorphicBatchDotProduct computes multiple dot products using SIMD.
+func (p *EnginePool) HomomorphicBatchDotProduct(encPackedQuery *rlwe.Ciphertext, packedCentroids *rlwe.Plaintext, numCentroids, dimension int) (*rlwe.Ciphertext, error) {
+	engine := p.Acquire()
+	defer p.Release(engine)
+	return engine.HomomorphicBatchDotProduct(encPackedQuery, packedCentroids, numCentroids, dimension)
+}
+
+// DecryptBatchScalars decrypts and extracts multiple dot product results.
+func (p *EnginePool) DecryptBatchScalars(ct *rlwe.Ciphertext, numCentroids, dimension int) ([]float64, error) {
+	engine := p.Acquire()
+	defer p.Release(engine)
+	return engine.DecryptBatchScalars(ct, numCentroids, dimension)
+}
