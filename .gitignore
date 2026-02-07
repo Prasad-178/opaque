@@ -52,3 +52,11 @@ htmlcov/
 # Planning docs (local only)
 GO_PRODUCTION_PLAN.md
 PRD.md
+ROADMAP.md
+PRIVACY_MODEL_QA.md
+IMPLEMENTATION_PLAN.md
+notes.txt
+docs/
+
+# Keep only README.md public, ignore other markdown docs
+go/BENCHMARKS.md
