@@ -24,7 +24,7 @@ func TestBenchmark100K(t *testing.T) {
 	numClusters := 64 // More clusters for larger dataset
 	numQueries := 20
 	topK := 10
-	topSelect := 16
+	topSelect := 32 // 32 gives ~88% recall while maintaining <2.2s latency
 
 	t.Log("")
 	t.Log("==============================================================")
@@ -300,7 +300,7 @@ func TestBenchmark100KWithRecall(t *testing.T) {
 	numClusters := 64
 	numQueries := 10
 	topK := 10
-	topSelect := 16
+	topSelect := 32 // 32 gives ~88% recall
 
 	t.Log("")
 	t.Log("==============================================================")
