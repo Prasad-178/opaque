@@ -114,30 +114,61 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 	}
 
 	// Phase 2: Assign vectors to super-buckets and encrypt
-	// No sub-bucket division - all vectors in a cluster go to same bucket
-	blobs := make([]*blob.Blob, len(ids))
+	// Support redundant assignment for improved recall on boundary queries
+	numAssignments := b.config.RedundantAssignments
+	if numAssignments <= 0 {
+		numAssignments = 1
+	}
+
+	// Pre-allocate blobs slice (may grow if using redundant assignments)
+	blobs := make([]*blob.Blob, 0, len(ids)*numAssignments)
+
 	for i, id := range ids {
 		vec := vectors[i]
+		normalizedVec := normalizedVecs[i]
 
-		// Bucket assignment from k-means clustering
-		superID := b.kmeans.Labels[i]
-		bucketKey := formatSuperBucketKey(superID)
-
-		// Update bucket stats
-		b.superBuckets[superID].VectorCount++
-		b.vectorLocs[id] = &VectorLocation{
-			ID:        id,
-			SuperID:   superID,
-			BucketKey: bucketKey,
+		// Get top-N cluster assignments for this vector
+		var assignments []int
+		if numAssignments == 1 {
+			// Fast path: single assignment from k-means labels
+			assignments = []int{b.kmeans.Labels[i]}
+		} else {
+			// Redundant assignment: find top-N nearest clusters
+			assignments = b.kmeans.PredictTopK(normalizedVec, numAssignments)
 		}
 
-		// Encrypt with enterprise AES key
-		ciphertext, err := b.encryptor.EncryptVectorWithID(vec, id)
-		if err != nil {
-			return nil, fmt.Errorf("failed to encrypt vector %s: %w", id, err)
-		}
+		for assignIdx, superID := range assignments {
+			bucketKey := formatSuperBucketKey(superID)
 
-		blobs[i] = blob.NewBlob(id, bucketKey, ciphertext, b.config.Dimension)
+			// Update bucket stats (only count for primary assignment)
+			if assignIdx == 0 {
+				b.superBuckets[superID].VectorCount++
+			}
+
+			// Create unique blob ID for redundant assignments
+			blobID := id
+			if assignIdx > 0 {
+				blobID = fmt.Sprintf("%s_dup%d", id, assignIdx)
+			}
+
+			// Track vector location (only for primary assignment)
+			if assignIdx == 0 {
+				b.vectorLocs[id] = &VectorLocation{
+					ID:        id,
+					SuperID:   superID,
+					BucketKey: bucketKey,
+				}
+			}
+
+			// Encrypt with enterprise AES key
+			// Note: We encrypt with original ID so decryption works with original ID
+			ciphertext, err := b.encryptor.EncryptVectorWithID(vec, id)
+			if err != nil {
+				return nil, fmt.Errorf("failed to encrypt vector %s: %w", id, err)
+			}
+
+			blobs = append(blobs, blob.NewBlob(blobID, bucketKey, ciphertext, b.config.Dimension))
+		}
 	}
 
 	// Extract centroids for enterprise config

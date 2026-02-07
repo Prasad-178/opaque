@@ -73,6 +73,14 @@ type Config struct {
 	// Default: 48 (allows up to 16 additional clusters beyond TopSuperBuckets)
 	MaxProbeClusters int
 
+	// RedundantAssignments controls soft cluster assignment for improved recall.
+	// Each vector is assigned to the N nearest clusters during indexing.
+	// This improves recall for boundary queries at the cost of increased storage.
+	// Set to 1 for single assignment (default), 2 for redundant assignment.
+	// Storage impact: ~N times the original index size.
+	// Default: 1 (single assignment, no redundancy)
+	RedundantAssignments int
+
 	// LSH seeds for super and sub bucket assignment
 	LSHSuperSeed int64
 	LSHSubSeed   int64
@@ -88,11 +96,12 @@ func DefaultConfig() Config {
 		NumSubBuckets:      1,   // No sub-buckets = ~1562 vectors per bucket for 100K
 		TopSuperBuckets:    32,  // Select top 32 after HE (gives ~90%+ recall)
 		SubBucketsPerSuper: 1,   // Just the primary bucket
-		NumDecoys:          8,   // 8 decoy buckets for privacy
-		ProbeThreshold:     0.95, // Include clusters within 5% of Kth score
-		MaxProbeClusters:   48,  // Allow up to 48 clusters with multi-probe
-		LSHSuperSeed:       42,
-		LSHSubSeed:         137, // Different seed (unused with NumSubBuckets=1)
+		NumDecoys:            8,   // 8 decoy buckets for privacy
+		ProbeThreshold:       0.95, // Include clusters within 5% of Kth score
+		MaxProbeClusters:     48,  // Allow up to 48 clusters with multi-probe
+		RedundantAssignments: 1,   // Single assignment (no redundancy)
+		LSHSuperSeed:         42,
+		LSHSubSeed:           137, // Different seed (unused with NumSubBuckets=1)
 	}
 }
 
@@ -105,11 +114,12 @@ func HighPrivacyConfig() Config {
 		NumSubBuckets:      1,   // No sub-buckets
 		TopSuperBuckets:    16,  // Select top 16 after HE (~80% recall)
 		SubBucketsPerSuper: 1,   // Just the primary bucket
-		NumDecoys:          12,  // More decoys
-		ProbeThreshold:     0.98, // Stricter threshold for privacy
-		MaxProbeClusters:   24,  // Limit probe clusters for privacy
-		LSHSuperSeed:       42,
-		LSHSubSeed:         137,
+		NumDecoys:            12,  // More decoys
+		ProbeThreshold:       0.98, // Stricter threshold for privacy
+		MaxProbeClusters:     24,  // Limit probe clusters for privacy
+		RedundantAssignments: 1,   // Single assignment (no redundancy for privacy)
+		LSHSuperSeed:         42,
+		LSHSubSeed:           137,
 	}
 }
 
@@ -122,11 +132,12 @@ func HighRecallConfig() Config {
 		NumSubBuckets:      1,   // No sub-buckets
 		TopSuperBuckets:    48,  // Select 48/64 = 75% of clusters (~96% recall)
 		SubBucketsPerSuper: 1,   // Just the primary bucket
-		NumDecoys:          8,   // 8 decoy buckets
-		ProbeThreshold:     0.90, // More aggressive probing
-		MaxProbeClusters:   56,  // Allow up to 56 clusters (87.5% coverage)
-		LSHSuperSeed:       42,
-		LSHSubSeed:         137,
+		NumDecoys:            8,   // 8 decoy buckets
+		ProbeThreshold:       0.90, // More aggressive probing
+		MaxProbeClusters:     56,  // Allow up to 56 clusters (87.5% coverage)
+		RedundantAssignments: 2,   // Assign to 2 clusters for better recall
+		LSHSuperSeed:         42,
+		LSHSubSeed:           137,
 	}
 }
 

@@ -188,32 +188,48 @@ func (c *HierarchicalClient) Search(ctx context.Context, query []float64, topK i
 	// Decrypt all vectors
 	startAES := time.Now()
 	type decryptedVec struct {
-		id     string
-		vector []float64
+		id       string // Original ID (without _dupN suffix)
+		blobID   string // Blob ID (may have _dupN suffix)
+		vector   []float64
 	}
 	decrypted := make([]decryptedVec, 0, len(blobs))
 
 	for _, blob := range blobs {
-		vec, err := c.index.Encryptor.DecryptVectorWithID(blob.Ciphertext, blob.ID)
+		// Extract original ID for decryption (handles redundant assignment)
+		origID := extractOriginalID(blob.ID)
+		vec, err := c.index.Encryptor.DecryptVectorWithID(blob.Ciphertext, origID)
 		if err != nil {
 			continue // Skip failed decryptions (likely decoy or corrupted)
 		}
-		decrypted = append(decrypted, decryptedVec{id: blob.ID, vector: vec})
+		decrypted = append(decrypted, decryptedVec{id: origID, blobID: blob.ID, vector: vec})
 	}
 	result.Timing.AESDecrypt = time.Since(startAES)
 
-	// Score locally
+	// Score locally with deduplication for redundant assignment
+	// Keep only the highest score for each unique original ID
 	startScore := time.Now()
+
+	// Map to track best score per original ID
+	scoreMap := make(map[string]float64)
+
+	for _, d := range decrypted {
+		normalizedVec := normalizeVectorCopy(d.vector)
+		score := dotProductVec(normalizedQuery, normalizedVec)
+
+		// Keep highest score for each original ID
+		if existing, ok := scoreMap[d.id]; !ok || score > existing {
+			scoreMap[d.id] = score
+		}
+	}
+
+	// Convert map to sorted slice
 	type scored struct {
 		id    string
 		score float64
 	}
-	scoredResults := make([]scored, len(decrypted))
-
-	for i, d := range decrypted {
-		normalizedVec := normalizeVectorCopy(d.vector)
-		score := dotProductVec(normalizedQuery, normalizedVec)
-		scoredResults[i] = scored{id: d.id, score: score}
+	scoredResults := make([]scored, 0, len(scoreMap))
+	for id, score := range scoreMap {
+		scoredResults = append(scoredResults, scored{id: id, score: score})
 	}
 
 	// Sort by score descending
@@ -222,7 +238,7 @@ func (c *HierarchicalClient) Search(ctx context.Context, query []float64, topK i
 	})
 
 	result.Timing.LocalScoring = time.Since(startScore)
-	result.Stats.VectorsScored = len(scoredResults)
+	result.Stats.VectorsScored = len(scoreMap) // Unique vectors scored
 
 	// Return top-K
 	n := min(topK, len(scoredResults))
@@ -426,3 +442,5 @@ func dotProductVec(a, b []float64) float64 {
 	}
 	return sum
 }
+
+// extractOriginalID is defined in enterprise_hierarchical.go
