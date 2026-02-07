@@ -232,7 +232,14 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	result.Timing.HEDecryptScores = time.Since(startDecrypt)
 
 	// Step 1d: Select top super-buckets (SERVER NEVER SEES THIS!)
-	topSupers := selectTopKIndices(scores, c.config.TopSuperBuckets)
+	// Use multi-probe selection to capture clusters within threshold of top-K
+	// This addresses HE precision noise that can cause near-miss exclusions
+	topSupers := selectClustersWithProbing(
+		scores,
+		c.config.TopSuperBuckets,
+		c.config.ProbeThreshold,
+		c.config.MaxProbeClusters,
+	)
 	result.Stats.SuperBucketsSelected = len(topSupers)
 	result.Stats.SelectedClusters = topSupers // Track for diagnostics
 

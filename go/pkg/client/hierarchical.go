@@ -134,7 +134,13 @@ func (c *HierarchicalClient) Search(ctx context.Context, query []float64, topK i
 	result.Timing.HEDecryptScores = time.Since(startDecrypt)
 
 	// Step 1d: Select top super-buckets (SERVER NEVER SEES THIS!)
-	topSupers := selectTopKIndices(scores, c.index.Config.TopSuperBuckets)
+	// Use multi-probe selection to capture clusters within threshold of top-K
+	topSupers := selectClustersWithProbing(
+		scores,
+		c.index.Config.TopSuperBuckets,
+		c.index.Config.ProbeThreshold,
+		c.index.Config.MaxProbeClusters,
+	)
 	result.Stats.SuperBucketsSelected = len(topSupers)
 
 	// ==========================================
@@ -293,6 +299,91 @@ func selectTopKIndices(scores []float64, k int) []int {
 	result := make([]int, n)
 	for i := 0; i < n; i++ {
 		result[i] = indexed[i].index
+	}
+
+	return result
+}
+
+// selectClustersWithProbing returns cluster indices using multi-probe strategy.
+// This improves recall by including clusters that scored close to the top-K threshold,
+// addressing HE precision noise that can cause near-miss exclusions.
+//
+// Parameters:
+//   - scores: HE-decrypted scores for each cluster
+//   - minK: minimum clusters to always include (top minK by score)
+//   - threshold: score ratio threshold for additional clusters (e.g., 0.95)
+//   - maxK: maximum total clusters to return (hard cap)
+//
+// Returns indices of selected clusters (always includes top minK, plus additional
+// clusters within threshold of the minK-th score, up to maxK total).
+//
+// Edge cases:
+//   - threshold <= 0 or >= 1.0: falls back to strict top-K (no probing)
+//   - maxK <= minK: returns exactly minK clusters
+func selectClustersWithProbing(scores []float64, minK int, threshold float64, maxK int) []int {
+	if len(scores) == 0 {
+		return nil
+	}
+
+	// Handle edge cases - fall back to strict top-K
+	if threshold <= 0 || threshold >= 1.0 {
+		return selectTopKIndices(scores, minK)
+	}
+	if maxK <= 0 {
+		maxK = minK
+	}
+
+	type indexedScore struct {
+		index int
+		score float64
+	}
+
+	indexed := make([]indexedScore, len(scores))
+	for i, s := range scores {
+		indexed[i] = indexedScore{index: i, score: s}
+	}
+
+	// Sort by score descending
+	sort.Slice(indexed, func(i, j int) bool {
+		return indexed[i].score > indexed[j].score
+	})
+
+	// Always include top minK
+	n := min(minK, len(indexed))
+	result := make([]int, 0, maxK)
+	for i := 0; i < n; i++ {
+		result = append(result, indexed[i].index)
+	}
+
+	if n >= len(indexed) || n >= maxK {
+		return result
+	}
+
+	// Calculate threshold score = score of rank minK * threshold
+	// Note: indexed[n-1] is the minK-th element (0-indexed)
+	kthScore := indexed[n-1].score
+
+	// Handle negative scores properly
+	// For positive scores: threshold 0.95 means include if >= 0.95 * kthScore
+	// For negative scores: we need to be careful - if kthScore is -0.5,
+	// threshold 0.95 gives -0.475, which is HIGHER (better) than -0.5.
+	// We want scores WORSE than kth but close to it, so we need to invert for negatives.
+	var thresholdScore float64
+	if kthScore >= 0 {
+		thresholdScore = kthScore * threshold
+	} else {
+		// For negative: if kth=-0.5, threshold=0.95, we want to include down to -0.5/0.95=-0.526
+		thresholdScore = kthScore / threshold
+	}
+
+	// Add clusters that meet threshold up to maxK
+	for i := n; i < len(indexed) && len(result) < maxK; i++ {
+		if indexed[i].score >= thresholdScore {
+			result = append(result, indexed[i].index)
+		} else {
+			// Scores are sorted descending, no need to check further
+			break
+		}
 	}
 
 	return result

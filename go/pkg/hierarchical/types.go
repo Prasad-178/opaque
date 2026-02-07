@@ -58,6 +58,21 @@ type Config struct {
 	// Default: 8
 	NumDecoys int
 
+	// Multi-probe configuration for improved recall
+	// Instead of hard top-K cutoff, use confidence-based selection
+
+	// ProbeThreshold is the minimum score ratio for additional clusters.
+	// Clusters with score >= (Kth cluster score * ProbeThreshold) are included.
+	// Example: 0.95 means include if >= 95% of the Kth cluster's score.
+	// Set to 1.0 to disable multi-probe (strict top-K only).
+	// Default: 0.95
+	ProbeThreshold float64
+
+	// MaxProbeClusters is the maximum total clusters to probe.
+	// This caps how many clusters can be selected even with multi-probe.
+	// Default: 48 (allows up to 16 additional clusters beyond TopSuperBuckets)
+	MaxProbeClusters int
+
 	// LSH seeds for super and sub bucket assignment
 	LSHSuperSeed int64
 	LSHSubSeed   int64
@@ -74,6 +89,8 @@ func DefaultConfig() Config {
 		TopSuperBuckets:    32,  // Select top 32 after HE (gives ~90%+ recall)
 		SubBucketsPerSuper: 1,   // Just the primary bucket
 		NumDecoys:          8,   // 8 decoy buckets for privacy
+		ProbeThreshold:     0.95, // Include clusters within 5% of Kth score
+		MaxProbeClusters:   48,  // Allow up to 48 clusters with multi-probe
 		LSHSuperSeed:       42,
 		LSHSubSeed:         137, // Different seed (unused with NumSubBuckets=1)
 	}
@@ -89,6 +106,8 @@ func HighPrivacyConfig() Config {
 		TopSuperBuckets:    16,  // Select top 16 after HE (~80% recall)
 		SubBucketsPerSuper: 1,   // Just the primary bucket
 		NumDecoys:          12,  // More decoys
+		ProbeThreshold:     0.98, // Stricter threshold for privacy
+		MaxProbeClusters:   24,  // Limit probe clusters for privacy
 		LSHSuperSeed:       42,
 		LSHSubSeed:         137,
 	}
@@ -104,6 +123,8 @@ func HighRecallConfig() Config {
 		TopSuperBuckets:    48,  // Select 48/64 = 75% of clusters (~96% recall)
 		SubBucketsPerSuper: 1,   // Just the primary bucket
 		NumDecoys:          8,   // 8 decoy buckets
+		ProbeThreshold:     0.90, // More aggressive probing
+		MaxProbeClusters:   56,  // Allow up to 56 clusters (87.5% coverage)
 		LSHSuperSeed:       42,
 		LSHSubSeed:         137,
 	}
