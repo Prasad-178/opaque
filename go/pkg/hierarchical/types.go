@@ -71,7 +71,7 @@ func DefaultConfig() Config {
 		Dimension:          128,
 		NumSuperBuckets:    64,  // 2^6, for HE scoring (64 HE ops)
 		NumSubBuckets:      1,   // No sub-buckets = ~1562 vectors per bucket for 100K
-		TopSuperBuckets:    8,   // Select top 8 after HE
+		TopSuperBuckets:    32,  // Select top 32 after HE (gives ~90%+ recall)
 		SubBucketsPerSuper: 1,   // Just the primary bucket
 		NumDecoys:          8,   // 8 decoy buckets for privacy
 		LSHSuperSeed:       42,
@@ -86,7 +86,7 @@ func HighPrivacyConfig() Config {
 		Dimension:          128,
 		NumSuperBuckets:    32,  // Fewer buckets = ~3125 vectors per bucket for 100K
 		NumSubBuckets:      1,   // No sub-buckets
-		TopSuperBuckets:    6,   // Select top 6 after HE
+		TopSuperBuckets:    16,  // Select top 16 after HE (~80% recall)
 		SubBucketsPerSuper: 1,   // Just the primary bucket
 		NumDecoys:          12,  // More decoys
 		LSHSuperSeed:       42,
@@ -95,14 +95,14 @@ func HighPrivacyConfig() Config {
 }
 
 // HighRecallConfig returns config optimized for better recall.
-// More buckets = better precision but less k-anonymity.
+// Uses more clusters for higher coverage.
 func HighRecallConfig() Config {
 	return Config{
 		Dimension:          128,
 		NumSuperBuckets:    64,  // 64 HE ops
-		NumSubBuckets:      4,   // ~390 vectors per sub-bucket for 100K
-		TopSuperBuckets:    12,  // Select more super-buckets
-		SubBucketsPerSuper: 3,   // Primary + 2 neighbors
+		NumSubBuckets:      1,   // No sub-buckets
+		TopSuperBuckets:    48,  // Select 48/64 = 75% of clusters (~96% recall)
+		SubBucketsPerSuper: 1,   // Just the primary bucket
 		NumDecoys:          8,   // 8 decoy buckets
 		LSHSuperSeed:       42,
 		LSHSubSeed:         137,
