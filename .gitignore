@@ -1,30 +1,3 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-.venv/
-venv/
-ENV/
-
 # Go
 go/bin/
 go/vendor/
@@ -38,25 +11,14 @@ go/vendor/
 # Project specific
 *.lphe
 keys/
-data/
-
-# uv
-.uv/
 
 # Testing
-.pytest_cache/
-.coverage
-htmlcov/
 .benchmarks/
 
-# Planning docs (local only)
+# Planning docs (local only, not part of public repo)
 GO_PRODUCTION_PLAN.md
 PRD.md
-ROADMAP.md
-PRIVACY_MODEL_QA.md
-IMPLEMENTATION_PLAN.md
 notes.txt
-docs/
 
-# Keep only README.md public, ignore other markdown docs
-go/BENCHMARKS.md
+# Ignore articles
+*ARTICLE*.md

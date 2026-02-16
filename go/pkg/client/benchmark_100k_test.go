@@ -276,12 +276,58 @@ func TestBenchmark100K(t *testing.T) {
 	t.Logf("  Cluster Selection:     100%% (selection happens after local HE decrypt)")
 	t.Logf("  Access Pattern:        Hidden (via decoy requests if enabled)")
 	t.Logf("  Vector Privacy:        100%% (vectors AES-encrypted at rest)")
+	// Compute actual recall against brute-force ground truth
 	t.Log("")
-	t.Log("ACCURACY (Recall@10 estimate for synthetic data):")
+	t.Log("ACCURACY (Recall@10 vs brute-force ground truth):")
 	t.Log("--------------------------------------------------------------")
 	t.Logf("  Clusters probed:       %d / %d (%.1f%%)", topSelect, numClusters, float64(topSelect)/float64(numClusters)*100)
-	t.Logf("  Expected Recall@10:    ~%.1f%% (based on cluster coverage)", float64(topSelect)/float64(numClusters)*100*1.5)
-	t.Logf("  Note: Actual recall depends on data distribution")
+
+	var totalRecall float64
+	for i := 0; i < numQueries; i++ {
+		// Compute brute-force ground truth for this query
+		type scored struct {
+			id    string
+			score float64
+		}
+		gtScores := make([]scored, numVectors)
+		for j := 0; j < numVectors; j++ {
+			var dot float64
+			for d := 0; d < dimension; d++ {
+				dot += queries[i][d] * vectors[j][d]
+			}
+			gtScores[j] = scored{id: ids[j], score: dot}
+		}
+		// Sort descending
+		for a := range gtScores {
+			for b := a + 1; b < len(gtScores); b++ {
+				if gtScores[b].score > gtScores[a].score {
+					gtScores[a], gtScores[b] = gtScores[b], gtScores[a]
+				}
+			}
+		}
+		gtSet := make(map[string]bool)
+		for k := 0; k < topK && k < len(gtScores); k++ {
+			gtSet[gtScores[k].id] = true
+		}
+
+		// Run search
+		result, err := client.Search(ctx, queries[i], topK)
+		if err != nil {
+			t.Logf("  Query %d: search failed: %v", i, err)
+			continue
+		}
+
+		matches := 0
+		for _, r := range result.Results {
+			if gtSet[r.ID] {
+				matches++
+			}
+		}
+		recall := float64(matches) / float64(topK)
+		totalRecall += recall
+	}
+	avgRecall := totalRecall / float64(numQueries)
+	t.Logf("  Recall@%d:             %.1f%%", topK, avgRecall*100)
 	t.Log("")
 	t.Log("==============================================================")
 }

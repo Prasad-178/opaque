@@ -1,454 +1,76 @@
 # Opaque Go
 
-Privacy-preserving vector search with multiple tiers of protection, implemented in Go.
+Privacy-preserving vector search implemented in Go.
 
 ## Overview
 
-Opaque Go provides flexible privacy levels for vector search, from query-private to fully data-private:
+The Go implementation contains the full search pipeline:
 
-| Tier | Name | Server Sees | Use Case |
-|------|------|-------------|----------|
-| **Tier 1** | Query-Private | Vectors, encrypted query | Traditional vector DB with query privacy |
-| **Tier 2** | Data-Private | Encrypted blobs, LSH buckets | Blockchain, zero-trust storage |
-| **Tier 2.5** | Hierarchical Private | Encrypted blobs, HE centroids, bucket access | Maximum crypto privacy for query + data |
-
-### Technologies Used
-
-- **Lattigo CKKS** for homomorphic encryption (128-bit security, approximate arithmetic)
-- **AES-256-GCM** for symmetric encryption (Tier 2)
-- **K-means clustering** for hierarchical indexing (IVF-style)
-- **Locality-Sensitive Hashing (LSH)** for fast candidate retrieval
-- **gRPC** for efficient client-server communication
+- **Lattigo v5 CKKS** for homomorphic encryption (128-bit security)
+- **AES-256-GCM** for symmetric vector encryption
+- **K-means clustering** with k-means++ initialization for hierarchical indexing
+- **CKKS slot packing** for batch HE operations (64 centroids in 1 operation)
+- **Per-enterprise isolation** with independent keys and configurations
 
 ## Project Structure
 
 ```
 go/
 ├── cmd/
-│   ├── search-service/  # gRPC server
-│   └── cli/             # CLI testing tool
+│   ├── devserver/         # Development server with test data
+│   ├── search-service/    # Production server entry point
+│   └── cli/               # CLI benchmarking tool
 ├── pkg/
-│   ├── crypto/          # Homomorphic encryption (Lattigo BFV)
-│   ├── lsh/             # Locality-sensitive hashing
-│   ├── client/          # Client SDK (Tier 1 + Tier 2 + Hierarchical)
-│   ├── hierarchical/    # Hierarchical index (Tier 3)
-│   ├── encrypt/         # Symmetric encryption (AES-GCM)
-│   └── blob/            # Encrypted blob storage
+│   ├── crypto/            # CKKS homomorphic encryption (Lattigo v5)
+│   ├── encrypt/           # AES-256-GCM symmetric encryption
+│   ├── lsh/               # Locality-sensitive hashing
+│   ├── cluster/           # K-means clustering
+│   ├── blob/              # Encrypted blob storage (memory + file)
+│   ├── cache/             # Centroid cache + batch CKKS packing
+│   ├── hierarchical/      # Index builder (K-means + encryption)
+│   ├── client/            # Search client (standard + batch)
+│   ├── auth/              # Authentication service
+│   ├── enterprise/        # Per-enterprise config management
+│   ├── server/            # REST API server
+│   └── embeddings/        # Dataset loaders (SIFT, synthetic)
 ├── internal/
-│   ├── service/         # Search service implementation
-│   ├── session/         # Session management
-│   └── store/           # Vector storage (in-memory, Milvus)
-├── api/
-│   └── proto/           # Protocol buffer definitions
-├── examples/
-│   ├── search/          # Tier 1 example
-│   ├── tier2/           # Tier 2 example
-│   ├── hierarchical/    # Tier 3 (Hierarchical) example
-│   └── demo/            # Combined demo
-└── test/                # Integration tests & benchmarks
+│   ├── service/           # Search service (LSH + HE)
+│   ├── session/           # Session management with TTL
+│   └── store/             # Vector storage interface
+├── api/proto/             # gRPC protobuf definitions
+├── examples/              # Usage examples
+├── test/                  # Integration benchmarks
+└── BENCHMARKS.md          # Performance data
 ```
 
-## Quick Start
-
-### Build
+## Running Tests
 
 ```bash
-go build ./...
+# Core packages (fast, ~10s)
+go test ./pkg/encrypt/... ./pkg/crypto/... ./pkg/lsh/... ./pkg/cluster/... ./pkg/blob/... ./pkg/cache/...
+
+# SIFT10K accuracy (real dataset, ~3 min)
+go test -v -run TestSIFTKMeansEndToEnd ./pkg/client/ -timeout 5m
+
+# 100K benchmark with recall (synthetic, ~8 min)
+go test -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 10m
+
+# Core crypto micro-benchmarks
+go test -bench=. -benchmem ./pkg/crypto/... ./pkg/lsh/...
 ```
 
-### Run Tests
+## Development Server
 
 ```bash
-go test ./... -v
+go run ./cmd/devserver/main.go
 ```
 
-### Run Example
-
-```bash
-go run ./examples/search/main.go
-```
-
-### Run CLI
-
-```bash
-go run ./cmd/cli/main.go -bench
-```
-
-### Run Server
-
-```bash
-go run ./cmd/search-service/main.go -demo-vectors=1000
-```
-
-Health endpoints:
-- `http://localhost:8080/healthz` - Health check
-- `http://localhost:8080/readyz` - Readiness check
-
-### Run Tier 2 Example
-
-```bash
-go run ./examples/tier2/main.go
-```
-
-## Tier 2: Data-Private Search
-
-Tier 2 provides **full data privacy** - vectors are encrypted client-side before storage.
-The server/storage never sees plaintext vectors.
-
-### Quick Start
-
-```go
-import (
-    "github.com/opaque/opaque/go/pkg/blob"
-    "github.com/opaque/opaque/go/pkg/client"
-    "github.com/opaque/opaque/go/pkg/encrypt"
-)
-
-// Create encryption key (derive from user password in production)
-key, _ := encrypt.GenerateKey()
-encryptor, _ := encrypt.NewAESGCM(key)
-
-// Create storage backend (memory, file, or custom)
-store := blob.NewMemoryStore()
-
-// Create Tier 2 client
-cfg := client.Tier2Config{
-    Dimension: 128,
-    LSHBits:   8,    // Fewer bits = larger buckets = more privacy
-    LSHSeed:   42,
-}
-tier2Client, _ := client.NewTier2Client(cfg, encryptor, store)
-
-// Insert vectors (encrypted automatically)
-tier2Client.Insert(ctx, "doc-1", vector, nil)
-
-// Search (decrypt + compute happens locally)
-results, _ := tier2Client.Search(ctx, queryVector, 10)
-```
-
-### Privacy Features
-
-```go
-// Enable privacy enhancements
-tier2Client.SetPrivacyConfig(client.DefaultPrivacyConfig())
-
-// Search with timing obfuscation and decoy buckets
-results, _ := tier2Client.SearchWithPrivacy(ctx, query, 10)
-
-// Available configs:
-// - DefaultPrivacyConfig()  - Balanced security/performance
-// - HighPrivacyConfig()     - Maximum privacy (slower)
-// - LowLatencyConfig()      - Optimized for speed
-```
-
-### Storage Backends
-
-```go
-// In-memory (for testing)
-store := blob.NewMemoryStore()
-
-// File-based (persistent)
-store, _ := blob.NewFileStore("/path/to/data")
-
-// Custom (implement blob.Store interface)
-type Store interface {
-    Put(ctx, blob) error
-    Get(ctx, id) (*Blob, error)
-    GetBucket(ctx, bucket) ([]*Blob, error)
-    // ... more methods
-}
-```
-
-### What the Storage Backend Sees
-
-| Visible | Hidden |
-|---------|--------|
-| LSH bucket identifiers | Actual vector values |
-| Encrypted blobs (ciphertext) | Query vectors |
-| Access patterns (which buckets) | Similarity scores |
-| Blob count per bucket | Which results you selected |
-
-## Tier 2.5: Hierarchical Private Search
-
-Tier 2.5 combines **query privacy** (HE) with **data privacy** (AES) using a three-level hierarchy:
-
-```
-Level 1: HE on super-bucket centroids (64 clusters)
-         ↓ SIMD batch scoring: 64 ops → 1 HE operation
-         ↓ Client privately decrypts & selects top clusters
-         ↓ SERVER NEVER SEES WHICH CLUSTERS WERE SELECTED
-Level 2: Decoy-based sub-bucket fetch
-         ↓ Server can't distinguish real from decoy
-         ↓ Multi-probe selection for HE noise tolerance
-Level 3: Local AES decrypt + scoring
-         ↓ All computation is client-side
-         ↓ Deduplication for redundant assignments
-```
-
-### Key Benefits
-
-- **95% Recall@10** with optimizations enabled
-- **172ms query latency** with SIMD batch HE (12x faster than standard)
-- **Query privacy**: Server never sees query vector (CKKS HE encrypted)
-- **Data privacy**: Storage never sees vectors (AES-256-GCM)
-- **Selection privacy**: Server doesn't know which clusters selected (client-side HE decrypt)
-- **Per-enterprise isolation**: Each enterprise has unique AES keys
-
-### Optimizations
-
-Three key optimizations improve recall and speed:
-
-1. **Redundant Cluster Assignment**: Each vector assigned to top-2 nearest clusters
-   - Improves boundary query recall
-   - 2x storage overhead (configurable)
-
-2. **Multi-Probe Selection**: Dynamic cluster expansion based on score proximity
-   - Addresses CKKS approximation noise
-   - Threshold-based inclusion (e.g., 95% of K-th score)
-
-3. **SIMD Batch HE**: Pack all centroids into single CKKS plaintext
-   - 64 dot products in 1 HE operation
-   - 12x latency reduction
-
-### Quick Start
-
-```go
-import (
-    "github.com/opaque/opaque/go/pkg/blob"
-    "github.com/opaque/opaque/go/pkg/client"
-    "github.com/opaque/opaque/go/pkg/hierarchical"
-)
-
-// Configure with optimizations
-cfg := hierarchical.DefaultConfig()
-cfg.Dimension = 128
-cfg.NumSuperBuckets = 64
-cfg.RedundantAssignments = 2  // Assign to top-2 clusters
-cfg.ProbeThreshold = 0.95     // Multi-probe threshold
-cfg.MaxProbeClusters = 48     // Max clusters to probe
-
-// Build index with K-means clustering
-builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-store := blob.NewMemoryStore()
-idx, _ := builder.Build(ctx, ids, vectors, store)
-
-// Create client and search
-hClient, _ := client.NewEnterpriseHierarchicalClient(cfg, creds, store)
-
-// Standard search (~2s latency)
-result, _ := hClient.Search(ctx, query, 10)
-
-// Batch search with SIMD HE (~172ms latency)
-result, _ := hClient.SearchBatch(ctx, query, 10)
-
-// Access timing breakdown
-fmt.Printf("HE centroid scoring: %v\n", result.Timing.HECentroidScores)
-fmt.Printf("Bucket fetch: %v\n", result.Timing.BucketFetch)
-fmt.Printf("Local scoring: %v\n", result.Timing.LocalScoring)
-fmt.Printf("Total: %v\n", result.Timing.Total)
-```
-
-### Run Hierarchical Example
-
-```bash
-go run ./examples/hierarchical/main.go
-```
-
-### Performance (100K vectors, 128D)
-
-| Metric | Standard | Batch (SIMD) |
-|--------|----------|--------------|
-| Query latency | 2.06s | **172ms** |
-| HE operations | 64 | **1** |
-| Recall@10 | 95% | 95% |
-| Vectors scanned | ~50% | ~50% |
-
-### Privacy Guarantees
-
-| What | Protected From | How |
-|------|---------------|-----|
-| Query vector | Server | CKKS HE encryption (128-bit) |
-| Cluster selection | Server | Client-side HE decryption |
-| Sub-bucket interest | Server | Decoy buckets + shuffling |
-| Vector values | Storage | AES-256-GCM encryption |
-| Final scores | Everyone | Local computation only |
-
-### What Server Sees vs Cannot See
-
-| Server Sees | Server Cannot See |
-|-------------|-------------------|
-| HE(query) - encrypted blob | Query vector contents |
-| HE(scores) - computed blindly | Score values |
-| Bucket IDs fetched | Which are real vs decoy |
-| Encrypted blobs | Vector contents |
-| Timing info | Final search results |
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                         CLIENT                               │
-├─────────────────────────────────────────────────────────────┤
-│  1. Encrypt query with CKKS HE                              │
-│  2. Pack query for SIMD (replicate across slots)            │
-│  3. Send HE(query) to server                                │
-│                          ↓                                   │
-├─────────────────────────────────────────────────────────────┤
-│                         SERVER                               │
-├─────────────────────────────────────────────────────────────┤
-│  4. Compute HE(scores) = HE(query) × packed_centroids       │
-│     (Single SIMD operation for all 64 centroids)            │
-│  5. Return HE(scores) to client                             │
-│                          ↓                                   │
-├─────────────────────────────────────────────────────────────┤
-│                         CLIENT                               │
-├─────────────────────────────────────────────────────────────┤
-│  6. Decrypt scores privately                                │
-│  7. Select top clusters + multi-probe expansion             │
-│  8. Fetch sub-buckets (real + decoys, shuffled)             │
-│  9. Decrypt vectors with AES                                │
-│ 10. Score locally, deduplicate, return top-K                │
-└─────────────────────────────────────────────────────────────┘
-```
-
-See [BENCHMARKS.md](BENCHMARKS.md) for detailed benchmark results.
-
-## Performance
-
-### Tier 1: Query-Private (Homomorphic Encryption)
-
-| Operation | Go (Lattigo) | Python (LightPHE) | Speedup |
-|-----------|--------------|-------------------|---------|
-| Encryption | 5.2 ms | 1,912 ms | **367x** |
-| Decryption | 0.8 ms | 140 ms | **175x** |
-| Dot Product | 33 ms | 91 ms | **2.8x** |
-| LSH Hash | 0.006 ms | ~1 ms | **166x** |
-
-**Parallel Execution (Apple M4 Pro, 12 cores)**
-
-| Operation | Sequential | Parallel | Speedup |
-|-----------|------------|----------|---------|
-| 20× Dot Products | 665 ms | 128 ms | **5.2x** |
-| 20× Decryptions | 18 ms | 5.4 ms | **3.3x** |
-
-**End-to-End Latency**
-
-| Scenario | Go Parallel | Python | Improvement |
-|----------|-------------|--------|-------------|
-| Full Search (20 results) | **188 ms** | 6,592 ms | **35x faster** |
-
-### Tier 2: Data-Private (AES-256-GCM)
-
-| Operation | 128-dim | 256-dim |
-|-----------|---------|---------|
-| Insert (per vector) | 0.005 ms | 0.006 ms |
-| Basic search | 0.01 ms | 0.01 ms |
-| Multi-probe search (3 buckets) | 0.01 ms | 0.01 ms |
-| Search with decoys | 0.09 ms | 0.09 ms |
-| Privacy-enhanced search* | ~60 ms | ~60 ms |
-
-*Privacy-enhanced search includes 50ms minimum timing obfuscation.
-
-**Encryption Overhead**
-
-| Dimension | Encrypt | Decrypt | Ciphertext Size |
-|-----------|---------|---------|-----------------|
-| 64 | 4.2 µs | 3.8 µs | 556 bytes |
-| 128 | 5.1 µs | 4.6 µs | 1,068 bytes |
-| 256 | 7.3 µs | 6.5 µs | 2,092 bytes |
-| 1024 | 21.5 µs | 18.2 µs | 8,236 bytes |
-
-See [BENCHMARKS.md](BENCHMARKS.md) for detailed benchmark results and methodology.
-
-## Architecture
-
-### Tier 1: Query-Private Search Flow
-
-1. **Client** computes LSH hash of query vector (locally)
-2. **Server** returns candidate IDs by LSH similarity
-3. **Client** encrypts query vector with homomorphic encryption
-4. **Server** computes encrypted similarity scores
-5. **Client** decrypts scores and returns top-k results
-
-**Privacy**: Server never sees query vectors or similarity scores.
-
-### Tier 2: Data-Private Search Flow
-
-1. **Client** computes LSH hash of query (locally)
-2. **Client** fetches encrypted blobs from matching bucket(s)
-3. **Client** optionally fetches decoy buckets (to hide interest)
-4. **Client** decrypts blobs and computes similarity (locally)
-5. **Client** returns top-k results
-
-**Privacy**: Server/storage never sees plaintext vectors.
-
-### Privacy Comparison
-
-| Aspect | Tier 1 | Tier 2 | Tier 2.5 |
-|--------|--------|--------|----------|
-| Query vectors | Hidden (HE) | Hidden (local) | Hidden (CKKS HE) |
-| Database vectors | Visible | Hidden (AES) | Hidden (AES) |
-| Similarity scores | Hidden (HE) | Hidden (local) | Hidden (HE + local) |
-| Cluster selection | Visible | Visible | Hidden (client-side HE decrypt) |
-| Access patterns | Visible | Can be obfuscated | Obfuscated (decoys) |
-| **Recall@10** | ~95% | ~95% | **95%** (with optimizations) |
-| **Query latency** | ~66ms | ~1ms | **172ms** (SIMD batch) |
-
-## Configuration
-
-### Client Config
-
-```go
-client.Config{
-    Dimension:     128,    // Vector dimension
-    LSHBits:       64,     // LSH hash bits
-    MaxCandidates: 100,    // Max LSH candidates
-    DecryptTopN:   20,     // Scores to decrypt
-}
-```
-
-### Server Config
-
-```go
-service.Config{
-    LSHNumBits:          128,
-    LSHDimension:        128,
-    LSHSeed:             42,
-    MaxSessionTTL:       24 * time.Hour,
-    MaxConcurrentScores: 16,
-}
-```
-
-## Dependencies
-
-- [Lattigo v5](https://github.com/tuneinsight/lattigo) - Homomorphic encryption
-- [gRPC-Go](https://github.com/grpc/grpc-go) - RPC framework
-
-## Roadmap
-
-See [ROADMAP.md](ROADMAP.md) for the full product roadmap.
-
-### Completed
-
-- [x] Tier 1: Query-private search with homomorphic encryption
-- [x] Tier 2: Data-private search with AES-256-GCM
-- [x] Tier 3: Hierarchical private search (HE centroids + AES vectors)
-- [x] Privacy enhancements (timing obfuscation, decoy buckets, shuffling)
-- [x] Combined Tier 1 + Tier 2 + Tier 3 demos
-- [x] File-based persistent storage
-- [x] Comprehensive benchmarks
-
-### In Progress
-
-- [ ] Milvus vector store integration
-- [ ] Full gRPC service implementation
-
-### Future
-
-- [ ] Enclave-private search (AWS Nitro)
-- [ ] IPFS/blockchain storage backends
-- [ ] Observability (metrics, tracing)
-
-## License
-
-MIT
+Starts a REST API server with:
+- In-memory blob storage
+- Auto-generated test enterprise and user
+- Auth endpoints (login, refresh)
+- Blob retrieval endpoints
+
+## Benchmarks
+
+See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance data.
