@@ -11,6 +11,7 @@ go/vendor/
 # Project specific
 *.lphe
 keys/
+data/
 
 # Testing
 .benchmarks/
