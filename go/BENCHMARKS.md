@@ -32,35 +32,28 @@ BenchmarkHash-12           201,565        6,013 ns/op           8 B/op      1 al
 
 ## Search Latency (100K Synthetic Vectors, 64 Clusters)
 
-Measured with `go test -v -run TestBenchmark100K ./pkg/client/ -timeout 10m`.
+Measured with `go test -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 10m`.
 
 ### Standard Search (64 sequential HE operations)
 
-| Phase | Avg Time | % of Total |
-|-------|----------|------------|
-| HE Encrypt Query | ~17 ms | ~0.8% |
-| HE Centroid Scores (64 ops) | ~1.7s | ~85% |
-| HE Decrypt Scores | ~45 ms | ~2% |
-| Bucket Selection | <1 ms | <0.1% |
-| Bucket Fetch | ~75 ms | ~4% |
-| AES Decrypt | ~85 ms | ~4% |
-| Local Scoring | ~75 ms | ~4% |
-| **Total** | **~2s** | |
+| Metric | Value |
+|--------|-------|
+| Average Latency | **2.56s** |
+| Average Recall@10 | **96.0%** |
+| HE Operations | 64 |
 
 ### Batch Search (CKKS Slot Packing)
 
-| Phase | Avg Time | % of Total |
-|-------|----------|------------|
-| HE Encrypt Query | ~17 ms | ~10% |
-| HE Batch Centroid Scores (1 op) | ~28 ms | ~16% |
-| HE Decrypt Scores | ~2 ms | ~1% |
-| Bucket Selection | <1 ms | <0.1% |
-| Bucket Fetch | ~50 ms | ~29% |
-| AES Decrypt | ~45 ms | ~26% |
-| Local Scoring | ~30 ms | ~17% |
-| **Total** | **~170 ms** | |
+| Metric | Value |
+|--------|-------|
+| Average Latency | **190ms** |
+| Average Recall@10 | **96.0%** |
+| HE Operations | 1 |
+| **Speedup vs Standard** | **13.5x** |
 
 Batch mode packs all 64 centroids into a single CKKS plaintext (16,384 slots / 128 dimensions = 128 centroids per pack). This replaces 64 sequential HE multiply+sum operations with a single one.
+
+Recall is identical between standard and batch because the cluster selection logic is the same — batch only speeds up the HE centroid scoring step.
 
 ## Accuracy
 
@@ -78,19 +71,30 @@ Measured with `go test -v -run TestSIFTKMeansEndToEnd ./pkg/client/ -timeout 5m`
 
 The SIFT10K dataset contains 10,000 128-dimensional real embeddings with provided ground truth. Note: SIFT provides Euclidean-distance ground truth, so the tests recompute cosine similarity ground truth for fair comparison.
 
+| Metric | Value |
+|--------|-------|
+| Recall@1 (cosine GT) | **95.0%** |
+| Recall@10 (cosine GT) | **96.0%** |
+| Vectors scanned | 1,487 (14.9% of dataset) |
+| Clusters | 64, top 8 selected |
+
 ### 100K Synthetic Vectors
 
 Measured with `go test -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 10m`.
 
-This benchmark generates 100K random normalized 128-dim vectors, builds a full index with all optimizations enabled, and measures recall against brute-force ground truth for 10 queries.
+This benchmark generates 100K random normalized 128-dim vectors, builds a full index with all optimizations enabled, and measures recall against brute-force cosine similarity ground truth for 10 queries.
+
+| Metric | Standard | Batch |
+|--------|----------|-------|
+| Recall@10 | **96.0%** | **96.0%** |
+| Average Latency | 2.56s | **190ms** |
+| Speedup | 1x | **13.5x** |
 
 **Configuration:**
 - 64 clusters, TopSelect=32
 - Redundant Assignment = 2 (each vector in top-2 clusters)
 - Multi-Probe: threshold=0.95, max=48 clusters
 - Batch HE: CKKS slot packing
-
-Both standard and batch search produce identical recall (same cluster selection logic), but batch is ~12x faster for centroid scoring.
 
 ## Privacy Overhead
 

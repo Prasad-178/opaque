@@ -71,20 +71,29 @@ Benchmarked on Apple M4 Pro with 100K 128-dimensional vectors.
 | HE Dot Product (128D) | ~33 ms |
 | AES-256-GCM Encrypt | <1 ms |
 
-### Search Latency (100K Vectors, 64 Clusters)
+### Search (100K Vectors, 64 Clusters)
 
-| Phase | Standard | Batch (CKKS Slot Packing) |
-|-------|----------|---------------------------|
-| HE Encrypt Query | ~17 ms | ~17 ms |
-| HE Centroid Scoring | ~1.7s (64 ops) | ~28 ms (1 op) |
-| HE Decrypt Scores | ~45 ms | ~2 ms |
-| Bucket Fetch | ~75 ms | ~50 ms |
-| AES Decrypt + Score | ~160 ms | ~75 ms |
-| **Total** | **~2s** | **~170 ms** |
+Measured with `TestBenchmark100KOptimized` — recall computed against brute-force cosine similarity ground truth.
 
-*Batch mode uses CKKS slot packing to score all 64 centroids in a single HE operation instead of 64 separate ones.*
+| Metric | Standard (64 HE ops) | Batch (1 HE op) |
+|--------|---------------------|------------------|
+| **Recall@10** | **96.0%** | **96.0%** |
+| **Average Latency** | 2.56s | **190ms** |
+| **Speedup** | 1x | **13.5x** |
 
-> **Note:** Run `go test -v -run TestBenchmark100KOptimized ./go/pkg/client/ -timeout 10m` to reproduce these benchmarks with actual recall measurement against brute-force ground truth. See [go/BENCHMARKS.md](go/BENCHMARKS.md) for full details.
+Batch mode uses CKKS slot packing to score all 64 centroids in a single HE operation.
+
+### SIFT10K (Real Dataset)
+
+Tested on the [SIFT10K](http://corpus-texmex.irisa.fr/) benchmark (10K real 128-dim embeddings):
+
+| Metric | Value |
+|--------|-------|
+| Recall@1 | 95.0% |
+| Recall@10 | 96.0% |
+| Dataset scanned | 14.9% |
+
+> Run `cd go && go test -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 10m` to reproduce. See [go/BENCHMARKS.md](go/BENCHMARKS.md) for full details.
 
 ## Quick Start
 
