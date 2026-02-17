@@ -54,20 +54,49 @@ type EnterpriseHierarchicalClient struct {
 	mu sync.RWMutex
 }
 
-// NewEnterpriseHierarchicalClient creates a client from authenticated credentials.
+// DefaultPoolSize is the default number of HE engines in the worker pool.
+// Each engine has independent evaluators but shared keys, enabling true parallelism.
+const DefaultPoolSize = 4
+
+// NewEnterpriseHierarchicalClient creates a client from authenticated credentials
+// using the default HE engine pool size of 4.
+//
 // The credentials contain:
 //   - AES key for vector decryption
 //   - Centroids for HE scoring
+//
+// For control over the pool size, use [NewEnterpriseHierarchicalClientWithPoolSize].
 func NewEnterpriseHierarchicalClient(
 	cfg hierarchical.Config,
 	credentials *auth.ClientCredentials,
 	store blob.Store,
+) (*EnterpriseHierarchicalClient, error) {
+	return NewEnterpriseHierarchicalClientWithPoolSize(cfg, credentials, store, DefaultPoolSize)
+}
+
+// NewEnterpriseHierarchicalClientWithPoolSize creates a client with a configurable
+// number of HE engines in the worker pool.
+//
+// Each HE engine consumes significant memory (~50MB for CKKS parameters with LogN=14)
+// but enables parallel homomorphic dot product computations during search.
+// A higher pool size improves search latency when many centroids need scoring.
+//
+// Recommended: poolSize = runtime.NumCPU(), capped at 8.
+// Minimum: 1. Values < 1 are clamped to 1.
+func NewEnterpriseHierarchicalClientWithPoolSize(
+	cfg hierarchical.Config,
+	credentials *auth.ClientCredentials,
+	store blob.Store,
+	poolSize int,
 ) (*EnterpriseHierarchicalClient, error) {
 	if credentials == nil {
 		return nil, fmt.Errorf("credentials are required")
 	}
 	if store == nil {
 		return nil, fmt.Errorf("store is required")
+	}
+	if poolSize < 1 {
+		poolSize = 1
 	}
 
 	// Create encryptor from credentials
@@ -77,8 +106,7 @@ func NewEnterpriseHierarchicalClient(
 	}
 
 	// Create HE engine pool for parallel operations
-	// Use 4 engines as a good balance between parallelism and memory
-	hePool, err := crypto.NewEnginePool(4)
+	hePool, err := crypto.NewEnginePool(poolSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HE engine pool: %w", err)
 	}
