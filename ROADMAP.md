@@ -31,11 +31,10 @@ Opaque is a working privacy-preserving vector search system implemented in Go. T
 
 ## Short Term
 
-### Library API
-Make Opaque usable as a Go library with a clean, simple API:
+### ~~Library API~~ (Done)
+Opaque is usable as a Go library with a clean API:
 
 ```go
-// Target API (design in progress)
 db, _ := opaque.NewDB(opaque.Config{
     Dimension:  128,
     NumClusters: 64,
@@ -43,14 +42,15 @@ db, _ := opaque.NewDB(opaque.Config{
 
 db.Add(ctx, "doc-1", vector1)
 db.Add(ctx, "doc-2", vector2)
+db.Build(ctx)
 
 results, _ := db.Search(ctx, queryVector, 10)
 ```
 
-This is the highest priority item. The current code works but requires assembling many components manually (enterprise config, auth service, blob store, builder, client).
+See `go/opaque.go` for the full API and `go/README.md` for configuration reference.
 
-### Configurable Worker Pool
-Replace the hardcoded `NewEnginePool(4)` with a configurable parameter based on available CPU cores.
+### ~~Configurable Worker Pool~~ (Done)
+`NewEnterpriseHierarchicalClientWithPoolSize()` accepts a pool size parameter. The library API defaults to `min(runtime.NumCPU(), 8)`.
 
 ### Complete Remote Client
 Finish decoy generation in `remote_client.go` to match the local `EnterpriseHierarchicalClient` implementation.

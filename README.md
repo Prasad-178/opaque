@@ -97,11 +97,45 @@ Tested on the [SIFT10K](http://corpus-texmex.irisa.fr/) benchmark (10K real 128-
 
 ## Quick Start
 
+### Library API
+
+```go
+import opaque "github.com/opaque/opaque/go"
+
+// Create a database
+db, err := opaque.NewDB(opaque.Config{
+    Dimension:   128,
+    NumClusters: 64,
+})
+defer db.Close()
+
+// Add vectors
+db.Add(ctx, "doc-1", vector1)
+db.Add(ctx, "doc-2", vector2)
+// or: db.AddBatch(ctx, ids, vectors)
+
+// Build the index (k-means clustering + HE engine initialization)
+if err := db.Build(ctx); err != nil {
+    log.Fatal(err)
+}
+
+// Search (safe for concurrent use after Build)
+results, err := db.Search(ctx, queryVector, 10)
+for _, r := range results {
+    fmt.Printf("  %s: %.4f\n", r.ID, r.Score)
+}
+```
+
+### Running Tests
+
 ```bash
 cd go
 
 # Run core tests (crypto, LSH, clustering, blob storage)
 go test ./pkg/encrypt/... ./pkg/crypto/... ./pkg/lsh/... ./pkg/cluster/... ./pkg/blob/... ./pkg/cache/...
+
+# Run library API tests
+go test -v -run TestBuildAndSearch ./...
 
 # Run accuracy test on SIFT10K dataset (real embeddings, real ground truth)
 go test -v -run TestSIFTKMeansEndToEnd ./pkg/client/ -timeout 5m
@@ -118,6 +152,7 @@ go run ./cmd/devserver/main.go
 ```
 opaque/
 ├── go/
+│   ├── opaque.go               # Library API (NewDB, Add, Build, Search)
 │   ├── pkg/
 │   │   ├── crypto/           # CKKS homomorphic encryption (Lattigo v5)
 │   │   ├── encrypt/          # AES-256-GCM symmetric encryption
