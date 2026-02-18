@@ -23,9 +23,7 @@ Opaque is a working privacy-preserving vector search system implemented in Go. T
 
 ### Known Limitations
 
-- Remote client has a TODO for decoy generation
 - gRPC service registration is incomplete (proto defined, handlers commented out)
-- No CI/CD pipeline for automated benchmarks
 - Benchmarks run on a single machine (Apple M4 Pro) only
 
 ---
@@ -53,11 +51,11 @@ See `go/opaque.go` for the full API and `go/README.md` for configuration referen
 ### ~~Configurable Worker Pool~~ (Done)
 `NewEnterpriseHierarchicalClientWithPoolSize()` accepts a pool size parameter. The library API defaults to `min(runtime.NumCPU(), 8)`.
 
-### Complete Remote Client
-Finish decoy generation in `remote_client.go` to match the local `EnterpriseHierarchicalClient` implementation.
+### ~~Complete Remote Client~~ (Done)
+Decoy generation and multi-probe cluster selection in `remote_client.go` now matches the local `EnterpriseHierarchicalClient` implementation. Shared `generateDecoySupers` function eliminates code duplication.
 
-### CI/CD Benchmarks
-Set up automated benchmark runs that track recall and latency over time. Publish results in the repo.
+### ~~CI/CD Benchmarks~~ (Done)
+GitHub Actions CI pipeline runs lint + tests on every push/PR. Weekly benchmark workflow tracks micro-benchmarks, SIFT10K accuracy, and 100K vector performance. Local `Makefile` provides convenience targets.
 
 ---
 
