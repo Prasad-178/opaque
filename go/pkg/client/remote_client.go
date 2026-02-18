@@ -60,19 +60,23 @@ type RemoteClient struct {
 
 // RemoteClientConfig holds configuration for the remote client.
 type RemoteClientConfig struct {
-	ServerURL    string
-	HTTPTimeout  time.Duration
-	TopSelect    int
-	NumDecoys    int
+	ServerURL        string
+	HTTPTimeout      time.Duration
+	TopSelect        int
+	NumDecoys        int
+	ProbeThreshold   float64
+	MaxProbeClusters int
 }
 
 // DefaultRemoteClientConfig returns sensible defaults.
 func DefaultRemoteClientConfig() RemoteClientConfig {
 	return RemoteClientConfig{
-		ServerURL:   "http://localhost:8080",
-		HTTPTimeout: 30 * time.Second,
-		TopSelect:   16,
-		NumDecoys:   0,
+		ServerURL:        "http://localhost:8080",
+		HTTPTimeout:      30 * time.Second,
+		TopSelect:        16,
+		NumDecoys:        8,
+		ProbeThreshold:   0.95,
+		MaxProbeClusters: 48,
 	}
 }
 
@@ -154,10 +158,12 @@ func NewRemoteClient(cfg RemoteClientConfig, enterpriseID, userID, password stri
 
 	// Create search config
 	config := hierarchical.Config{
-		Dimension:       loginResp.Dimension,
-		NumSuperBuckets: loginResp.NumClusters,
-		TopSuperBuckets: cfg.TopSelect,
-		NumDecoys:       cfg.NumDecoys,
+		Dimension:        loginResp.Dimension,
+		NumSuperBuckets:  loginResp.NumClusters,
+		TopSuperBuckets:  cfg.TopSelect,
+		NumDecoys:        cfg.NumDecoys,
+		ProbeThreshold:   cfg.ProbeThreshold,
+		MaxProbeClusters: cfg.MaxProbeClusters,
 	}
 
 	return &RemoteClient{
@@ -264,19 +270,30 @@ func (c *RemoteClient) Search(ctx context.Context, query []float64, topK int) (*
 	result.Timing.HEDecryptScores = time.Since(startDecrypt)
 
 	// Step 1d: Select top super-buckets (SERVER NEVER SEES THIS!)
-	topSupers := selectTopKIndices(scores, c.config.TopSuperBuckets)
+	// Use multi-probe selection to capture clusters within threshold of top-K
+	topSupers := selectClustersWithProbing(
+		scores,
+		c.config.TopSuperBuckets,
+		c.config.ProbeThreshold,
+		c.config.MaxProbeClusters,
+	)
 	result.Stats.SuperBucketsSelected = len(topSupers)
 
 	// ==========================================
 	// LEVEL 2: Fetch blobs from selected clusters
 	// ==========================================
 
-	startFetch := time.Now()
-
 	// Add decoys and shuffle
-	allSupers := make([]int, len(topSupers))
-	copy(allSupers, topSupers)
-	// TODO: Add decoy generation similar to EnterpriseHierarchicalClient
+	startSelection := time.Now()
+	decoySupers := generateDecoySupers(topSupers, c.numClusters, c.config.NumDecoys)
+	allSupers := append(append([]int{}, topSupers...), decoySupers...)
+	shuffleInts(allSupers)
+	result.Stats.RealSubBuckets = len(topSupers)
+	result.Stats.DecoySubBuckets = len(decoySupers)
+	result.Stats.TotalSubBuckets = len(allSupers)
+	result.Timing.BucketSelection = time.Since(startSelection)
+
+	startFetch := time.Now()
 
 	// Fetch blobs from each super-bucket (in parallel)
 	type fetchResult struct {
@@ -320,8 +337,6 @@ func (c *RemoteClient) Search(ctx context.Context, query []float64, topK int) (*
 
 	result.Timing.BucketFetch = time.Since(startFetch)
 	result.Stats.BlobsFetched = len(allBlobs)
-	result.Stats.RealSubBuckets = len(topSupers)
-	result.Stats.TotalSubBuckets = len(allSupers)
 
 	// ==========================================
 	// LEVEL 3: Local AES Decrypt + Scoring
