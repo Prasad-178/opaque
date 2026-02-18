@@ -16,6 +16,9 @@ import (
 
 // TestBenchmark100K runs a full benchmark on 100K synthetic vectors
 func TestBenchmark100K(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping 100K benchmark in short mode")
+	}
 	ctx := context.Background()
 
 	// Configuration

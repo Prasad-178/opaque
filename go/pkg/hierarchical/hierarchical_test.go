@@ -158,6 +158,9 @@ func TestHierarchicalSearch(t *testing.T) {
 }
 
 func TestHierarchicalRecall(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping hierarchical recall test in short mode")
+	}
 	ctx := context.Background()
 	rng := rand.New(rand.NewSource(42))
 
