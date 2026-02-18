@@ -6,11 +6,13 @@ Opaque is a working privacy-preserving vector search system implemented in Go. T
 
 ### What Works Today
 
+- **Library API** (`opaque.NewDB` → `Add` → `Build` → `Search`) for simple usage
 - CKKS homomorphic encryption via Lattigo v5 (128-bit security)
 - K-means clustering with k-means++ initialization
 - AES-256-GCM encrypted blob storage (memory and file backends)
 - Hierarchical search: HE centroid scoring -> decoy fetch -> local AES decrypt
 - Batch HE via CKKS slot packing (64 centroids in 1 HE operation)
+- Configurable HE engine worker pool (defaults to `min(NumCPU, 8)`)
 - Redundant cluster assignment for improved boundary recall
 - Multi-probe cluster selection to handle CKKS approximation noise
 - Per-enterprise key isolation and configuration
@@ -21,7 +23,6 @@ Opaque is a working privacy-preserving vector search system implemented in Go. T
 
 ### Known Limitations
 
-- Worker pool size is hardcoded to 4 HE engines (should be configurable)
 - Remote client has a TODO for decoy generation
 - gRPC service registration is incomplete (proto defined, handlers commented out)
 - No CI/CD pipeline for automated benchmarks
