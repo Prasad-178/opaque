@@ -15,6 +15,7 @@ data/
 
 # Testing
 .benchmarks/
+*.test
 
 # Planning docs (local only, not part of public repo)
 GO_PRODUCTION_PLAN.md
