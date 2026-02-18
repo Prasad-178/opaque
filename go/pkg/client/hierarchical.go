@@ -443,4 +443,44 @@ func dotProductVec(a, b []float64) float64 {
 	return sum
 }
 
+// generateDecoySupers generates decoy super-bucket IDs from non-selected super-buckets.
+// This is a shared function used by both EnterpriseHierarchicalClient and RemoteClient.
+func generateDecoySupers(selectedSupers []int, numTotal int, numDecoys int) []int {
+	if numDecoys <= 0 {
+		return nil
+	}
+
+	// Create set of selected super-buckets
+	selected := make(map[int]bool)
+	for _, s := range selectedSupers {
+		selected[s] = true
+	}
+
+	// Collect all non-selected super-buckets
+	var nonSelected []int
+	for i := 0; i < numTotal; i++ {
+		if !selected[i] {
+			nonSelected = append(nonSelected, i)
+		}
+	}
+
+	if len(nonSelected) == 0 {
+		return nil
+	}
+
+	// Generate random decoy super-buckets
+	decoys := make([]int, 0, numDecoys)
+	for i := 0; i < numDecoys && i < len(nonSelected); i++ {
+		// Pick random non-selected super-bucket
+		idx, _ := rand.Int(rand.Reader, big.NewInt(int64(len(nonSelected))))
+		superID := nonSelected[idx.Int64()]
+
+		// Remove from pool to avoid duplicates
+		nonSelected = append(nonSelected[:idx.Int64()], nonSelected[idx.Int64()+1:]...)
+		decoys = append(decoys, superID)
+	}
+
+	return decoys
+}
+
 // extractOriginalID is defined in enterprise_hierarchical.go
