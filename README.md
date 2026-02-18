@@ -131,21 +131,24 @@ for _, r := range results {
 ```bash
 cd go
 
-# Run core tests (crypto, LSH, clustering, blob storage)
-go test ./pkg/encrypt/... ./pkg/crypto/... ./pkg/lsh/... ./pkg/cluster/... ./pkg/blob/... ./pkg/cache/...
+# Use the Makefile for common operations
+make test-fast    # go test -short ./...
+make test         # go test ./...
+make lint         # go vet ./...
+make test-bench   # Micro-benchmarks (crypto, LSH)
+make test-sift    # SIFT10K accuracy test
+make test-100k    # 100K vector benchmark
 
-# Run library API tests
+# Or run directly
 go test -v -run TestBuildAndSearch ./...
-
-# Run accuracy test on SIFT10K dataset (real embeddings, real ground truth)
 go test -v -run TestSIFTKMeansEndToEnd ./pkg/client/ -timeout 5m
-
-# Run 100K benchmark with recall measurement
 go test -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 10m
 
 # Run the dev server
 go run ./cmd/devserver/main.go
 ```
+
+CI runs automatically via GitHub Actions on every push/PR. See `.github/workflows/` for details.
 
 ## Project Structure
 

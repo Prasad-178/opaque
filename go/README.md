@@ -102,6 +102,19 @@ go/
 
 ## Running Tests
 
+A `Makefile` is provided for common operations:
+
+```bash
+make test-fast    # go test -short ./...
+make test         # go test ./...
+make lint         # go vet ./...
+make test-bench   # Micro-benchmarks (crypto, LSH)
+make test-sift    # SIFT10K accuracy test
+make test-100k    # 100K vector benchmark
+```
+
+Or run directly:
+
 ```bash
 # Library API tests (fast, ~5s)
 go test -v -run TestBuildAndSearch ./...
@@ -118,6 +131,12 @@ go test -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 10m
 # Core crypto micro-benchmarks
 go test -bench=. -benchmem ./pkg/crypto/... ./pkg/lsh/...
 ```
+
+## CI/CD
+
+GitHub Actions runs automatically on push/PR:
+- **CI** (`.github/workflows/ci.yml`): lint, short tests, core tests, crypto tests, API integration tests
+- **Benchmarks** (`.github/workflows/benchmarks.yml`): weekly + manual trigger for micro-benchmarks, SIFT10K accuracy, and 100K performance tracking
 
 ## Development Server
 
