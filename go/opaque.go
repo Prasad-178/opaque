@@ -171,11 +171,12 @@ func NewDB(cfg Config) (*DB, error) {
 		return nil, fmt.Errorf("opaque: Dimension is required and must be positive, got %d", cfg.Dimension)
 	}
 
-	applyDefaults(&cfg)
-
+	// Validate user-provided values before applying defaults.
 	if err := validateConfig(&cfg); err != nil {
 		return nil, err
 	}
+
+	applyDefaults(&cfg)
 
 	return &DB{
 		cfg:   cfg,
@@ -444,10 +445,7 @@ func makeCredentials(ecfg *enterprise.Config) *auth.ClientCredentials {
 // makeSearchConfig maps the library Config to the internal hierarchical.Config
 // used by the search client.
 func (db *DB) makeSearchConfig(ecfg *enterprise.Config) hierarchical.Config {
-	maxProbe := db.cfg.NumClusters * 3 / 4
-	if maxProbe < db.cfg.TopClusters {
-		maxProbe = db.cfg.TopClusters
-	}
+	maxProbe := max(db.cfg.NumClusters*3/4, db.cfg.TopClusters)
 
 	return hierarchical.Config{
 		Dimension:            db.cfg.Dimension,
@@ -493,10 +491,7 @@ func applyDefaults(cfg *Config) {
 		cfg.NumDecoys = 8
 	}
 	if cfg.WorkerPoolSize <= 0 {
-		cfg.WorkerPoolSize = runtime.NumCPU()
-		if cfg.WorkerPoolSize > 8 {
-			cfg.WorkerPoolSize = 8
-		}
+		cfg.WorkerPoolSize = min(runtime.NumCPU(), 8)
 	}
 	if cfg.ProbeThreshold <= 0 {
 		cfg.ProbeThreshold = 0.95
@@ -506,15 +501,16 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
-// validateConfig checks that the config values are consistent.
+// validateConfig checks user-provided config values before defaults are applied.
+// Zero values are allowed since they will be replaced by defaults.
 func validateConfig(cfg *Config) error {
-	if cfg.NumClusters < 2 {
+	if cfg.NumClusters != 0 && cfg.NumClusters < 2 {
 		return fmt.Errorf("opaque: NumClusters must be >= 2, got %d", cfg.NumClusters)
 	}
-	if cfg.TopClusters > cfg.NumClusters {
+	if cfg.NumClusters > 0 && cfg.TopClusters > cfg.NumClusters {
 		return fmt.Errorf("opaque: TopClusters (%d) must be <= NumClusters (%d)", cfg.TopClusters, cfg.NumClusters)
 	}
-	if cfg.ProbeThreshold < 0 || cfg.ProbeThreshold > 1 {
+	if cfg.ProbeThreshold != 0 && (cfg.ProbeThreshold < 0 || cfg.ProbeThreshold > 1) {
 		return fmt.Errorf("opaque: ProbeThreshold must be in [0, 1], got %f", cfg.ProbeThreshold)
 	}
 	if cfg.Storage == File && cfg.StoragePath == "" {

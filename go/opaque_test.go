@@ -39,19 +39,6 @@ func generateTestVectors(n, dim int, seed int64) ([]string, [][]float64) {
 	return ids, vectors
 }
 
-// cosineSimilarity computes the cosine similarity between two vectors.
-func cosineSimilarity(a, b []float64) float64 {
-	dot := 0.0
-	normA := 0.0
-	normB := 0.0
-	for i := range a {
-		dot += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
-}
-
 // --- Config and constructor tests ---
 
 func TestNewDB_Defaults(t *testing.T) {
