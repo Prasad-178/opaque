@@ -1,0 +1,94 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # Weekly on Monday at 06:00 UTC
+
+defaults:
+  run:
+    working-directory: go
+
+jobs:
+  micro-benchmarks:
+    name: Micro-benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Run micro-benchmarks
+        run: |
+          go test -bench=. -benchmem ./pkg/crypto/... ./pkg/lsh/... 2>&1 | tee bench-output.txt
+
+      - name: Summary
+        run: |
+          echo "## Micro-benchmarks" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -E "^Benchmark|^ok" bench-output.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: micro-benchmarks
+          path: go/bench-output.txt
+
+  accuracy-sift10k:
+    name: SIFT10K accuracy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Download SIFT10K dataset
+        run: |
+          mkdir -p testdata/siftsmall
+          curl -sL ftp://ftp.irisa.fr/local/texmex/corpus/siftsmall.tar.gz | tar xz -C testdata/
+
+      - name: Run SIFT10K accuracy test
+        run: |
+          go test -v -run TestSIFTKMeansEndToEnd ./pkg/client/ -timeout 5m 2>&1 | tee sift-output.txt
+
+      - name: Summary
+        run: |
+          echo "## SIFT10K Accuracy" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -E "recall|Recall|PASS|FAIL" sift-output.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sift10k-results
+          path: go/sift-output.txt
+
+  benchmark-100k:
+    name: 100K vector benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Run 100K benchmark
+        run: |
+          go test -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 15m 2>&1 | tee 100k-output.txt
+
+      - name: Summary
+        run: |
+          echo "## 100K Vector Benchmark" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -E "latency|recall|Recall|Latency|PASS|FAIL|benchmark" 100k-output.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-100k-results
+          path: go/100k-output.txt
