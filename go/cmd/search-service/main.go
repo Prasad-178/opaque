@@ -19,8 +19,10 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
+	pb "github.com/opaque/opaque/go/api/proto"
 	"github.com/opaque/opaque/go/internal/service"
 	"github.com/opaque/opaque/go/internal/store"
+	"github.com/opaque/opaque/go/pkg/grpcserver"
 )
 
 var (
@@ -30,6 +32,8 @@ var (
 	lshBits     = flag.Int("lsh-bits", 128, "Number of LSH bits")
 	lshSeed     = flag.Int64("lsh-seed", 42, "LSH random seed")
 	demoVectors = flag.Int("demo-vectors", 1000, "Number of demo vectors to generate")
+	tlsCert     = flag.String("tls-cert", "", "TLS certificate file (optional)")
+	tlsKey      = flag.String("tls-key", "", "TLS key file (optional)")
 )
 
 func main() {
@@ -62,10 +66,27 @@ func main() {
 	}
 
 	// Create gRPC server
-	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(50*1024*1024), // 50MB for large ciphertexts
-		grpc.MaxSendMsgSize(50*1024*1024),
-	)
+	serverOpts := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(50 * 1024 * 1024), // 50MB for large ciphertexts
+		grpc.MaxSendMsgSize(50 * 1024 * 1024),
+		grpc.ChainUnaryInterceptor(
+			grpcserver.RecoveryUnaryInterceptor(),
+			grpcserver.LoggingUnaryInterceptor(),
+		),
+		grpc.ChainStreamInterceptor(
+			grpcserver.RecoveryStreamInterceptor(),
+			grpcserver.LoggingStreamInterceptor(),
+		),
+	}
+	if *tlsCert != "" && *tlsKey != "" {
+		creds, err := grpcserver.LoadTLSCredentials(*tlsCert, *tlsKey)
+		if err != nil {
+			log.Fatalf("Failed to load TLS credentials: %v", err)
+		}
+		serverOpts = append(serverOpts, grpc.Creds(creds))
+		log.Println("TLS enabled")
+	}
+	grpcServer := grpc.NewServer(serverOpts...)
 
 	// Register health service
 	healthServer := health.NewServer()
@@ -75,8 +96,8 @@ func main() {
 	// Register reflection for grpcurl/grpcui
 	reflection.Register(grpcServer)
 
-	// Note: We'd register the Opaque service here once proto is generated
-	// pb.RegisterOpaqueSearchServer(grpcServer, NewGRPCService(svc))
+	// Register Opaque search service
+	pb.RegisterOpaqueSearchServer(grpcServer, grpcserver.New(svc))
 
 	// Start gRPC server
 	grpcLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *grpcPort))
