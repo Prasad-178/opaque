@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package opaque.v1;
 
-option go_package = "github.com/opaque/opaque-go/api/proto;proto";
+option go_package = "github.com/opaque/opaque/go/api/proto;proto";
 
 // OpaqueSearch is the main service for privacy-preserving vector search.
 service OpaqueSearch {

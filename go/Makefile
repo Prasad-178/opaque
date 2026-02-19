@@ -1,4 +1,4 @@
-.PHONY: test-unit test-integration test-fast test test-bench test-sift test-100k lint build
+.PHONY: test-unit test-integration test-fast test test-bench test-sift test-100k lint build proto
 
 build:
 	go build ./...
@@ -26,3 +26,8 @@ test-sift:
 
 test-100k:
 	go test -tags integration -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 15m
+
+proto:
+	protoc --go_out=. --go_opt=paths=source_relative \
+	       --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+	       api/proto/opaque.proto
