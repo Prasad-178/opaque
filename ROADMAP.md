@@ -23,7 +23,7 @@ Opaque is a working privacy-preserving vector search system implemented in Go. T
 
 ### Known Limitations
 
-- gRPC service registration is incomplete (proto defined, handlers commented out)
+- ~~gRPC service registration is incomplete~~ (Done)
 - Benchmarks run on a single machine (Apple M4 Pro) only
 
 ---
@@ -61,12 +61,8 @@ GitHub Actions CI pipeline runs lint + tests on every push/PR. Weekly benchmark 
 
 ## Medium Term
 
-### gRPC Service
-Complete the gRPC server implementation:
-- Generate protobuf code from existing `.proto` definitions
-- Implement service handlers for search, key registration, and blob retrieval
-- Add TLS configuration
-- Integration tests for the full client-server round trip
+### ~~gRPC Service~~ (Done)
+Complete gRPC server implementation with all 7 RPC handlers (RegisterKey, GetPlanes, GetCandidates, ComputeScores, ComputeScoresStream, Search, HealthCheck). Includes recovery/logging interceptors, optional TLS, and full integration tests. See `go/pkg/grpcserver/`.
 
 ### SIFT1M Benchmarks
 Extend benchmarks to the full SIFT1M dataset (1 million vectors) to validate scaling behavior. Currently tested on SIFT10K (10K vectors) and synthetic 100K vectors.
