@@ -152,10 +152,10 @@ type contextKey string
 
 const credentialsKey contextKey = "credentials"
 
-// getCredentials retrieves credentials from context.
-func getCredentials(ctx context.Context) *auth.ClientCredentials {
-	creds, _ := ctx.Value(credentialsKey).(*auth.ClientCredentials)
-	return creds
+// getToken retrieves the validated auth token from context.
+func getToken(ctx context.Context) *auth.Token {
+	tok, _ := ctx.Value(credentialsKey).(*auth.Token)
+	return tok
 }
 
 // Health check handler
@@ -256,8 +256,8 @@ func (s *Server) handleGetBuckets(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify credentials match enterprise
-	creds := getCredentials(r.Context())
-	if creds == nil || creds.EnterpriseID != enterpriseID {
+	tok := getToken(r.Context())
+	if tok == nil || tok.EnterpriseID != enterpriseID {
 		writeError(w, http.StatusForbidden, "enterprise mismatch")
 		return
 	}
