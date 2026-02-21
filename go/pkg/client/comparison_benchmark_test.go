@@ -29,6 +29,10 @@ import (
 //
 // This provides context for our performance/accuracy trade-offs.
 func TestComparisonBenchmark(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping 100K vector comparison benchmark in short mode")
+	}
+
 	// Configuration
 	numVectors := 100000
 	dimension := 128

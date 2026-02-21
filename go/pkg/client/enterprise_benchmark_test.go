@@ -17,6 +17,10 @@ import (
 
 // TestEnterpriseBenchmarkComplete runs a comprehensive benchmark showing all components
 func TestEnterpriseBenchmarkComplete(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping enterprise benchmark in short mode")
+	}
+
 	ctx := context.Background()
 
 	// Configuration

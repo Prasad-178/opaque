@@ -16,6 +16,10 @@ import (
 
 // TestSearchTimingBreakdown measures time spent in each phase
 func TestSearchTimingBreakdown(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping search timing benchmark in short mode")
+	}
+
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")
@@ -171,6 +175,10 @@ func BenchmarkSearch(b *testing.B) {
 
 // TestWorkerCountImpact tests different worker counts
 func TestWorkerCountImpact(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping worker count benchmark in short mode")
+	}
+
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")
