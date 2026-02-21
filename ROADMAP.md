@@ -20,7 +20,7 @@ Opaque is a working privacy-preserving vector search system implemented in Go. T
 - REST API server with auth middleware
 - Development server with test data generation
 - SIFT10K accuracy tests with real embeddings and ground truth
-- SIFT1M benchmarks (1M vectors, 100% Recall@10, ~2s query latency)
+- SIFT1M benchmarks (1M vectors, 96.8% Recall@10 at 6% probe, ~500ms query latency)
 - Optional PCA dimensionality reduction (client-side, no privacy impact)
 - gRPC service with full CKKS integration and streaming support
 
@@ -67,7 +67,17 @@ GitHub Actions CI pipeline runs lint + tests on every push/PR. Weekly benchmark 
 Complete gRPC server implementation with all 7 RPC handlers (RegisterKey, GetPlanes, GetCandidates, ComputeScores, ComputeScoresStream, Search, HealthCheck). Includes recovery/logging interceptors, optional TLS, and full integration tests. See `go/pkg/grpcserver/`.
 
 ### ~~SIFT1M Benchmarks~~ (Done)
-Benchmark suite for the full SIFT1M dataset (1 million 128-dim vectors). Includes accuracy test with Recall@1/10/100 against ground truth, and scaling test across 100K/250K/500K/1M subsets. Uses library API (`opaque.NewDB`). Download script at `scripts/download_sift1m.sh`, benchmark at `go/test/sift1m_benchmark_test.go` (build tag: `sift1m`). Runs weekly in CI with dataset caching.
+Benchmark suite for the full SIFT1M dataset (1 million 128-dim vectors) with production-realistic configs. Ground truth computed via brute-force cosine similarity over all 1M vectors. Key results (128 clusters, 8 decoys):
+
+| Config | Probe % | Recall@1 | Recall@10 | Avg Query |
+|--------|---------|----------|-----------|-----------|
+| strict-4 | 3.1% | 82.0% | 79.4% | 274ms |
+| strict-8 | 6.2% | 98.0% | 96.8% | 508ms |
+| strict-16 | 12.5% | 100% | 99.8% | 991ms |
+| probe-8 (multi) | 6.2%+ | 98.0% | 97.4% | 548ms |
+| probe-16 (multi) | 12.5%+ | 100% | 99.8% | 1.07s |
+
+Scaling test (strict-8 config) shows sub-linear latency growth from 100K to 1M vectors. Download script at `scripts/download_sift1m.sh`, benchmark at `go/test/sift1m_benchmark_test.go` (build tag: `sift1m`). Runs weekly in CI with dataset caching.
 
 ### GPU Acceleration
 Lattigo supports GPU acceleration for HE operations. Investigate and benchmark CUDA/Metal backends for further latency reduction.

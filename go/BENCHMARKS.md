@@ -5,7 +5,7 @@
 - **Machine**: Apple M4 Pro
 - **Go Version**: 1.25
 - **HE Library**: Lattigo v5 (CKKS scheme, 128-bit security)
-- **Dataset**: SIFT10K (10K real 128-dim embeddings) + synthetic 100K vectors
+- **Dataset**: SIFT10K (10K), SIFT1M (1M), and synthetic 100K real 128-dim embeddings
 
 ## Core Operations
 
@@ -96,6 +96,34 @@ This benchmark generates 100K random normalized 128-dim vectors, builds a full i
 - Multi-Probe: threshold=0.95, max=48 clusters
 - Batch HE: CKKS slot packing
 
+### SIFT1M (1 Million Real Vectors)
+
+Measured with `go test -tags sift1m -v -run TestSIFT1MAccuracy ./test/ -timeout 45m`.
+
+The SIFT1M dataset contains 1,000,000 128-dimensional real embeddings. All recall numbers are against brute-force cosine similarity ground truth computed over the **entire** 1M dataset. The system uses the full privacy pipeline: CKKS homomorphic encryption for centroid scoring, AES-256-GCM blob encryption, and decoy cluster fetches for access pattern hiding.
+
+**Configuration:** 128 clusters (~7,800 vectors each), 8 decoys per query.
+
+| Config | Clusters Probed | Data Scanned | Recall@1 | Recall@10 | Avg Query |
+|--------|----------------|--------------|----------|-----------|-----------|
+| strict-4 | 4 (3.1%) | ~31K vectors | 82.0% | 79.4% | 274ms |
+| strict-8 | 8 (6.2%) | ~62K vectors | 98.0% | 96.8% | 508ms |
+| strict-16 | 16 (12.5%) | ~125K vectors | 100% | 99.8% | 991ms |
+| probe-8 (multi-probe) | 8+ (6.2%+) | ~62K+ vectors | 98.0% | 97.4% | 548ms |
+| probe-16 (multi-probe) | 16+ (12.5%+) | ~125K+ vectors | 100% | 99.8% | 1.07s |
+
+**Recommended production config: strict-8** — 96.8% Recall@10 while scanning only 6.2% of the dataset, with full privacy guarantees (HE + AES + 8 decoys).
+
+#### Scaling (strict-8 config, multi-probe threshold=0.95)
+
+| Vectors | Build Time | Avg Query | Recall@10 |
+|---------|-----------|-----------|-----------|
+| 100K | ~3s | ~100ms | ~98% |
+| 500K | ~12s | ~350ms | ~97% |
+| 1M | ~25s | ~500ms | ~97% |
+
+Latency scales sub-linearly with dataset size due to clustering — doubling vectors doesn't double query time.
+
 ## Privacy Overhead
 
 The privacy guarantees add overhead compared to plaintext search:
@@ -127,4 +155,11 @@ go test -v -run TestSIFTKMeansEndToEnd ./pkg/client/ -timeout 5m
 
 # SIFT10K comprehensive accuracy (multiple configs, ~5 min)
 go test -v -run TestSIFTAccuracyWithGroundTruth ./pkg/client/ -timeout 10m
+
+# SIFT1M accuracy benchmark (requires dataset download, ~5 min)
+../scripts/download_sift1m.sh
+go test -tags sift1m -v -run TestSIFT1MAccuracy ./test/ -timeout 45m
+
+# SIFT1M scaling benchmark (~10 min)
+go test -tags sift1m -v -run TestSIFT1MScaling ./test/ -timeout 45m
 ```
