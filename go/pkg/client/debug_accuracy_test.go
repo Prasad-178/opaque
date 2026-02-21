@@ -18,6 +18,9 @@ import (
 
 // TestDebugAccuracy traces through the search to find where GT gets lost
 func TestDebugAccuracy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping debug accuracy test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")

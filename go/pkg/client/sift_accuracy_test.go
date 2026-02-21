@@ -41,6 +41,9 @@ func getSIFTDataPath() string {
 
 // TestSIFTAccuracyWithGroundTruth tests accuracy using real SIFT embeddings with ground truth
 func TestSIFTAccuracyWithGroundTruth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT accuracy with ground truth test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found. Download from http://corpus-texmex.irisa.fr/")
@@ -244,6 +247,9 @@ func calculateSIFTMetrics(groundTruth, predicted []int, topK int) (recall1, reca
 
 // TestSIFTVsBruteForce compares Tier 2.5 results against brute force search
 func TestSIFTVsBruteForce(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT vs brute force test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found. Download from http://corpus-texmex.irisa.fr/")
@@ -367,6 +373,9 @@ func siftCosineSim(a, b []float64) float64 {
 
 // TestSIFTRandomVsReal compares accuracy between random vectors and SIFT embeddings
 func TestSIFTRandomVsReal(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT random vs real embeddings test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found. Download from http://corpus-texmex.irisa.fr/")
@@ -497,6 +506,9 @@ func min(a, b int) int {
 
 // TestSIFTHEvPlaintext compares HE centroid ranking vs plaintext centroid ranking
 func TestSIFTHEvPlaintext(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT HE vs plaintext centroid ranking test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")
@@ -611,6 +623,9 @@ func getTopKIndices(scores []float64, k int) []int {
 
 // TestSIFTSubBucketConsistency verifies builder and client use same LSH
 func TestSIFTSubBucketConsistency(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT sub-bucket consistency test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")
@@ -699,6 +714,9 @@ func TestSIFTSubBucketConsistency(t *testing.T) {
 
 // TestSIFTSubBucketCoverage tests if sub-bucket fetching covers the ground truth
 func TestSIFTSubBucketCoverage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT sub-bucket coverage test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")
@@ -793,6 +811,9 @@ func TestSIFTSubBucketCoverage(t *testing.T) {
 
 // TestSIFTSubBucketDistance shows the distribution of sub-bucket ID differences
 func TestSIFTSubBucketDistance(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT sub-bucket distance distribution test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")
@@ -870,6 +891,9 @@ func TestSIFTSubBucketDistance(t *testing.T) {
 
 // TestSIFTSubBucketsPerSuperImpact tests how SubBucketsPerSuper affects accuracy
 func TestSIFTSubBucketsPerSuperImpact(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT sub-buckets per super impact test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")
@@ -968,6 +992,9 @@ func TestSIFTSubBucketsPerSuperImpact(t *testing.T) {
 // TestSIFTCentroidQualityWithLSH tests centroid quality using actual LSH (fast, no HE)
 // This isolates whether poor accuracy is due to centroid quality vs HE operations
 func TestSIFTCentroidQualityWithLSH(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT centroid quality with LSH test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")

@@ -21,6 +21,9 @@ import (
 // 3. Authenticate and get credentials
 // 4. Search using enterprise client
 func TestEnterpriseHierarchicalEndToEnd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping enterprise hierarchical end-to-end test in short mode")
+	}
 	ctx := context.Background()
 	dimension := 64
 	numVectors := 500
@@ -150,6 +153,9 @@ func TestEnterpriseHierarchicalEndToEnd(t *testing.T) {
 
 // TestEnterpriseClientCredentialRefresh tests credential refresh flow
 func TestEnterpriseClientCredentialRefresh(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping enterprise client credential refresh test in short mode")
+	}
 	ctx := context.Background()
 	dimension := 32
 	numSuperBuckets := 8
@@ -230,6 +236,9 @@ func TestEnterpriseClientCredentialRefresh(t *testing.T) {
 
 // TestEnterpriseIsolation verifies that different enterprises have different secrets
 func TestEnterpriseIsolation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping enterprise isolation test in short mode")
+	}
 	dimension := 32
 	numSuperBuckets := 8
 
@@ -258,6 +267,9 @@ func TestEnterpriseIsolation(t *testing.T) {
 
 // TestEnterpriseSearchAccuracy tests search accuracy with known similar vectors
 func TestEnterpriseSearchAccuracy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping enterprise search accuracy test in short mode")
+	}
 	ctx := context.Background()
 	dimension := 64
 	numVectors := 200

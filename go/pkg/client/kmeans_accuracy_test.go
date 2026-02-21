@@ -20,6 +20,9 @@ import (
 // IMPORTANT: SIFT ground truth uses Euclidean distance, but we use cosine similarity.
 // This test now computes cosine-similarity-based ground truth for fair comparison.
 func TestSIFTKMeansEndToEnd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT K-means end-to-end test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")
@@ -319,6 +322,9 @@ func computeCosineGroundTruth(dataset *embeddings.Dataset, topK int) [][]int {
 
 // TestSIFTKMeansScaling tests K-means accuracy with different bucket counts
 func TestSIFTKMeansScaling(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT K-means scaling test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")
@@ -365,6 +371,9 @@ func TestSIFTKMeansScaling(t *testing.T) {
 
 // TestSIFTKMeansCentroidQuality verifies K-means centroids are better representatives
 func TestSIFTKMeansCentroidQuality(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT K-means centroid quality test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")
@@ -547,6 +556,9 @@ func runClusteringTest(
 
 // TestSIFTKMeansClusterSelection verifies K-means selects better clusters than LSH
 func TestSIFTKMeansClusterSelection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT K-means cluster selection test in short mode")
+	}
 	dataPath := getSIFTDataPath()
 	if dataPath == "" {
 		t.Skip("SIFT dataset not found")

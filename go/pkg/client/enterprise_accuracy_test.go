@@ -18,6 +18,9 @@ import (
 
 // TestAccuracyComparison compares accuracy between brute force and Tier 2.5
 func TestAccuracyComparison(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping accuracy comparison test in short mode")
+	}
 	ctx := context.Background()
 
 	// Test configurations
@@ -253,6 +256,9 @@ func calculateMetrics(groundTruth, predicted []searchResult, topK int) (recall1,
 
 // TestAccuracyWithSimilarQueries tests accuracy when query is similar to indexed vectors
 func TestAccuracyWithSimilarQueries(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping accuracy with similar queries test in short mode")
+	}
 	ctx := context.Background()
 
 	numVectors := 10000
@@ -353,6 +359,9 @@ func TestAccuracyWithSimilarQueries(t *testing.T) {
 
 // TestAccuracyVsTopSuperBuckets shows accuracy/performance tradeoff
 func TestAccuracyVsTopSuperBuckets(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping accuracy vs top super buckets test in short mode")
+	}
 	ctx := context.Background()
 
 	numVectors := 10000

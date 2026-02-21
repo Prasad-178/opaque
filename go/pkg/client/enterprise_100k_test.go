@@ -19,6 +19,9 @@ import (
 
 // TestEnterprise100K runs a realistic 100K vector benchmark
 func TestEnterprise100K(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping 100K vector benchmark in short mode")
+	}
 	ctx := context.Background()
 
 	// Configuration
