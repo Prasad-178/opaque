@@ -5,9 +5,11 @@ package test
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"testing"
 	"time"
 
@@ -193,7 +195,8 @@ func TestSIFT1MAccuracy(t *testing.T) {
 }
 
 // TestSIFT1MScaling tests how the system scales with increasing dataset size.
-// Measures recall and latency at 100K, 250K, 500K, and 1M vectors.
+// Ground truth is computed via brute force within each subset so recall is
+// meaningful at every scale.
 func TestSIFT1MScaling(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping SIFT1M scaling benchmark in short mode")
@@ -216,7 +219,7 @@ func TestSIFT1MScaling(t *testing.T) {
 	topClusters := 64
 	numQueries := 20
 	topK := 10
-	sizes := []int{100000, 250000, 500000, 1000000}
+	sizes := []int{100000, 500000, 1000000}
 
 	if numQueries > len(dataset.Queries) {
 		numQueries = len(dataset.Queries)
@@ -235,7 +238,6 @@ func TestSIFT1MScaling(t *testing.T) {
 		buildTime time.Duration
 		avgQuery  time.Duration
 		recall10  float64
-		memMB     float64
 	}
 	var results []scalingResult
 
@@ -247,14 +249,12 @@ func TestSIFT1MScaling(t *testing.T) {
 
 		t.Logf("--- %dK vectors ---", size/1000)
 
-		// Take subset
 		ids := dataset.IDs[:size]
 		vectors := dataset.Vectors[:size]
 
-		// Measure memory before
-		runtime.GC()
-		var memBefore runtime.MemStats
-		runtime.ReadMemStats(&memBefore)
+		// Compute brute-force ground truth within this subset
+		t.Log("  Computing brute-force ground truth...")
+		localGT := bruteForceTopK(dataset.Queries[:numQueries], vectors, dataset.Dimension, topK)
 
 		db, err := opaque.NewDB(opaque.Config{
 			Dimension:   dataset.Dimension,
@@ -276,15 +276,6 @@ func TestSIFT1MScaling(t *testing.T) {
 		}
 		buildTime := time.Since(buildStart)
 
-		// Measure memory after
-		runtime.GC()
-		var memAfter runtime.MemStats
-		runtime.ReadMemStats(&memAfter)
-		memUsedMB := float64(memAfter.Alloc-memBefore.Alloc) / (1024 * 1024)
-		if memUsedMB < 0 {
-			memUsedMB = 0 // GC can cause this
-		}
-
 		// Warm up
 		db.Search(ctx, dataset.Queries[0], topK)
 
@@ -301,30 +292,19 @@ func TestSIFT1MScaling(t *testing.T) {
 				t.Fatalf("Search failed: %v", err)
 			}
 
-			if len(dataset.GroundTruth) > q {
-				gt := dataset.GroundTruth[q]
-				resultIDs := make(map[string]bool)
-				for _, r := range searchResults {
-					resultIDs[r.ID] = true
-				}
+			resultIDs := make(map[string]bool)
+			for _, r := range searchResults {
+				resultIDs[r.ID] = true
+			}
 
-				gtTop10 := topK
-				if len(gt) < gtTop10 {
-					gtTop10 = len(gt)
-				}
-				hits := 0
-				for i := 0; i < gtTop10; i++ {
-					if gt[i] < size { // Only count ground truth within our subset
-						gtID := fmt.Sprintf("sift_%d", gt[i])
-						if resultIDs[gtID] {
-							hits++
-						}
-					}
-				}
-				if gtTop10 > 0 {
-					recall10Sum += float64(hits) / float64(gtTop10)
+			hits := 0
+			for i := 0; i < topK; i++ {
+				gtID := fmt.Sprintf("sift_%d", localGT[q][i])
+				if resultIDs[gtID] {
+					hits++
 				}
 			}
+			recall10Sum += float64(hits) / float64(topK)
 		}
 
 		avgQuery := totalLatency / time.Duration(numQueries)
@@ -335,11 +315,10 @@ func TestSIFT1MScaling(t *testing.T) {
 			buildTime: buildTime,
 			avgQuery:  avgQuery,
 			recall10:  recall10,
-			memMB:     memUsedMB,
 		})
 
-		t.Logf("  Build: %v, Query: %v, Recall@10: %.1f%%, Mem: ~%.0f MB",
-			buildTime, avgQuery, recall10*100, memUsedMB)
+		t.Logf("  Build: %v, Query: %v, Recall@10: %.1f%%",
+			buildTime, avgQuery, recall10*100)
 
 		db.Close()
 	}
@@ -350,15 +329,15 @@ func TestSIFT1MScaling(t *testing.T) {
 	t.Log("                    SCALING SUMMARY")
 	t.Log("================================================================")
 	t.Log("")
-	t.Log("  Vectors    Build Time    Avg Query    Recall@10    Memory")
-	t.Log("  -------    ----------    ---------    ---------    ------")
+	t.Log("  Vectors    Build Time    Avg Query    Recall@10")
+	t.Log("  -------    ----------    ---------    ---------")
 	for _, r := range results {
-		t.Logf("  %7dK   %10v    %9v    %8.1f%%    ~%.0f MB",
-			r.size/1000, r.buildTime, r.avgQuery, r.recall10*100, r.memMB)
+		t.Logf("  %7dK   %10v    %9v    %8.1f%%",
+			r.size/1000, r.buildTime, r.avgQuery, r.recall10*100)
 	}
 	t.Log("")
 
-	// Verify scaling is sub-linear for query latency
+	// Verify scaling
 	if len(results) >= 2 {
 		first := results[0]
 		last := results[len(results)-1]
@@ -367,22 +346,42 @@ func TestSIFT1MScaling(t *testing.T) {
 
 		t.Logf("  Size ratio:    %.1fx (%dK -> %dK)", sizeRatio, first.size/1000, last.size/1000)
 		t.Logf("  Latency ratio: %.1fx", latencyRatio)
-
-		if latencyRatio < sizeRatio {
-			t.Logf("  Query latency scales sub-linearly (%.1fx latency for %.1fx data)", latencyRatio, sizeRatio)
-		} else {
-			t.Logf("  WARNING: Query latency scales super-linearly (%.1fx latency for %.1fx data)", latencyRatio, sizeRatio)
-		}
 	}
 
-	// Verify the largest dataset achieves reasonable recall.
-	// Note: recall naturally increases with subset size because ground truth
-	// is computed against the full 1M dataset — smaller subsets are missing
-	// many true nearest neighbors.
-	if len(results) > 0 {
-		last := results[len(results)-1]
-		if last.recall10 < 0.3 {
-			t.Errorf("Recall@10 at full scale too low: %.1f%% (expected >= 30%%)", last.recall10*100)
+	// All subsets should achieve good recall with proper ground truth
+	for _, r := range results {
+		if r.recall10 < 0.5 {
+			t.Errorf("Recall@10 too low at %dK: %.1f%% (expected >= 50%%)", r.size/1000, r.recall10*100)
 		}
 	}
+}
+
+// bruteForceTopK computes exact top-K nearest neighbors by cosine similarity.
+func bruteForceTopK(queries, vectors [][]float64, dim, topK int) [][]int {
+	type scored struct {
+		idx   int
+		score float64
+	}
+
+	result := make([][]int, len(queries))
+	for q := range queries {
+		scores := make([]scored, len(vectors))
+		for i := range vectors {
+			var dot, normA, normB float64
+			for d := 0; d < dim; d++ {
+				dot += queries[q][d] * vectors[i][d]
+				normA += queries[q][d] * queries[q][d]
+				normB += vectors[i][d] * vectors[i][d]
+			}
+			scores[i] = scored{idx: i, score: dot / (math.Sqrt(normA) * math.Sqrt(normB))}
+		}
+		sort.Slice(scores, func(i, j int) bool {
+			return scores[i].score > scores[j].score
+		})
+		result[q] = make([]int, topK)
+		for i := 0; i < topK && i < len(scores); i++ {
+			result[q][i] = scores[i].idx
+		}
+	}
+	return result
 }
