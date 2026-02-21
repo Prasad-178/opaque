@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"github.com/tuneinsight/lattigo/v5/core/rlwe"
-	"github.com/tuneinsight/lattigo/v5/schemes/bfv"
+	"github.com/tuneinsight/lattigo/v5/he/hefloat"
 
 	"github.com/opaque/opaque/go/internal/session"
 	"github.com/opaque/opaque/go/internal/store"
+	"github.com/opaque/opaque/go/pkg/crypto"
 	"github.com/opaque/opaque/go/pkg/lsh"
 )
 
@@ -49,19 +50,19 @@ type SearchService struct {
 	store    store.VectorStore
 	sessions *session.Manager
 
-	// BFV parameters (shared, no secret key!)
-	params  bfv.Parameters
-	encoder *bfv.Encoder
+	// CKKS parameters (shared, no secret key!)
+	params  hefloat.Parameters
+	encoder *hefloat.Encoder
 
 	mu sync.RWMutex
 }
 
 // NewSearchService creates a new search service.
 func NewSearchService(cfg Config, vectorStore store.VectorStore) (*SearchService, error) {
-	// Initialize BFV parameters (must match client)
-	params, err := bfv.NewParametersFromLiteral(bfv.ExampleParameters128BitLogN14LogQP438)
+	// Initialize CKKS parameters (must match client's crypto.NewParameters)
+	params, err := crypto.NewParameters()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create BFV parameters: %w", err)
+		return nil, fmt.Errorf("failed to create CKKS parameters: %w", err)
 	}
 
 	// Create LSH index
@@ -77,7 +78,7 @@ func NewSearchService(cfg Config, vectorStore store.VectorStore) (*SearchService
 		store:    vectorStore,
 		sessions: session.NewManager(cfg.MaxSessionTTL),
 		params:   params,
-		encoder:  bfv.NewEncoder(params),
+		encoder:  hefloat.NewEncoder(params),
 	}, nil
 }
 
@@ -145,24 +146,31 @@ func (s *SearchService) GetCandidates(ctx context.Context, sessionID string, lsh
 	return ids, distances, nil
 }
 
+// minCiphertextSize is the minimum valid serialized CKKS ciphertext size.
+// A valid ciphertext has metadata headers + at least one polynomial.
+const minCiphertextSize = 64
+
 // ComputeScores computes encrypted similarity scores for candidates.
 func (s *SearchService) ComputeScores(ctx context.Context, sessionID string, encryptedQuery []byte, candidateIDs []string) ([][]byte, []string, error) {
-	// Validate session and get public key
+	// Validate session
 	sess, err := s.sessions.Get(sessionID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid session: %w", err)
 	}
 
-	// Deserialize encrypted query
+	// Validate ciphertext input
+	if len(encryptedQuery) < minCiphertextSize {
+		return nil, nil, fmt.Errorf("failed to deserialize encrypted query: input too short (%d bytes)", len(encryptedQuery))
+	}
+
+	// Deserialize encrypted query (CKKS ciphertext)
 	encQuery := rlwe.NewCiphertext(s.params, 1, s.params.MaxLevel())
 	if _, err := encQuery.ReadFrom(bytes.NewReader(encryptedQuery)); err != nil {
 		return nil, nil, fmt.Errorf("failed to deserialize encrypted query: %w", err)
 	}
 
-	// Create evaluator with rotation keys from public key
-	// Note: For proper rotation support, we'd need evaluation keys from the client
-	// For now, use a basic evaluator
-	evaluator := bfv.NewEvaluator(s.params, nil)
+	// Create CKKS evaluator (no rotation keys — server does component-wise multiply only)
+	evaluator := hefloat.NewEvaluator(s.params, nil)
 
 	// Fetch vectors from store
 	vectors, err := s.store.GetByIDs(ctx, candidateIDs)
@@ -211,39 +219,22 @@ func (s *SearchService) ComputeScores(ctx context.Context, sessionID string, enc
 		}
 	}
 
-	// Needed to avoid unused variable error for sess
 	_ = sess
 
 	return encScores, candidateIDs, nil
 }
 
 // homomorphicDotProduct computes E(q · v) from E(q) and plaintext v.
-func (s *SearchService) homomorphicDotProduct(evaluator *bfv.Evaluator, encQuery *rlwe.Ciphertext, vector []float64) (*rlwe.Ciphertext, error) {
-	// Scale vector to fixed-point representation
-	// Must match the constants in pkg/crypto/crypto.go
-	const scaleFactor = 30000.0
-	const offset = 1.0
+// Uses CKKS which handles floating-point values natively.
+func (s *SearchService) homomorphicDotProduct(evaluator *hefloat.Evaluator, encQuery *rlwe.Ciphertext, vector []float64) (*rlwe.Ciphertext, error) {
+	// Pad vector to max slots (CKKS uses complex slots, real part only)
+	maxSlots := s.params.MaxSlots()
+	paddedVector := make([]float64, maxSlots)
+	copy(paddedVector, vector)
 
-	scaled := make([]uint64, len(vector))
-	for i, v := range vector {
-		// Add offset and scale (matching client encoding)
-		scaled[i] = uint64((v + offset) * scaleFactor)
-	}
-
-	// Pad to power of 2 if needed
-	n := 1
-	for n < len(scaled) {
-		n *= 2
-	}
-	if len(scaled) < n {
-		padded := make([]uint64, n)
-		copy(padded, scaled)
-		scaled = padded
-	}
-
-	// Encode as plaintext
-	pt := bfv.NewPlaintext(s.params, encQuery.Level())
-	if err := s.encoder.Encode(scaled, pt); err != nil {
+	// Encode as CKKS plaintext (floats directly, no integer scaling needed)
+	pt := hefloat.NewPlaintext(s.params, encQuery.Level())
+	if err := s.encoder.Encode(paddedVector, pt); err != nil {
 		return nil, fmt.Errorf("failed to encode vector: %w", err)
 	}
 
@@ -253,10 +244,14 @@ func (s *SearchService) homomorphicDotProduct(evaluator *bfv.Evaluator, encQuery
 		return nil, fmt.Errorf("failed to multiply: %w", err)
 	}
 
-	// Note: Summation via rotations requires evaluation keys
-	// Without them, we return the component-wise product
-	// The client will need to sum after decryption, or we need
-	// to implement a key exchange for evaluation keys
+	// Rescale after multiplication to manage scale growth
+	if err := evaluator.Rescale(result, result); err != nil {
+		return nil, fmt.Errorf("failed to rescale: %w", err)
+	}
+
+	// Note: Summation via rotations requires evaluation keys from the client.
+	// Without them, we return the component-wise product.
+	// The client sums after decryption.
 
 	return result, nil
 }
