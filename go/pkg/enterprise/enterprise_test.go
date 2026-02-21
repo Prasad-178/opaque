@@ -93,8 +93,9 @@ func TestConfigClone(t *testing.T) {
 	}
 
 	// Modify clone, original should not change
-	clone.AESKey[0] = 0xFF
-	if cfg.AESKey[0] == 0xFF {
+	original := cfg.AESKey[0]
+	clone.AESKey[0] = original ^ 0xFF // guaranteed different from original
+	if cfg.AESKey[0] != original {
 		t.Error("modifying clone should not affect original")
 	}
 }
