@@ -64,8 +64,8 @@ GitHub Actions CI pipeline runs lint + tests on every push/PR. Weekly benchmark 
 ### ~~gRPC Service~~ (Done)
 Complete gRPC server implementation with all 7 RPC handlers (RegisterKey, GetPlanes, GetCandidates, ComputeScores, ComputeScoresStream, Search, HealthCheck). Includes recovery/logging interceptors, optional TLS, and full integration tests. See `go/pkg/grpcserver/`.
 
-### SIFT1M Benchmarks
-Extend benchmarks to the full SIFT1M dataset (1 million vectors) to validate scaling behavior. Currently tested on SIFT10K (10K vectors) and synthetic 100K vectors.
+### ~~SIFT1M Benchmarks~~ (Done)
+Benchmark suite for the full SIFT1M dataset (1 million 128-dim vectors). Includes accuracy test with Recall@1/10/100 against ground truth, and scaling test across 100K/250K/500K/1M subsets. Uses library API (`opaque.NewDB`). Download script at `scripts/download_sift1m.sh`, benchmark at `go/test/sift1m_benchmark_test.go` (build tag: `sift1m`). Runs weekly in CI with dataset caching.
 
 ### GPU Acceleration
 Lattigo supports GPU acceleration for HE operations. Investigate and benchmark CUDA/Metal backends for further latency reduction.
