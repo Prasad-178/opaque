@@ -52,6 +52,7 @@ import (
 	"github.com/opaque/opaque/go/pkg/client"
 	"github.com/opaque/opaque/go/pkg/enterprise"
 	"github.com/opaque/opaque/go/pkg/hierarchical"
+	"github.com/opaque/opaque/go/pkg/pca"
 )
 
 // StorageBackend selects where encrypted vector blobs are stored.
@@ -119,6 +120,14 @@ type Config struct {
 	// A value of 2 means each vector is stored in its 2 nearest clusters.
 	// Default: 1 (no redundancy).
 	RedundantAssignments int
+
+	// PCADimension enables optional PCA dimensionality reduction.
+	// When set to a positive value, vectors are projected to this dimension
+	// before clustering and encryption, reducing latency and bandwidth.
+	// The PCA transform is applied client-side, so it has no privacy impact.
+	// Must be less than Dimension. Set to 0 to disable (default).
+	// Default: 0 (disabled).
+	PCADimension int
 }
 
 // Result is a single search result containing the vector ID and its similarity score.
@@ -160,6 +169,7 @@ type DB struct {
 	// Built state (populated by Build, used by Search).
 	blobStore    blob.Store
 	searchClient *client.EnterpriseHierarchicalClient
+	pcaModel     *pca.PCA // nil when PCA is disabled
 }
 
 // NewDB creates a new vector search database with the given configuration.
@@ -317,7 +327,17 @@ func (db *DB) Search(ctx context.Context, query []float64, topK int) ([]Result, 
 		return nil, fmt.Errorf("opaque: index not built; call Build before Search")
 	}
 
-	sr, err := db.searchClient.SearchBatch(ctx, query, topK)
+	// Apply PCA transform to query if PCA is enabled.
+	searchQuery := query
+	if db.pcaModel != nil {
+		reduced, err := db.pcaModel.Transform(query)
+		if err != nil {
+			return nil, fmt.Errorf("opaque: PCA transform failed: %w", err)
+		}
+		searchQuery = reduced
+	}
+
+	sr, err := db.searchClient.SearchBatch(ctx, searchQuery, topK)
 	if err != nil {
 		return nil, fmt.Errorf("opaque: search failed: %w", err)
 	}
@@ -350,6 +370,7 @@ func (db *DB) Close() error {
 	defer db.mu.Unlock()
 
 	db.searchClient = nil
+	db.pcaModel = nil
 	db.closeStoreLocked()
 	db.state = stateEmpty
 	return nil
@@ -361,6 +382,25 @@ func (db *DB) Close() error {
 func (db *DB) buildLocked(ctx context.Context) error {
 	if len(db.pendingIDs) == 0 {
 		return fmt.Errorf("opaque: no vectors added; call Add or AddBatch before Build")
+	}
+
+	// Apply PCA dimensionality reduction if configured.
+	indexVectors := db.pendingVectors
+	indexDim := db.cfg.Dimension
+	if db.cfg.PCADimension > 0 {
+		model, err := pca.Fit(db.pendingVectors, db.cfg.PCADimension)
+		if err != nil {
+			return fmt.Errorf("opaque: PCA fitting failed: %w", err)
+		}
+		reduced, err := model.TransformBatch(db.pendingVectors)
+		if err != nil {
+			return fmt.Errorf("opaque: PCA transform failed: %w", err)
+		}
+		db.pcaModel = model
+		indexVectors = reduced
+		indexDim = db.cfg.PCADimension
+	} else {
+		db.pcaModel = nil
 	}
 
 	// Create blob store.
@@ -376,10 +416,10 @@ func (db *DB) buildLocked(ctx context.Context) error {
 	_, enterpriseCfg, err := hierarchical.BuildKMeansIndex(
 		ctx,
 		enterpriseID,
-		db.cfg.Dimension,
+		indexDim,
 		db.cfg.NumClusters,
 		db.pendingIDs,
-		db.pendingVectors,
+		indexVectors,
 		store,
 	)
 	if err != nil {
@@ -390,8 +430,8 @@ func (db *DB) buildLocked(ctx context.Context) error {
 	// Construct credentials directly (bypass auth service for library usage).
 	creds := makeCredentials(enterpriseCfg)
 
-	// Map library config to internal search config.
-	searchCfg := db.makeSearchConfig(enterpriseCfg)
+	// Map library config to internal search config (use effective dimension post-PCA).
+	searchCfg := db.makeSearchConfig(enterpriseCfg, indexDim)
 
 	// Create the search client with configurable pool size.
 	searchClient, err := client.NewEnterpriseHierarchicalClientWithPoolSize(
@@ -444,11 +484,11 @@ func makeCredentials(ecfg *enterprise.Config) *auth.ClientCredentials {
 
 // makeSearchConfig maps the library Config to the internal hierarchical.Config
 // used by the search client.
-func (db *DB) makeSearchConfig(ecfg *enterprise.Config) hierarchical.Config {
+func (db *DB) makeSearchConfig(ecfg *enterprise.Config, effectiveDim int) hierarchical.Config {
 	maxProbe := max(db.cfg.NumClusters*3/4, db.cfg.TopClusters)
 
 	return hierarchical.Config{
-		Dimension:            db.cfg.Dimension,
+		Dimension:            effectiveDim,
 		NumSuperBuckets:      db.cfg.NumClusters,
 		NumSubBuckets:        1,
 		TopSuperBuckets:      db.cfg.TopClusters,
@@ -515,6 +555,9 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Storage == File && cfg.StoragePath == "" {
 		return fmt.Errorf("opaque: StoragePath is required when Storage is File")
+	}
+	if cfg.PCADimension != 0 && cfg.PCADimension >= cfg.Dimension {
+		return fmt.Errorf("opaque: PCADimension (%d) must be less than Dimension (%d)", cfg.PCADimension, cfg.Dimension)
 	}
 	return nil
 }

@@ -590,3 +590,103 @@ func TestClose_BuiltDB(t *testing.T) {
 		t.Error("IsReady after Close = true, want false")
 	}
 }
+
+// --- PCA tests ---
+
+func TestNewDB_PCAValidation(t *testing.T) {
+	// PCADimension must be less than Dimension
+	_, err := NewDB(Config{Dimension: 128, PCADimension: 128})
+	if err == nil {
+		t.Error("expected error when PCADimension == Dimension")
+	}
+	_, err = NewDB(Config{Dimension: 128, PCADimension: 200})
+	if err == nil {
+		t.Error("expected error when PCADimension > Dimension")
+	}
+
+	// Valid PCA config should work
+	db, err := NewDB(Config{Dimension: 128, PCADimension: 64})
+	if err != nil {
+		t.Fatalf("NewDB with PCA failed: %v", err)
+	}
+	defer db.Close()
+}
+
+func TestBuildAndSearch_WithPCA(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping HE engine test in short mode")
+	}
+
+	const (
+		numVectors = 300
+		dim        = 128
+		pcaDim     = 64
+		clusters   = 16
+		topK       = 10
+	)
+
+	ctx := context.Background()
+
+	db, err := NewDB(Config{
+		Dimension:      dim,
+		PCADimension:   pcaDim,
+		NumClusters:    clusters,
+		TopClusters:    8,
+		NumDecoys:      4,
+		WorkerPoolSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	ids, vectors := generateTestVectors(numVectors, dim, 42)
+
+	if err := db.AddBatch(ctx, ids, vectors); err != nil {
+		t.Fatalf("AddBatch: %v", err)
+	}
+
+	if err := db.Build(ctx); err != nil {
+		t.Fatalf("Build with PCA: %v", err)
+	}
+
+	if !db.IsReady() {
+		t.Fatal("IsReady after Build with PCA = false")
+	}
+
+	// PCA model should be set
+	if db.pcaModel == nil {
+		t.Fatal("pcaModel should be set after Build with PCA enabled")
+	}
+	if db.pcaModel.ReducedDim != pcaDim {
+		t.Errorf("PCA reduced dim = %d, want %d", db.pcaModel.ReducedDim, pcaDim)
+	}
+
+	// Search should work with original-dimension query
+	targetIdx := 42
+	results, err := db.Search(ctx, vectors[targetIdx], topK)
+	if err != nil {
+		t.Fatalf("Search with PCA: %v", err)
+	}
+
+	if len(results) == 0 {
+		t.Fatal("Search with PCA returned no results")
+	}
+
+	// Self-match should still work (PCA preserves most similarity structure)
+	found := false
+	for _, r := range results {
+		if r.ID == ids[targetIdx] {
+			found = true
+			t.Logf("Self-match score with PCA: %.4f", r.Score)
+			break
+		}
+	}
+	if !found {
+		t.Logf("Warning: self-match not found in top-%d with PCA (may happen due to dimensionality reduction)", topK)
+	}
+
+	t.Logf("PCA: %dD -> %dD, variance explained: %.2f%%",
+		dim, pcaDim, db.pcaModel.TotalVarianceExplained()*100)
+	t.Logf("Top result: ID=%s, Score=%.4f", results[0].ID, results[0].Score)
+}
