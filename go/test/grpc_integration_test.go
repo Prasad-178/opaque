@@ -18,6 +18,7 @@ import (
 	pb "github.com/opaque/opaque/go/api/proto"
 	"github.com/opaque/opaque/go/internal/service"
 	"github.com/opaque/opaque/go/internal/store"
+	"github.com/opaque/opaque/go/pkg/crypto"
 	"github.com/opaque/opaque/go/pkg/grpcserver"
 )
 
@@ -117,7 +118,7 @@ func TestGRPCFullRoundTrip(t *testing.T) {
 
 	// Step 1: Register a key
 	regResp, err := client.RegisterKey(ctx, &pb.RegisterKeyRequest{
-		PublicKey:         []byte("test-bfv-public-key"),
+		PublicKey:         []byte("test-public-key"),
 		SessionTtlSeconds: 3600,
 	})
 	if err != nil {
@@ -216,12 +217,11 @@ func TestGRPCComputeScoresStream(t *testing.T) {
 		t.Skip("no candidates returned, skipping stream test")
 	}
 
-	// Note: ComputeScoresStream requires a valid BFV ciphertext.
-	// We test that the stream connection works and returns an error for invalid input.
+	// Test with invalid ciphertext — should return an error, not panic
 	stream, err := client.ComputeScoresStream(ctx, &pb.ScoreRequest{
-		SessionId:     regResp.SessionId,
+		SessionId:      regResp.SessionId,
 		EncryptedQuery: []byte("not-a-real-ciphertext"),
-		CandidateIds:  candResp.Ids[:1],
+		CandidateIds:   candResp.Ids[:1],
 	})
 	if err != nil {
 		t.Fatalf("ComputeScoresStream call failed: %v", err)
@@ -230,9 +230,141 @@ func TestGRPCComputeScoresStream(t *testing.T) {
 	// Read from stream — expect an error since the ciphertext is invalid
 	_, err = stream.Recv()
 	if err == nil || err == io.EOF {
-		t.Log("Received response (ciphertext was accepted)")
+		t.Error("expected error for invalid ciphertext, got success")
 	} else {
 		t.Logf("Got expected error for invalid ciphertext: %v", err)
+	}
+}
+
+func TestGRPCComputeScoresWithCKKS(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping CKKS gRPC test in short mode")
+	}
+
+	const dim = 8
+
+	client, cleanup := startTestGRPCServer(t, 50, dim)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Register session
+	regResp, err := client.RegisterKey(ctx, &pb.RegisterKeyRequest{
+		PublicKey:         []byte("test-key"),
+		SessionTtlSeconds: 3600,
+	})
+	if err != nil {
+		t.Fatalf("RegisterKey failed: %v", err)
+	}
+
+	// Get candidates
+	candResp, err := client.GetCandidates(ctx, &pb.CandidateRequest{
+		SessionId:     regResp.SessionId,
+		LshHash:       []byte{0x01, 0x02},
+		NumCandidates: 5,
+	})
+	if err != nil {
+		t.Fatalf("GetCandidates failed: %v", err)
+	}
+	if len(candResp.Ids) == 0 {
+		t.Skip("no candidates returned")
+	}
+
+	// Create a real CKKS engine and encrypt a query vector
+	engine, err := crypto.NewClientEngine()
+	if err != nil {
+		t.Fatalf("failed to create CKKS engine: %v", err)
+	}
+
+	// Create a normalized query vector
+	query := make([]float64, dim)
+	rng := rand.New(rand.NewSource(99))
+	var norm float64
+	for i := range query {
+		query[i] = rng.NormFloat64()
+		norm += query[i] * query[i]
+	}
+	norm = math.Sqrt(norm)
+	for i := range query {
+		query[i] /= norm
+	}
+
+	// Encrypt the query
+	encQuery, err := engine.EncryptVector(query)
+	if err != nil {
+		t.Fatalf("failed to encrypt query: %v", err)
+	}
+
+	// Serialize the ciphertext
+	encQueryBytes, err := engine.SerializeCiphertext(encQuery)
+	if err != nil {
+		t.Fatalf("failed to serialize ciphertext: %v", err)
+	}
+	t.Logf("Encrypted query size: %d bytes", len(encQueryBytes))
+
+	// Call ComputeScores via gRPC with real CKKS ciphertext
+	scoreResp, err := client.ComputeScores(ctx, &pb.ScoreRequest{
+		SessionId:      regResp.SessionId,
+		EncryptedQuery: encQueryBytes,
+		CandidateIds:   candResp.Ids[:1],
+	})
+	if err != nil {
+		t.Fatalf("ComputeScores failed: %v", err)
+	}
+
+	if len(scoreResp.EncryptedScores) != 1 {
+		t.Fatalf("expected 1 encrypted score, got %d", len(scoreResp.EncryptedScores))
+	}
+	if len(scoreResp.Ids) != 1 {
+		t.Fatalf("expected 1 ID, got %d", len(scoreResp.Ids))
+	}
+	t.Logf("Got encrypted score for %s (%d bytes)", scoreResp.Ids[0], len(scoreResp.EncryptedScores[0]))
+
+	// Decrypt the result on client side
+	encResult, err := engine.DeserializeCiphertext(scoreResp.EncryptedScores[0])
+	if err != nil {
+		t.Fatalf("failed to deserialize score ciphertext: %v", err)
+	}
+
+	// Decrypt component-wise product (server doesn't have rotation keys for summation)
+	components, err := engine.DecryptVector(encResult, dim)
+	if err != nil {
+		t.Fatalf("failed to decrypt score: %v", err)
+	}
+
+	// Sum components client-side to get the dot product
+	var dotProduct float64
+	for _, c := range components {
+		dotProduct += c
+	}
+
+	t.Logf("Decrypted dot product: %.6f", dotProduct)
+
+	// Dot product of normalized vectors should be in [-1, 1]
+	if dotProduct < -1.5 || dotProduct > 1.5 {
+		t.Errorf("dot product %.6f outside expected range [-1.5, 1.5]", dotProduct)
+	}
+
+	// Test streaming variant
+	stream, err := client.ComputeScoresStream(ctx, &pb.ScoreRequest{
+		SessionId:      regResp.SessionId,
+		EncryptedQuery: encQueryBytes,
+		CandidateIds:   candResp.Ids[:1],
+	})
+	if err != nil {
+		t.Fatalf("ComputeScoresStream failed: %v", err)
+	}
+
+	chunk, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("stream.Recv failed: %v", err)
+	}
+	t.Logf("Stream: got score for %s (%d bytes)", chunk.Id, len(chunk.EncryptedScore))
+
+	// Verify stream ends
+	_, err = stream.Recv()
+	if err != io.EOF {
+		t.Errorf("expected EOF after last chunk, got: %v", err)
 	}
 }
 
