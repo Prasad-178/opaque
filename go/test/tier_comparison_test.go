@@ -19,6 +19,10 @@ import (
 
 // TestTier1VsTier2Comparison runs a comprehensive comparison of both tiers
 func TestTier1VsTier2Comparison(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping tier comparison in short mode")
+	}
+
 	fmt.Println("============================================================")
 	fmt.Println("TIER 1 vs TIER 2 COMPREHENSIVE COMPARISON")
 	fmt.Println("============================================================")

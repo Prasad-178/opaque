@@ -195,6 +195,10 @@ func TestOptimizedTwoStageSearch(t *testing.T) {
 
 // TestHashMaskingPrivacy verifies hash masking works correctly.
 func TestHashMaskingPrivacy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping hash masking privacy test in short mode")
+	}
+
 	dimension := 128
 
 	// Create two clients with different session keys
@@ -282,6 +286,10 @@ func TestHashMaskingPrivacy(t *testing.T) {
 // to isolate HE accuracy from LSH candidate selection. LSH recall is
 // validated separately in SIFT accuracy tests and enterprise benchmarks.
 func TestTwoStageAccuracy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping two-stage accuracy test in short mode")
+	}
+
 	rand.Seed(42)
 
 	const (

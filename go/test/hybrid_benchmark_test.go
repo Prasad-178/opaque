@@ -16,6 +16,10 @@ import (
 
 // TestHybridBenchmark compares Tier 1, Tier 2, and Hybrid (Tier 2.5)
 func TestHybridBenchmark(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping hybrid benchmark in short mode")
+	}
+
 	fmt.Println("============================================================")
 	fmt.Println("TIER 1 vs TIER 2 vs HYBRID (TIER 2.5) COMPARISON")
 	fmt.Println("============================================================")
