@@ -111,6 +111,7 @@ make lint         # go vet ./...
 make test-bench   # Micro-benchmarks (crypto, LSH)
 make test-sift    # SIFT10K accuracy test
 make test-100k    # 100K vector benchmark
+make test-sift1m  # SIFT1M benchmark (requires download, ~5 min)
 ```
 
 Or run directly:
@@ -128,6 +129,10 @@ go test -v -run TestSIFTKMeansEndToEnd ./pkg/client/ -timeout 5m
 # 100K benchmark with recall (synthetic, ~8 min)
 go test -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 10m
 
+# SIFT1M benchmark (real dataset, ~5 min; download first)
+../scripts/download_sift1m.sh
+go test -tags sift1m -v -run TestSIFT1MAccuracy ./test/ -timeout 45m
+
 # Core crypto micro-benchmarks
 go test -bench=. -benchmem ./pkg/crypto/... ./pkg/lsh/...
 ```
@@ -136,7 +141,7 @@ go test -bench=. -benchmem ./pkg/crypto/... ./pkg/lsh/...
 
 GitHub Actions runs automatically on push/PR:
 - **CI** (`.github/workflows/ci.yml`): lint, short tests, core tests, crypto tests, API integration tests
-- **Benchmarks** (`.github/workflows/benchmarks.yml`): weekly + manual trigger for micro-benchmarks, SIFT10K accuracy, and 100K performance tracking
+- **Benchmarks** (`.github/workflows/benchmarks.yml`): weekly + manual trigger for micro-benchmarks, SIFT10K accuracy, 100K performance, and SIFT1M scaling
 
 ## Development Server
 

@@ -20,10 +20,12 @@ Opaque is a working privacy-preserving vector search system implemented in Go. T
 - REST API server with auth middleware
 - Development server with test data generation
 - SIFT10K accuracy tests with real embeddings and ground truth
+- SIFT1M benchmarks (1M vectors, 100% Recall@10, ~2s query latency)
+- Optional PCA dimensionality reduction (client-side, no privacy impact)
+- gRPC service with full CKKS integration and streaming support
 
 ### Known Limitations
 
-- ~~gRPC service registration is incomplete~~ (Done)
 - Benchmarks run on a single machine (Apple M4 Pro) only
 
 ---
