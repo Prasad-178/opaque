@@ -73,8 +73,8 @@ Lattigo supports GPU acceleration for HE operations. Investigate and benchmark C
 ### HNSW Index
 Replace or complement k-means clustering with HNSW (Hierarchical Navigable Small World) for improved recall characteristics at scale.
 
-### PCA Dimensionality Reduction
-Add optional PCA to reduce vector dimensions (e.g., 768D -> 128D) before encryption, trading some accuracy for significant latency improvement.
+### ~~PCA Dimensionality Reduction~~ (Done)
+Optional PCA via SVD in `go/pkg/pca/`. Enabled with `Config.PCADimension`. Applied client-side before encryption — no privacy impact. 128D→64D achieves 77% variance retention with perfect self-match recall.
 
 ---
 
