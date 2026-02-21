@@ -51,8 +51,9 @@ func TestNewDB_Defaults(t *testing.T) {
 	if db.cfg.NumClusters != 64 {
 		t.Errorf("default NumClusters = %d, want 64", db.cfg.NumClusters)
 	}
-	if db.cfg.TopClusters != 32 {
-		t.Errorf("default TopClusters = %d, want 32", db.cfg.TopClusters)
+	// Default: max(NumClusters/16, 4) = max(64/16, 4) = 4
+	if db.cfg.TopClusters != 4 {
+		t.Errorf("default TopClusters = %d, want 4", db.cfg.TopClusters)
 	}
 	if db.cfg.NumDecoys != 8 {
 		t.Errorf("default NumDecoys = %d, want 8", db.cfg.NumDecoys)

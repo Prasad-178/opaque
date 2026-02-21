@@ -82,9 +82,10 @@ type Config struct {
 	NumClusters int
 
 	// TopClusters is the number of clusters probed during each search.
-	// Higher values improve recall at the cost of more computation and bandwidth.
+	// Higher values improve recall at the cost of more computation, bandwidth,
+	// and weaker access pattern privacy (more clusters probed = easier to infer intent).
 	// Must be <= NumClusters.
-	// Default: NumClusters / 2.
+	// Default: max(NumClusters / 16, 4). For 64 clusters this is 4 (~6% of data).
 	TopClusters int
 
 	// NumDecoys is the number of extra clusters fetched per search to hide
@@ -485,7 +486,7 @@ func makeCredentials(ecfg *enterprise.Config) *auth.ClientCredentials {
 // makeSearchConfig maps the library Config to the internal hierarchical.Config
 // used by the search client.
 func (db *DB) makeSearchConfig(ecfg *enterprise.Config, effectiveDim int) hierarchical.Config {
-	maxProbe := max(db.cfg.NumClusters*3/4, db.cfg.TopClusters)
+	maxProbe := max(db.cfg.TopClusters*2, db.cfg.TopClusters)
 
 	return hierarchical.Config{
 		Dimension:            effectiveDim,
@@ -525,7 +526,7 @@ func applyDefaults(cfg *Config) {
 		cfg.NumClusters = 64
 	}
 	if cfg.TopClusters <= 0 {
-		cfg.TopClusters = cfg.NumClusters / 2
+		cfg.TopClusters = max(cfg.NumClusters/16, 4)
 	}
 	if cfg.NumDecoys <= 0 {
 		cfg.NumDecoys = 8
