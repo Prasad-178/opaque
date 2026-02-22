@@ -474,7 +474,7 @@ func (db *DB) buildLocked(ctx context.Context) error {
 	builderCfg := hierarchical.ConfigFromEnterprise(ecfgBuild)
 	builderCfg.NumKMeansInit = db.cfg.NumKMeansInit
 	builderCfg.RedundantAssignments = db.cfg.RedundantAssignments
-	builderCfg.NormalizedStorage = *db.cfg.NormalizedStorage
+	builderCfg.NormalizedStorage = db.cfg.normalizedStorage()
 	builder, err := hierarchical.NewKMeansBuilder(builderCfg, ecfgBuild)
 	if err != nil {
 		store.Close()
@@ -561,7 +561,7 @@ func (db *DB) makeSearchConfig(ecfg *enterprise.Config, effectiveDim int) hierar
 		RedundantAssignments: db.cfg.RedundantAssignments,
 		LSHSuperSeed:         ecfg.GetLSHSeedAsInt64(),
 		LSHSubSeed:           ecfg.GetSubLSHSeedAsInt64(),
-		NormalizedStorage:    *db.cfg.NormalizedStorage,
+		NormalizedStorage:    db.cfg.normalizedStorage(),
 		ProbeStrategy:        db.cfg.ProbeStrategy,
 		GapMultiplier:        db.cfg.GapMultiplier,
 	}
@@ -573,6 +573,15 @@ func (db *DB) closeStoreLocked() {
 		db.blobStore.Close()
 		db.blobStore = nil
 	}
+}
+
+// normalizedStorage returns whether vectors should be stored pre-normalized.
+// Defaults to true when NormalizedStorage is nil.
+func (cfg *Config) normalizedStorage() bool {
+	if cfg.NormalizedStorage == nil {
+		return true
+	}
+	return *cfg.NormalizedStorage
 }
 
 // enterpriseID returns the configured enterprise ID or generates a random one.

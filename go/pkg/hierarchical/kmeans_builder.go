@@ -3,6 +3,7 @@ package hierarchical
 import (
 	"context"
 	"fmt"
+	"math"
 	"runtime"
 	"sync"
 	"time"
@@ -265,9 +266,14 @@ func (b *KMeansBuilder) GetClusterStats() ClusterStats {
 	}
 
 	sizes := b.kmeans.GetClusterSizes()
-	minSize, maxSize, totalSize := len(sizes), 0, 0
+	minSize := math.MaxInt
+	maxSize, totalSize, emptyClusters := 0, 0, 0
 	for _, s := range sizes {
-		if s < minSize && s > 0 {
+		if s == 0 {
+			emptyClusters++
+			continue
+		}
+		if s < minSize {
 			minSize = s
 		}
 		if s > maxSize {
@@ -275,12 +281,8 @@ func (b *KMeansBuilder) GetClusterStats() ClusterStats {
 		}
 		totalSize += s
 	}
-
-	emptyClusters := 0
-	for _, s := range sizes {
-		if s == 0 {
-			emptyClusters++
-		}
+	if minSize == math.MaxInt {
+		minSize = 0 // All clusters empty (shouldn't happen)
 	}
 
 	return ClusterStats{
