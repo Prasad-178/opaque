@@ -84,6 +84,11 @@ type Config struct {
 	// LSH seeds for super and sub bucket assignment
 	LSHSuperSeed int64
 	LSHSubSeed   int64
+
+	// NumKMeansInit is the number of k-means initializations to run during Build.
+	// Multiple initializations run in parallel; the result with the lowest inertia wins.
+	// Default: 1 (single initialization).
+	NumKMeansInit int
 }
 
 // DefaultConfig returns sensible defaults for 100K vectors.

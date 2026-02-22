@@ -104,6 +104,7 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 		MaxIter:   100,
 		Tolerance: 1e-4,
 		Seed:      b.enterpriseCfg.GetLSHSeedAsInt64(), // Use enterprise seed for reproducibility
+		NumInit:   b.config.NumKMeansInit,
 	}
 	b.kmeans = cluster.NewKMeans(kmCfg)
 	if err := b.kmeans.Fit(normalizedVecs); err != nil {

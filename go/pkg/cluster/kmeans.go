@@ -14,9 +14,11 @@ type KMeans struct {
 	MaxIter    int         // Maximum iterations
 	Tolerance  float64     // Convergence tolerance
 	Seed       int64       // Random seed for reproducibility
+	NumInit    int         // Number of initializations (best inertia wins)
 	Centroids  [][]float64 // Cluster centroids (after Fit)
 	Labels     []int       // Cluster assignment for each vector (after Fit)
 	Iterations int         // Actual iterations run
+	Inertia    float64     // Final inertia (sum of squared distances to centroids)
 }
 
 // Config holds k-means configuration.
@@ -25,6 +27,7 @@ type Config struct {
 	MaxIter   int     // Maximum iterations (default: 100)
 	Tolerance float64 // Convergence tolerance (default: 1e-4)
 	Seed      int64   // Random seed
+	NumInit   int     // Number of initializations to try (default: 1). Best inertia wins.
 }
 
 // DefaultConfig returns default k-means configuration.
@@ -50,11 +53,12 @@ func NewKMeans(cfg Config) *KMeans {
 		MaxIter:   cfg.MaxIter,
 		Tolerance: cfg.Tolerance,
 		Seed:      cfg.Seed,
+		NumInit:   cfg.NumInit,
 	}
 }
 
 // Fit runs k-means clustering on the given vectors.
-// Returns cluster centroids and labels for each vector.
+// If NumInit > 1, runs multiple initializations in parallel and keeps the best result.
 func (km *KMeans) Fit(vectors [][]float64) error {
 	if len(vectors) == 0 {
 		return fmt.Errorf("no vectors provided")
@@ -63,8 +67,79 @@ func (km *KMeans) Fit(vectors [][]float64) error {
 		return fmt.Errorf("k (%d) cannot be larger than number of vectors (%d)", km.K, len(vectors))
 	}
 
+	numInit := km.numInit()
+	if numInit <= 1 {
+		return km.fitOnce(vectors, km.Seed)
+	}
+
+	// Run multiple initializations in parallel, keep the best (lowest inertia)
+	type initResult struct {
+		centroids  [][]float64
+		labels     []int
+		iterations int
+		inertia    float64
+		err        error
+	}
+	results := make([]initResult, numInit)
+
+	var wg sync.WaitGroup
+	for n := 0; n < numInit; n++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			candidate := &KMeans{
+				K:         km.K,
+				MaxIter:   km.MaxIter,
+				Tolerance: km.Tolerance,
+				Seed:      km.Seed + int64(n),
+			}
+			if err := candidate.fitOnce(vectors, candidate.Seed); err != nil {
+				results[n] = initResult{err: err}
+				return
+			}
+			results[n] = initResult{
+				centroids:  candidate.Centroids,
+				labels:     candidate.Labels,
+				iterations: candidate.Iterations,
+				inertia:    candidate.Inertia,
+			}
+		}(n)
+	}
+	wg.Wait()
+
+	// Pick the best result (lowest inertia)
+	bestIdx := -1
+	bestInertia := math.MaxFloat64
+	for i, r := range results {
+		if r.err != nil {
+			return r.err
+		}
+		if r.inertia < bestInertia {
+			bestInertia = r.inertia
+			bestIdx = i
+		}
+	}
+
+	best := results[bestIdx]
+	km.Centroids = best.centroids
+	km.Labels = best.labels
+	km.Iterations = best.iterations
+	km.Inertia = best.inertia
+	return nil
+}
+
+// numInit returns the effective number of initializations.
+func (km *KMeans) numInit() int {
+	if km.NumInit > 1 {
+		return km.NumInit
+	}
+	return 1
+}
+
+// fitOnce runs a single k-means initialization and iteration cycle.
+func (km *KMeans) fitOnce(vectors [][]float64, seed int64) error {
 	dim := len(vectors[0])
-	rng := rand.New(rand.NewSource(km.Seed))
+	rng := rand.New(rand.NewSource(seed))
 
 	// Initialize centroids using k-means++ for better starting points
 	km.Centroids = kmeansppInit(vectors, km.K, rng)
@@ -79,6 +154,7 @@ func (km *KMeans) Fit(vectors [][]float64) error {
 		// Check convergence
 		if math.Abs(prevInertia-inertia) < km.Tolerance*float64(len(vectors)) {
 			km.Iterations = iter + 1
+			km.Inertia = inertia
 			break
 		}
 		prevInertia = inertia
@@ -87,6 +163,7 @@ func (km *KMeans) Fit(vectors [][]float64) error {
 		km.updateCentroids(vectors, dim)
 
 		km.Iterations = iter + 1
+		km.Inertia = inertia
 	}
 
 	return nil

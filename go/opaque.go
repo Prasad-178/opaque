@@ -129,6 +129,13 @@ type Config struct {
 	// Must be less than Dimension. Set to 0 to disable (default).
 	// Default: 0 (disabled).
 	PCADimension int
+
+	// NumKMeansInit is the number of k-means clustering initializations to run.
+	// Multiple runs with different seeds are executed in parallel, and the result
+	// with the lowest inertia (best cluster quality) is kept.
+	// Higher values improve cluster quality at the cost of more CPU during Build.
+	// Default: 1 (single initialization).
+	NumKMeansInit int
 }
 
 // Result is a single search result containing the vector ID and its similarity score.
@@ -414,19 +421,26 @@ func (db *DB) buildLocked(ctx context.Context) error {
 	enterpriseID := db.cfg.enterpriseID()
 
 	// Build the k-means index: clusters vectors, encrypts with AES-256-GCM, stores blobs.
-	_, enterpriseCfg, err := hierarchical.BuildKMeansIndex(
-		ctx,
-		enterpriseID,
-		indexDim,
-		db.cfg.NumClusters,
-		db.pendingIDs,
-		indexVectors,
-		store,
-	)
+	ecfgBuild, err := enterprise.NewConfig(enterpriseID, indexDim, db.cfg.NumClusters)
+	if err != nil {
+		store.Close()
+		return fmt.Errorf("opaque: enterprise config: %w", err)
+	}
+	builderCfg := hierarchical.ConfigFromEnterprise(ecfgBuild)
+	builderCfg.NumKMeansInit = db.cfg.NumKMeansInit
+	builderCfg.RedundantAssignments = db.cfg.RedundantAssignments
+	builder, err := hierarchical.NewKMeansBuilder(builderCfg, ecfgBuild)
+	if err != nil {
+		store.Close()
+		return fmt.Errorf("opaque: builder init: %w", err)
+	}
+	_, err = builder.Build(ctx, db.pendingIDs, indexVectors, store)
 	if err != nil {
 		store.Close()
 		return fmt.Errorf("opaque: index build failed: %w", err)
 	}
+	enterpriseCfg := builder.GetEnterpriseConfig()
+	enterpriseCfg.UpdatedAt = time.Now()
 
 	// Construct credentials directly (bypass auth service for library usage).
 	creds := makeCredentials(enterpriseCfg)
