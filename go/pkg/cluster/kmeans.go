@@ -269,6 +269,7 @@ func (km *KMeans) assignClusters(vectors [][]float64) float64 {
 }
 
 // updateCentroids recomputes centroids as means of assigned vectors.
+// Empty clusters are recovered by reassigning the farthest vector from the largest cluster.
 func (km *KMeans) updateCentroids(vectors [][]float64, dim int) {
 	// Reset centroids and counts
 	counts := make([]int, km.K)
@@ -294,7 +295,46 @@ func (km *KMeans) updateCentroids(vectors [][]float64, dim int) {
 			}
 			km.Centroids[c] = newCentroids[c]
 		}
-		// If cluster is empty, keep old centroid
+	}
+
+	// Recover empty clusters: reassign the farthest vector from the largest cluster
+	for c := 0; c < km.K; c++ {
+		if counts[c] > 0 {
+			continue
+		}
+
+		// Find the largest cluster
+		largestCluster := 0
+		for j := 1; j < km.K; j++ {
+			if counts[j] > counts[largestCluster] {
+				largestCluster = j
+			}
+		}
+		if counts[largestCluster] <= 1 {
+			continue // Can't split a cluster with only 1 vector
+		}
+
+		// Find the vector farthest from the largest cluster's centroid
+		maxDist := -1.0
+		farthestIdx := -1
+		for i, label := range km.Labels {
+			if label == largestCluster {
+				d := squaredEuclidean(vectors[i], newCentroids[largestCluster])
+				if d > maxDist {
+					maxDist = d
+					farthestIdx = i
+				}
+			}
+		}
+		if farthestIdx < 0 {
+			continue
+		}
+
+		// Reassign the farthest vector to the empty cluster
+		copy(km.Centroids[c], vectors[farthestIdx])
+		km.Labels[farthestIdx] = c
+		counts[c] = 1
+		counts[largestCluster]--
 	}
 }
 
