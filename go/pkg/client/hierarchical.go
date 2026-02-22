@@ -215,8 +215,11 @@ func (c *HierarchicalClient) Search(ctx context.Context, query []float64, topK i
 	scoreMap := make(map[string]float64)
 
 	for _, d := range decrypted {
-		normalizedVec := normalizeVectorCopy(d.vector)
-		score := dotProductVec(normalizedQuery, normalizedVec)
+		vec := d.vector
+		if !c.index.Config.NormalizedStorage {
+			vec = normalizeVectorCopy(d.vector)
+		}
+		score := dotProductVec(normalizedQuery, vec)
 
 		// Keep highest score for each original ID
 		if existing, ok := scoreMap[d.id]; !ok || score > existing {

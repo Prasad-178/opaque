@@ -180,6 +180,9 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 			for i := start; i < end; i++ {
 				id := ids[i]
 				vec := vectors[i]
+				if b.config.NormalizedStorage {
+					vec = normalizedVecs[i]
+				}
 
 				for assignIdx, superID := range allAssignments[i].assignments {
 					bucketKey := formatSuperBucketKey(superID)

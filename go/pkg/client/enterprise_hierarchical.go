@@ -350,8 +350,11 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	scoreMap := make(map[string]float64)
 
 	for _, d := range decrypted {
-		normalizedVec := normalizeVectorCopy(d.vector)
-		score := dotProductVec(normalizedQuery, normalizedVec)
+		vec := d.vector
+		if !c.config.NormalizedStorage {
+			vec = normalizeVectorCopy(d.vector)
+		}
+		score := dotProductVec(normalizedQuery, vec)
 
 		// Keep highest score for each original ID
 		if existing, ok := scoreMap[d.id]; !ok || score > existing {
@@ -532,8 +535,11 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 	startScore := time.Now()
 	scoreMap := make(map[string]float64)
 	for _, d := range decrypted {
-		normalizedVec := normalizeVectorCopy(d.vector)
-		score := dotProductVec(normalizedQuery, normalizedVec)
+		vec := d.vector
+		if !c.config.NormalizedStorage {
+			vec = normalizeVectorCopy(d.vector)
+		}
+		score := dotProductVec(normalizedQuery, vec)
 		if existing, ok := scoreMap[d.id]; !ok || score > existing {
 			scoreMap[d.id] = score
 		}

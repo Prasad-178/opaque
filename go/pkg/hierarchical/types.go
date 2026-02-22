@@ -90,6 +90,12 @@ type Config struct {
 	// Default: 1 (single initialization).
 	NumKMeansInit int
 
+	// NormalizedStorage indicates vectors are stored pre-normalized.
+	// When true, the builder encrypts normalized vectors and the search client
+	// skips per-vector normalization during local scoring.
+	// Default: false (normalize on-the-fly during search for backwards compatibility).
+	NormalizedStorage bool
+
 	// ProbeStrategy selects the cluster probing method during search.
 	// "threshold" (default) uses ProbeThreshold ratio.
 	// "gap" uses adaptive score-gap detection.
