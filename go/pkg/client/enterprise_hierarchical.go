@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -322,24 +323,9 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	// All computation is client-side, server sees nothing
 	// ==========================================
 
-	// Decrypt all vectors
+	// Decrypt all vectors in parallel
 	startAES := time.Now()
-	type decryptedVec struct {
-		id       string // Original ID (without _dupN suffix)
-		blobID   string // Blob ID (may have _dupN suffix)
-		vector   []float64
-	}
-	decrypted := make([]decryptedVec, 0, len(blobs))
-
-	for _, b := range blobs {
-		// Extract original ID for decryption (handles redundant assignment)
-		origID := extractOriginalID(b.ID)
-		vec, err := c.encryptor.DecryptVectorWithID(b.Ciphertext, origID)
-		if err != nil {
-			continue // Skip failed decryptions (likely decoy or corrupted)
-		}
-		decrypted = append(decrypted, decryptedVec{id: origID, blobID: b.ID, vector: vec})
-	}
+	decrypted := parallelDecryptBlobs(blobs, c.encryptor)
 	result.Timing.AESDecrypt = time.Since(startAES)
 
 	// Score locally with deduplication for redundant assignment
@@ -515,21 +501,7 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 
 	// Decrypt and score locally (same as Search)
 	startAES := time.Now()
-	type decryptedVec struct {
-		id     string
-		blobID string
-		vector []float64
-	}
-	decrypted := make([]decryptedVec, 0, len(blobs))
-
-	for _, b := range blobs {
-		origID := extractOriginalID(b.ID)
-		vec, err := c.encryptor.DecryptVectorWithID(b.Ciphertext, origID)
-		if err != nil {
-			continue
-		}
-		decrypted = append(decrypted, decryptedVec{id: origID, blobID: b.ID, vector: vec})
-	}
+	decrypted := parallelDecryptBlobs(blobs, c.encryptor)
 	result.Timing.AESDecrypt = time.Since(startAES)
 
 	startScore := time.Now()
@@ -580,6 +552,70 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 // generateDecoySupers delegates to the shared package-level function in hierarchical.go.
 func (c *EnterpriseHierarchicalClient) generateDecoySupers(selectedSupers []int, numDecoys int) []int {
 	return generateDecoySupers(selectedSupers, c.config.NumSuperBuckets, numDecoys)
+}
+
+// decryptedVec holds a decrypted vector with its original and blob IDs.
+type decryptedVec struct {
+	id     string    // Original ID (without _dupN suffix)
+	blobID string    // Blob ID (may have _dupN suffix)
+	vector []float64 // Decrypted vector
+}
+
+// parallelDecryptBlobs decrypts blobs in parallel using multiple goroutines.
+// Failed decryptions (decoys or corrupted blobs) are silently skipped.
+func parallelDecryptBlobs(blobs []*blob.Blob, encryptor *encrypt.AESGCM) []decryptedVec {
+	if len(blobs) == 0 {
+		return nil
+	}
+
+	numWorkers := runtime.NumCPU()
+	if numWorkers > len(blobs) {
+		numWorkers = len(blobs)
+	}
+	chunkSize := (len(blobs) + numWorkers - 1) / numWorkers
+
+	// Each worker writes to its own slice to avoid locking
+	workerResults := make([][]decryptedVec, numWorkers)
+
+	var wg sync.WaitGroup
+	for w := 0; w < numWorkers; w++ {
+		start := w * chunkSize
+		end := start + chunkSize
+		if end > len(blobs) {
+			end = len(blobs)
+		}
+		if start >= end {
+			continue
+		}
+
+		wg.Add(1)
+		go func(w, start, end int) {
+			defer wg.Done()
+			local := make([]decryptedVec, 0, end-start)
+			for i := start; i < end; i++ {
+				b := blobs[i]
+				origID := extractOriginalID(b.ID)
+				vec, err := encryptor.DecryptVectorWithID(b.Ciphertext, origID)
+				if err != nil {
+					continue // Skip failed decryptions (likely decoy)
+				}
+				local = append(local, decryptedVec{id: origID, blobID: b.ID, vector: vec})
+			}
+			workerResults[w] = local
+		}(w, start, end)
+	}
+	wg.Wait()
+
+	// Merge results
+	total := 0
+	for _, r := range workerResults {
+		total += len(r)
+	}
+	result := make([]decryptedVec, 0, total)
+	for _, r := range workerResults {
+		result = append(result, r...)
+	}
+	return result
 }
 
 // shuffleInts shuffles a slice of ints in place using crypto/rand.
