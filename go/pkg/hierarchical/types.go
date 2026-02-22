@@ -89,6 +89,17 @@ type Config struct {
 	// Multiple initializations run in parallel; the result with the lowest inertia wins.
 	// Default: 1 (single initialization).
 	NumKMeansInit int
+
+	// ProbeStrategy selects the cluster probing method during search.
+	// "threshold" (default) uses ProbeThreshold ratio.
+	// "gap" uses adaptive score-gap detection.
+	ProbeStrategy string
+
+	// GapMultiplier controls gap-based probing sensitivity.
+	// Stop expanding when gap between consecutive scores > GapMultiplier * median gap.
+	// Only used when ProbeStrategy is "gap".
+	// Default: 2.0.
+	GapMultiplier float64
 }
 
 // DefaultConfig returns sensible defaults for 100K vectors.

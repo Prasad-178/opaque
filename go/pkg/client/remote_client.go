@@ -271,11 +271,13 @@ func (c *RemoteClient) Search(ctx context.Context, query []float64, topK int) (*
 
 	// Step 1d: Select top super-buckets (SERVER NEVER SEES THIS!)
 	// Use multi-probe selection to capture clusters within threshold of top-K
-	topSupers := selectClustersWithProbing(
+	topSupers := selectClusters(
 		scores,
 		c.config.TopSuperBuckets,
 		c.config.ProbeThreshold,
 		c.config.MaxProbeClusters,
+		c.config.ProbeStrategy,
+		c.config.GapMultiplier,
 	)
 	result.Stats.SuperBucketsSelected = len(topSupers)
 

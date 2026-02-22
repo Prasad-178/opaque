@@ -136,6 +136,18 @@ type Config struct {
 	// Higher values improve cluster quality at the cost of more CPU during Build.
 	// Default: 1 (single initialization).
 	NumKMeansInit int
+
+	// ProbeStrategy selects the cluster probing method during search.
+	// "threshold" (default) uses ProbeThreshold ratio to include nearby clusters.
+	// "gap" uses adaptive score-gap detection to find natural breaks in the score distribution.
+	// Default: "" (uses "threshold").
+	ProbeStrategy string
+
+	// GapMultiplier controls gap-based probing sensitivity when ProbeStrategy is "gap".
+	// Expansion stops when the gap between consecutive cluster scores exceeds
+	// GapMultiplier times the median gap. Lower values probe fewer clusters.
+	// Default: 2.0.
+	GapMultiplier float64
 }
 
 // Result is a single search result containing the vector ID and its similarity score.
@@ -542,6 +554,8 @@ func (db *DB) makeSearchConfig(ecfg *enterprise.Config, effectiveDim int) hierar
 		RedundantAssignments: db.cfg.RedundantAssignments,
 		LSHSuperSeed:         ecfg.GetLSHSeedAsInt64(),
 		LSHSubSeed:           ecfg.GetSubLSHSeedAsInt64(),
+		ProbeStrategy:        db.cfg.ProbeStrategy,
+		GapMultiplier:        db.cfg.GapMultiplier,
 	}
 }
 

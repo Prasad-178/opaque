@@ -277,11 +277,13 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	// Step 1d: Select top super-buckets (SERVER NEVER SEES THIS!)
 	// Use multi-probe selection to capture clusters within threshold of top-K
 	// This addresses HE precision noise that can cause near-miss exclusions
-	topSupers := selectClustersWithProbing(
+	topSupers := selectClusters(
 		scores,
 		c.config.TopSuperBuckets,
 		c.config.ProbeThreshold,
 		c.config.MaxProbeClusters,
+		c.config.ProbeStrategy,
+		c.config.GapMultiplier,
 	)
 	result.Stats.SuperBucketsSelected = len(topSupers)
 	result.Stats.SelectedClusters = topSupers // Track for diagnostics
@@ -475,11 +477,13 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 	result.Stats.HEOperations = len(packedPlaintexts) // Just 1-2 ops instead of 64!
 
 	// Select clusters using multi-probe
-	topSupers := selectClustersWithProbing(
+	topSupers := selectClusters(
 		scores,
 		c.config.TopSuperBuckets,
 		c.config.ProbeThreshold,
 		c.config.MaxProbeClusters,
+		c.config.ProbeStrategy,
+		c.config.GapMultiplier,
 	)
 	result.Stats.SuperBucketsSelected = len(topSupers)
 	result.Stats.SelectedClusters = topSupers

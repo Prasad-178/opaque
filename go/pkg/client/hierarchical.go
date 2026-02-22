@@ -135,11 +135,13 @@ func (c *HierarchicalClient) Search(ctx context.Context, query []float64, topK i
 
 	// Step 1d: Select top super-buckets (SERVER NEVER SEES THIS!)
 	// Use multi-probe selection to capture clusters within threshold of top-K
-	topSupers := selectClustersWithProbing(
+	topSupers := selectClusters(
 		scores,
 		c.index.Config.TopSuperBuckets,
 		c.index.Config.ProbeThreshold,
 		c.index.Config.MaxProbeClusters,
+		c.index.Config.ProbeStrategy,
+		c.index.Config.GapMultiplier,
 	)
 	result.Stats.SuperBucketsSelected = len(topSupers)
 
@@ -320,6 +322,14 @@ func selectTopKIndices(scores []float64, k int) []int {
 	return result
 }
 
+// selectClusters dispatches to the appropriate probing strategy based on config.
+func selectClusters(scores []float64, minK int, threshold float64, maxK int, strategy string, gapMultiplier float64) []int {
+	if strategy == "gap" {
+		return selectClustersWithGapDetection(scores, minK, maxK, gapMultiplier)
+	}
+	return selectClustersWithProbing(scores, minK, threshold, maxK)
+}
+
 // selectClustersWithProbing returns cluster indices using multi-probe strategy.
 // This improves recall by including clusters that scored close to the top-K threshold,
 // addressing HE precision noise that can cause near-miss exclusions.
@@ -403,6 +413,96 @@ func selectClustersWithProbing(scores []float64, minK int, threshold float64, ma
 	}
 
 	return result
+}
+
+// selectClustersWithGapDetection returns cluster indices using adaptive score-gap detection.
+// Instead of a fixed ratio threshold, it detects natural breaks in the score distribution
+// by comparing consecutive gaps to the median gap.
+//
+// Parameters:
+//   - scores: HE-decrypted scores for each cluster
+//   - minK: minimum clusters to always include (top minK by score)
+//   - maxK: maximum total clusters to return (hard cap)
+//   - gapMultiplier: stop expanding when gap > gapMultiplier * medianGap (default: 2.0)
+//
+// Returns indices of selected clusters (always includes top minK, may include more
+// if scores are tightly clustered).
+func selectClustersWithGapDetection(scores []float64, minK int, maxK int, gapMultiplier float64) []int {
+	if len(scores) == 0 {
+		return nil
+	}
+	if maxK <= 0 {
+		maxK = minK
+	}
+	if gapMultiplier <= 0 {
+		gapMultiplier = 2.0
+	}
+
+	type indexedScore struct {
+		index int
+		score float64
+	}
+
+	indexed := make([]indexedScore, len(scores))
+	for i, s := range scores {
+		indexed[i] = indexedScore{index: i, score: s}
+	}
+
+	// Sort by score descending
+	sort.Slice(indexed, func(i, j int) bool {
+		return indexed[i].score > indexed[j].score
+	})
+
+	// Always include top minK
+	n := min(minK, len(indexed))
+	result := make([]int, 0, maxK)
+	for i := 0; i < n; i++ {
+		result = append(result, indexed[i].index)
+	}
+
+	if n >= len(indexed) || n >= maxK {
+		return result
+	}
+
+	// Compute gaps between consecutive scores in the candidate range [minK..maxK]
+	upperBound := min(maxK, len(indexed))
+	gaps := make([]float64, 0, upperBound-n)
+	for i := n; i < upperBound; i++ {
+		gap := indexed[i-1].score - indexed[i].score
+		gaps = append(gaps, gap)
+	}
+
+	if len(gaps) == 0 {
+		return result
+	}
+
+	// Compute median gap
+	medianGap := medianFloat64(gaps)
+
+	// Expand beyond minK until we hit a gap > gapMultiplier * medianGap
+	threshold := gapMultiplier * medianGap
+	for i := n; i < upperBound && len(result) < maxK; i++ {
+		gap := indexed[i-1].score - indexed[i].score
+		if gap > threshold && medianGap > 1e-12 {
+			break // Natural break detected
+		}
+		result = append(result, indexed[i].index)
+	}
+
+	return result
+}
+
+// medianFloat64 returns the median of a slice (modifies the slice order).
+func medianFloat64(vals []float64) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	sort.Float64s(vals)
+	mid := len(vals) / 2
+	if len(vals)%2 == 0 {
+		return (vals[mid-1] + vals[mid]) / 2
+	}
+	return vals[mid]
 }
 
 // shuffleStrings shuffles a string slice in place.
