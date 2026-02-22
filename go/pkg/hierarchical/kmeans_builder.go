@@ -3,6 +3,8 @@ package hierarchical
 import (
 	"context"
 	"fmt"
+	"runtime"
+	"sync"
 	"time"
 
 	"github.com/opaque/opaque/go/pkg/blob"
@@ -120,55 +122,94 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 		numAssignments = 1
 	}
 
-	// Pre-allocate blobs slice (may grow if using redundant assignments)
-	blobs := make([]*blob.Blob, 0, len(ids)*numAssignments)
-
+	// Pre-compute cluster assignments, VectorCounts, and vectorLocs (no encryption needed)
+	type vectorAssignment struct {
+		assignments []int
+	}
+	allAssignments := make([]vectorAssignment, len(ids))
 	for i, id := range ids {
-		vec := vectors[i]
-		normalizedVec := normalizedVecs[i]
-
-		// Get top-N cluster assignments for this vector
 		var assignments []int
 		if numAssignments == 1 {
-			// Fast path: single assignment from k-means labels
 			assignments = []int{b.kmeans.Labels[i]}
 		} else {
-			// Redundant assignment: find top-N nearest clusters
-			assignments = b.kmeans.PredictTopK(normalizedVec, numAssignments)
+			assignments = b.kmeans.PredictTopK(normalizedVecs[i], numAssignments)
+		}
+		allAssignments[i] = vectorAssignment{assignments: assignments}
+
+		// Pre-compute metadata from primary assignment
+		superID := assignments[0]
+		b.superBuckets[superID].VectorCount++
+		bucketKey := formatSuperBucketKey(superID)
+		b.vectorLocs[id] = &VectorLocation{
+			ID:        id,
+			SuperID:   superID,
+			BucketKey: bucketKey,
+		}
+	}
+
+	// Parallel encryption: split vectors across workers
+	numWorkers := runtime.NumCPU()
+	if numWorkers > len(ids) {
+		numWorkers = len(ids)
+	}
+	chunkSize := (len(ids) + numWorkers - 1) / numWorkers
+
+	type workerResult struct {
+		blobs []*blob.Blob
+		err   error
+	}
+	results := make([]workerResult, numWorkers)
+
+	var wg sync.WaitGroup
+	for w := 0; w < numWorkers; w++ {
+		start := w * chunkSize
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		if start >= end {
+			continue
 		}
 
-		for assignIdx, superID := range assignments {
-			bucketKey := formatSuperBucketKey(superID)
+		wg.Add(1)
+		go func(w, start, end int) {
+			defer wg.Done()
+			localBlobs := make([]*blob.Blob, 0, (end-start)*numAssignments)
 
-			// Update bucket stats (only count for primary assignment)
-			if assignIdx == 0 {
-				b.superBuckets[superID].VectorCount++
-			}
+			for i := start; i < end; i++ {
+				id := ids[i]
+				vec := vectors[i]
 
-			// Create unique blob ID for redundant assignments
-			blobID := id
-			if assignIdx > 0 {
-				blobID = fmt.Sprintf("%s_dup%d", id, assignIdx)
-			}
+				for assignIdx, superID := range allAssignments[i].assignments {
+					bucketKey := formatSuperBucketKey(superID)
 
-			// Track vector location (only for primary assignment)
-			if assignIdx == 0 {
-				b.vectorLocs[id] = &VectorLocation{
-					ID:        id,
-					SuperID:   superID,
-					BucketKey: bucketKey,
+					blobID := id
+					if assignIdx > 0 {
+						blobID = fmt.Sprintf("%s_dup%d", id, assignIdx)
+					}
+
+					// Encrypt with enterprise AES key (AESGCM.Seal is safe for concurrent use)
+					ciphertext, err := b.encryptor.EncryptVectorWithID(vec, id)
+					if err != nil {
+						results[w] = workerResult{err: fmt.Errorf("failed to encrypt vector %s: %w", id, err)}
+						return
+					}
+
+					localBlobs = append(localBlobs, blob.NewBlob(blobID, bucketKey, ciphertext, b.config.Dimension))
 				}
 			}
+			results[w] = workerResult{blobs: localBlobs}
+		}(w, start, end)
+	}
+	wg.Wait()
 
-			// Encrypt with enterprise AES key
-			// Note: We encrypt with original ID so decryption works with original ID
-			ciphertext, err := b.encryptor.EncryptVectorWithID(vec, id)
-			if err != nil {
-				return nil, fmt.Errorf("failed to encrypt vector %s: %w", id, err)
-			}
-
-			blobs = append(blobs, blob.NewBlob(blobID, bucketKey, ciphertext, b.config.Dimension))
+	// Merge results and check for errors
+	blobs := make([]*blob.Blob, 0, len(ids)*numAssignments)
+	for _, r := range results {
+		if r.err != nil {
+			return nil, r.err
 		}
+		blobs = append(blobs, r.blobs...)
 	}
 
 	// Extract centroids for enterprise config
