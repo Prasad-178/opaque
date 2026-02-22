@@ -178,6 +178,7 @@ type DB struct {
 	blobStore    blob.Store
 	searchClient *client.EnterpriseHierarchicalClient
 	pcaModel     *pca.PCA // nil when PCA is disabled
+	clusterStats hierarchical.ClusterStats
 }
 
 // NewDB creates a new vector search database with the given configuration.
@@ -371,6 +372,32 @@ func (db *DB) IsReady() bool {
 	return db.state == stateReady
 }
 
+// ClusterStats returns statistics about the k-means clustering from the most recent Build.
+// Returns a zero value if the index has not been built yet.
+func (db *DB) ClusterStats() ClusterStats {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	s := db.clusterStats
+	return ClusterStats{
+		NumClusters:   s.NumClusters,
+		MinSize:       s.MinSize,
+		MaxSize:       s.MaxSize,
+		AvgSize:       s.AvgSize,
+		EmptyClusters: s.EmptyClusters,
+		Iterations:    s.Iterations,
+	}
+}
+
+// ClusterStats contains statistics about k-means clustering quality.
+type ClusterStats struct {
+	NumClusters   int     // Number of clusters
+	MinSize       int     // Smallest cluster size
+	MaxSize       int     // Largest cluster size
+	AvgSize       float64 // Average cluster size
+	EmptyClusters int     // Number of empty clusters (should be 0)
+	Iterations    int     // K-means iterations until convergence
+}
+
 // Close releases all resources held by the DB, including the blob store and
 // HE engine pool. The DB must not be used after Close is called.
 func (db *DB) Close() error {
@@ -439,6 +466,7 @@ func (db *DB) buildLocked(ctx context.Context) error {
 		store.Close()
 		return fmt.Errorf("opaque: index build failed: %w", err)
 	}
+	db.clusterStats = builder.GetClusterStats()
 	enterpriseCfg := builder.GetEnterpriseConfig()
 	enterpriseCfg.UpdatedAt = time.Now()
 
