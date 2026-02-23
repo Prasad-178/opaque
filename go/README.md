@@ -48,7 +48,11 @@ for _, r := range results {
 | `Storage` | Memory | `opaque.Memory` or `opaque.File` |
 | `StoragePath` | "" | Directory for file storage |
 | `ProbeThreshold` | 0.95 | Multi-probe inclusion threshold |
+| `ProbeStrategy` | "threshold" | Probing method: `"threshold"` or `"gap"` (adaptive score-gap detection) |
+| `GapMultiplier` | 2.0 | Gap sensitivity for `"gap"` strategy (higher = fewer extra clusters) |
 | `RedundantAssignments` | 1 | Clusters per vector (2 = better boundary recall, 2x storage) |
+| `NumKMeansInit` | 1 | K-means initializations (higher = better centroids, parallel) |
+| `NormalizedStorage` | true | Store pre-normalized vectors (faster search, skips per-vector normalization) |
 
 ### Lifecycle
 

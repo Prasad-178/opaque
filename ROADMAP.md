@@ -8,9 +8,11 @@ Opaque is a working privacy-preserving vector search system implemented in Go. T
 
 - **Library API** (`opaque.NewDB` → `Add` → `Build` → `Search`) for simple usage
 - CKKS homomorphic encryption via Lattigo v5 (128-bit security)
-- K-means clustering with k-means++ initialization
+- K-means clustering with k-means++ initialization, multi-init support, and empty cluster recovery
 - AES-256-GCM encrypted blob storage (memory and file backends)
 - Hierarchical search: HE centroid scoring -> decoy fetch -> local AES decrypt
+- Parallel build pipeline (vector encryption) and parallel search pipeline (AES decryption)
+- Adaptive score-gap probing and pre-normalized vector storage for faster search
 - Batch HE via CKKS slot packing (64 centroids in 1 HE operation)
 - Configurable HE engine worker pool (defaults to `min(NumCPU, 8)`)
 - Redundant cluster assignment for improved boundary recall
@@ -79,11 +81,19 @@ Benchmark suite for the full SIFT1M dataset (1 million 128-dim vectors) with pro
 
 Scaling test (strict-8 config) shows sub-linear latency growth from 100K to 1M vectors. Download script at `scripts/download_sift1m.sh`, benchmark at `go/test/sift1m_benchmark_test.go` (build tag: `sift1m`). Runs weekly in CI with dataset caching.
 
+### ~~Pipeline Optimizations~~ (Done)
+Optimized the existing k-means + HE pipeline for better build speed, cluster quality, and search latency:
+
+- **Parallel vector encryption** during Build (4-5x speedup via `runtime.NumCPU()` workers)
+- **K-means multi-initialization** (`NumKMeansInit` config) — runs N parallel initializations, keeps lowest-inertia result for better centroids
+- **Empty cluster recovery** — reassigns farthest vector from largest cluster to empty clusters during k-means iterations
+- **ClusterStats API** — `db.ClusterStats()` exposes min/max/avg cluster sizes and iteration count after Build
+- **Adaptive score-gap probing** (`ProbeStrategy: "gap"`) — detects natural breaks in HE score distributions instead of fixed threshold
+- **Pre-normalized vector storage** (`NormalizedStorage`) — stores unit-length vectors, skips per-vector normalization during search (10-15% faster local scoring)
+- **Parallel AES decryption** in search pipeline (multi-goroutine blob decryption)
+
 ### GPU Acceleration
 Lattigo supports GPU acceleration for HE operations. Investigate and benchmark CUDA/Metal backends for further latency reduction.
-
-### HNSW Index
-Replace or complement k-means clustering with HNSW (Hierarchical Navigable Small World) for improved recall characteristics at scale.
 
 ### ~~PCA Dimensionality Reduction~~ (Done)
 Optional PCA via SVD in `go/pkg/pca/`. Enabled with `Config.PCADimension`. Applied client-side before encryption — no privacy impact. 128D→64D achieves 77% variance retention with perfect self-match recall.
