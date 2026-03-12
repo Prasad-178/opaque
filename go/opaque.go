@@ -193,10 +193,11 @@ type DB struct {
 	pendingVectors [][]float64
 
 	// Built state (populated by Build, used by Search).
-	blobStore    blob.Store
-	searchClient *client.EnterpriseHierarchicalClient
-	pcaModel     *pca.PCA // nil when PCA is disabled
-	clusterStats hierarchical.ClusterStats
+	blobStore     blob.Store
+	searchClient  *client.EnterpriseHierarchicalClient
+	pcaModel      *pca.PCA // nil when PCA is disabled
+	clusterStats  hierarchical.ClusterStats
+	enterpriseCfg *enterprise.Config
 }
 
 // NewDB creates a new vector search database with the given configuration.
@@ -488,6 +489,7 @@ func (db *DB) buildLocked(ctx context.Context) error {
 	db.clusterStats = builder.GetClusterStats()
 	enterpriseCfg := builder.GetEnterpriseConfig()
 	enterpriseCfg.UpdatedAt = time.Now()
+	db.enterpriseCfg = enterpriseCfg
 
 	// Construct credentials directly (bypass auth service for library usage).
 	creds := makeCredentials(enterpriseCfg)

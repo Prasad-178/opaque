@@ -9,7 +9,9 @@
 package pca
 
 import (
+	"encoding/gob"
 	"fmt"
+	"io"
 	"math"
 
 	"gonum.org/v1/gonum/mat"
@@ -221,6 +223,58 @@ func (p *PCA) ReconstructionError(vectors [][]float64) (float64, error) {
 	}
 
 	return totalErr / float64(len(vectors)), nil
+}
+
+// pcaGob is the serializable representation of a PCA model.
+type pcaGob struct {
+	Rows, Cols        int
+	Data              []float64 // flattened Components matrix
+	Mean              []float64
+	SingularValues    []float64
+	VarianceExplained []float64
+	OriginalDim       int
+	ReducedDim        int
+}
+
+// Save serializes the PCA model to a writer using gob encoding.
+func (p *PCA) Save(w io.Writer) error {
+	rows, cols := p.Components.Dims()
+	data := make([]float64, rows*cols)
+	for i := 0; i < rows; i++ {
+		for j := 0; j < cols; j++ {
+			data[i*cols+j] = p.Components.At(i, j)
+		}
+	}
+	g := pcaGob{
+		Rows:              rows,
+		Cols:              cols,
+		Data:              data,
+		Mean:              p.Mean,
+		SingularValues:    p.SingularValues,
+		VarianceExplained: p.VarianceExplained,
+		OriginalDim:       p.OriginalDim,
+		ReducedDim:        p.ReducedDim,
+	}
+	return gob.NewEncoder(w).Encode(&g)
+}
+
+// LoadPCA deserializes a PCA model from a reader.
+func LoadPCA(r io.Reader) (*PCA, error) {
+	var g pcaGob
+	if err := gob.NewDecoder(r).Decode(&g); err != nil {
+		return nil, fmt.Errorf("pca: decode failed: %w", err)
+	}
+	if len(g.Data) != g.Rows*g.Cols {
+		return nil, fmt.Errorf("pca: data length %d does not match %d×%d", len(g.Data), g.Rows, g.Cols)
+	}
+	return &PCA{
+		Components:        mat.NewDense(g.Rows, g.Cols, g.Data),
+		Mean:              g.Mean,
+		SingularValues:    g.SingularValues,
+		VarianceExplained: g.VarianceExplained,
+		OriginalDim:       g.OriginalDim,
+		ReducedDim:        g.ReducedDim,
+	}, nil
 }
 
 // NormalizeTransformed normalizes a PCA-transformed vector to unit length.
