@@ -195,6 +195,9 @@ type DB struct {
 	// Soft-deleted vector IDs. Filtered out during Search, excluded on Rebuild.
 	deletedIDs map[string]bool
 
+	// Vector metadata (keyed by ID). Persisted alongside vectors.
+	metadata map[string]Metadata
+
 	// Built state (populated by Build, used by Search).
 	blobStore     blob.Store
 	searchClient  *client.EnterpriseHierarchicalClient
@@ -359,6 +362,17 @@ func (db *DB) Rebuild(ctx context.Context) error {
 		}
 		db.pendingIDs = filteredIDs
 		db.pendingVectors = filteredVectors
+
+		// Clean up metadata for deleted vectors.
+		if db.metadata != nil {
+			for id := range db.deletedIDs {
+				// Only remove if the ID wasn't re-added (Update).
+				if idCount[id] == 1 {
+					delete(db.metadata, id)
+				}
+			}
+		}
+
 		db.deletedIDs = nil
 	}
 

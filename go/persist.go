@@ -10,17 +10,19 @@ import (
 
 	"github.com/opaque/opaque/go/pkg/blob"
 	"github.com/opaque/opaque/go/pkg/client"
+	"github.com/opaque/opaque/go/pkg/encrypt"
 	"github.com/opaque/opaque/go/pkg/enterprise"
 	"github.com/opaque/opaque/go/pkg/hierarchical"
 	"github.com/opaque/opaque/go/pkg/pca"
 )
 
 const (
-	metadataFile    = "metadata.json"
-	enterpriseFile  = "enterprise.gob"
-	pcaFile         = "pca.gob"
-	blobsDir        = "blobs"
-	persistVersion  = 1
+	metadataFile       = "metadata.json"
+	enterpriseFile     = "enterprise.gob"
+	pcaFile            = "pca.gob"
+	vectorMetadataFile = "vector_metadata.enc"
+	blobsDir           = "blobs"
+	persistVersion     = 1
 )
 
 // saveMetadata is the JSON-serializable metadata for a saved DB.
@@ -31,6 +33,7 @@ type saveMetadata struct {
 	ClusterStats ClusterStats `json:"cluster_stats"`
 	HasPCA       bool         `json:"has_pca"`
 	DeletedIDs   []string     `json:"deleted_ids,omitempty"`
+	HasMetadata  bool         `json:"has_metadata,omitempty"`
 }
 
 // Save persists a built DB to the given directory path.
@@ -115,6 +118,15 @@ func (db *DB) Save(path string) error {
 	}
 	destStore.Close()
 
+	// Save vector metadata (encrypted with AES).
+	hasVectorMetadata := len(db.metadata) > 0
+	if hasVectorMetadata {
+		if err := saveVectorMetadata(path, db.metadata, db.enterpriseCfg.AESKey); err != nil {
+			os.RemoveAll(path)
+			return fmt.Errorf("opaque: failed to save vector metadata: %w", err)
+		}
+	}
+
 	// Write metadata last (acts as commit marker).
 	meta := saveMetadata{
 		Version:      persistVersion,
@@ -130,6 +142,7 @@ func (db *DB) Save(path string) error {
 		},
 		HasPCA:       hasPCA,
 		DeletedIDs:   deletedIDsList(db.deletedIDs),
+		HasMetadata:  hasVectorMetadata,
 	}
 	metaData, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
@@ -200,6 +213,16 @@ func Load(path string) (*DB, error) {
 		}
 	}
 
+	// Load vector metadata if saved.
+	var vectorMetadata map[string]Metadata
+	if meta.HasMetadata {
+		vectorMetadata, err = loadVectorMetadata(path, enterpriseCfg.AESKey)
+		if err != nil {
+			store.Close()
+			return nil, fmt.Errorf("opaque: failed to load vector metadata: %w", err)
+		}
+	}
+
 	// Reconstruct config with defaults applied.
 	cfg := meta.Config
 	applyDefaults(&cfg)
@@ -222,6 +245,7 @@ func Load(path string) (*DB, error) {
 		blobStore:     store,
 		pcaModel:      pcaModel,
 		deletedIDs:    deletedIDsMap(meta.DeletedIDs),
+		metadata:      vectorMetadata,
 		clusterStats: hierarchical.ClusterStats{
 			NumClusters:   meta.ClusterStats.NumClusters,
 			MinSize:       meta.ClusterStats.MinSize,
@@ -268,4 +292,48 @@ func deletedIDsMap(ids []string) map[string]bool {
 		m[id] = true
 	}
 	return m
+}
+
+// saveVectorMetadata encrypts and writes the vector metadata map to disk.
+func saveVectorMetadata(dir string, meta map[string]Metadata, aesKey []byte) error {
+	plaintext, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+
+	enc, err := encrypt.NewAESGCM(aesKey)
+	if err != nil {
+		return fmt.Errorf("encryptor: %w", err)
+	}
+
+	ciphertext, err := enc.Encrypt(plaintext)
+	if err != nil {
+		return fmt.Errorf("encrypt: %w", err)
+	}
+
+	return os.WriteFile(filepath.Join(dir, vectorMetadataFile), ciphertext, 0o600)
+}
+
+// loadVectorMetadata reads and decrypts the vector metadata map from disk.
+func loadVectorMetadata(dir string, aesKey []byte) (map[string]Metadata, error) {
+	ciphertext, err := os.ReadFile(filepath.Join(dir, vectorMetadataFile))
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+
+	enc, err := encrypt.NewAESGCM(aesKey)
+	if err != nil {
+		return nil, fmt.Errorf("encryptor: %w", err)
+	}
+
+	plaintext, err := enc.Decrypt(ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt: %w", err)
+	}
+
+	var meta map[string]Metadata
+	if err := json.Unmarshal(plaintext, &meta); err != nil {
+		return nil, fmt.Errorf("unmarshal: %w", err)
+	}
+	return meta, nil
 }
