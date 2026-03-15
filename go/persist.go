@@ -30,6 +30,7 @@ type saveMetadata struct {
 	Config       Config       `json:"config"`
 	ClusterStats ClusterStats `json:"cluster_stats"`
 	HasPCA       bool         `json:"has_pca"`
+	DeletedIDs   []string     `json:"deleted_ids,omitempty"`
 }
 
 // Save persists a built DB to the given directory path.
@@ -128,6 +129,7 @@ func (db *DB) Save(path string) error {
 			Iterations:    db.clusterStats.Iterations,
 		},
 		HasPCA:       hasPCA,
+		DeletedIDs:   deletedIDsList(db.deletedIDs),
 	}
 	metaData, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
@@ -219,6 +221,7 @@ func Load(path string) (*DB, error) {
 		enterpriseCfg: enterpriseCfg,
 		blobStore:     store,
 		pcaModel:      pcaModel,
+		deletedIDs:    deletedIDsMap(meta.DeletedIDs),
 		clusterStats: hierarchical.ClusterStats{
 			NumClusters:   meta.ClusterStats.NumClusters,
 			MinSize:       meta.ClusterStats.MinSize,
@@ -241,4 +244,28 @@ func Load(path string) (*DB, error) {
 	db.searchClient = searchClient
 
 	return db, nil
+}
+
+// deletedIDsList converts the deletedIDs map to a sorted slice for serialization.
+func deletedIDsList(m map[string]bool) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// deletedIDsMap converts a slice of deleted IDs back to a map.
+func deletedIDsMap(ids []string) map[string]bool {
+	if len(ids) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
 }

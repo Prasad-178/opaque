@@ -192,6 +192,9 @@ type DB struct {
 	pendingIDs     []string
 	pendingVectors [][]float64
 
+	// Soft-deleted vector IDs. Filtered out during Search, excluded on Rebuild.
+	deletedIDs map[string]bool
+
 	// Built state (populated by Build, used by Search).
 	blobStore     blob.Store
 	searchClient  *client.EnterpriseHierarchicalClient
@@ -224,8 +227,8 @@ func NewDB(cfg Config) (*DB, error) {
 
 // Add buffers a single vector for indexing. The id must be unique within the DB.
 //
-// Add must be called before [DB.Build]. After Build, use [DB.Rebuild] to incorporate
-// new vectors.
+// Before [DB.Build], vectors are buffered for the initial index build.
+// After Build, vectors are buffered for the next [DB.Rebuild].
 //
 // The vector is copied internally, so the caller may modify the slice after Add returns.
 func (db *DB) Add(ctx context.Context, id string, vector []float64) error {
@@ -239,16 +242,14 @@ func (db *DB) Add(ctx context.Context, id string, vector []float64) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if db.state == stateReady {
-		return ErrAlreadyBuilt
-	}
-
 	v := make([]float64, len(vector))
 	copy(v, vector)
 
 	db.pendingIDs = append(db.pendingIDs, id)
 	db.pendingVectors = append(db.pendingVectors, v)
-	db.state = stateBuffered
+	if db.state == stateEmpty {
+		db.state = stateBuffered
+	}
 	return nil
 }
 
@@ -263,10 +264,6 @@ func (db *DB) AddBatch(ctx context.Context, ids []string, vectors [][]float64) e
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
-	if db.state == stateReady {
-		return ErrAlreadyBuilt
-	}
 
 	for i, v := range vectors {
 		if len(v) != db.cfg.Dimension {
@@ -283,7 +280,9 @@ func (db *DB) AddBatch(ctx context.Context, ids []string, vectors [][]float64) e
 		db.pendingIDs = append(db.pendingIDs, ids[i])
 		db.pendingVectors = append(db.pendingVectors, vc)
 	}
-	db.state = stateBuffered
+	if db.state == stateEmpty {
+		db.state = stateBuffered
+	}
 	return nil
 }
 
@@ -317,6 +316,51 @@ func (db *DB) Build(ctx context.Context) error {
 func (db *DB) Rebuild(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	if len(db.pendingIDs) == 0 {
+		return ErrNoVectors
+	}
+
+	// Filter deleted vectors and deduplicate (last entry wins for Updates).
+	if len(db.deletedIDs) > 0 {
+		// Find the last occurrence of each ID (Update appends a new entry).
+		lastIdx := make(map[string]int)
+		for i, id := range db.pendingIDs {
+			lastIdx[id] = i
+		}
+
+		// Count occurrences to detect re-added IDs (Update = delete + re-add).
+		idCount := make(map[string]int)
+		for _, id := range db.pendingIDs {
+			idCount[id]++
+		}
+
+		seen := make(map[string]bool)
+		var filteredIDs []string
+		var filteredVectors [][]float64
+		// Iterate in reverse so the latest entry for each ID is processed first.
+		for i := len(db.pendingIDs) - 1; i >= 0; i-- {
+			id := db.pendingIDs[i]
+			if seen[id] {
+				continue // older duplicate, skip
+			}
+			seen[id] = true
+			// Pure delete: in deletedIDs and only one entry (no re-add).
+			if db.deletedIDs[id] && idCount[id] == 1 {
+				continue
+			}
+			filteredIDs = append(filteredIDs, id)
+			filteredVectors = append(filteredVectors, db.pendingVectors[i])
+		}
+		// Reverse to restore original order.
+		for i, j := 0, len(filteredIDs)-1; i < j; i, j = i+1, j-1 {
+			filteredIDs[i], filteredIDs[j] = filteredIDs[j], filteredIDs[i]
+			filteredVectors[i], filteredVectors[j] = filteredVectors[j], filteredVectors[i]
+		}
+		db.pendingIDs = filteredIDs
+		db.pendingVectors = filteredVectors
+		db.deletedIDs = nil
+	}
 
 	if len(db.pendingIDs) == 0 {
 		return ErrNoVectors
@@ -370,9 +414,12 @@ func (db *DB) Search(ctx context.Context, query []float64, topK int) ([]Result, 
 		return nil, fmt.Errorf("opaque: search failed: %w", err)
 	}
 
-	results := make([]Result, len(sr.Results))
-	for i, r := range sr.Results {
-		results[i] = Result{ID: r.ID, Score: r.Score}
+	results := make([]Result, 0, len(sr.Results))
+	for _, r := range sr.Results {
+		if db.deletedIDs[r.ID] {
+			continue
+		}
+		results = append(results, Result{ID: r.ID, Score: r.Score})
 	}
 	return results, nil
 }

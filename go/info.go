@@ -41,6 +41,11 @@ func (db *DB) Has(ctx context.Context, id string) bool {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
+	// Deleted vectors don't exist.
+	if db.deletedIDs[id] {
+		return false
+	}
+
 	// Check pending vectors.
 	for _, pid := range db.pendingIDs {
 		if pid == id {
@@ -73,6 +78,10 @@ func (db *DB) Get(ctx context.Context, id string) ([]float64, error) {
 
 	if db.state != stateReady {
 		return nil, ErrNotReady
+	}
+
+	if db.deletedIDs[id] {
+		return nil, ErrNotFound
 	}
 
 	b, err := db.blobStore.Get(ctx, id)

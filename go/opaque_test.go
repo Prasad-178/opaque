@@ -313,10 +313,10 @@ func TestBuildAndSearch_Memory(t *testing.T) {
 		}
 	}
 
-	// Add after Build should fail.
+	// Add after Build should succeed (buffers for Rebuild).
 	err = db.Add(ctx, "extra", make([]float64, dim))
-	if !errors.Is(err, ErrAlreadyBuilt) {
-		t.Fatalf("expected ErrAlreadyBuilt, got %v", err)
+	if err != nil {
+		t.Fatalf("Add after Build should succeed, got %v", err)
 	}
 }
 
