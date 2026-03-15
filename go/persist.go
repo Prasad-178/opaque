@@ -246,6 +246,7 @@ func Load(path string) (*DB, error) {
 		pcaModel:      pcaModel,
 		deletedIDs:    deletedIDsMap(meta.DeletedIDs),
 		metadata:      vectorMetadata,
+		loaded:        true,
 		clusterStats: hierarchical.ClusterStats{
 			NumClusters:   meta.ClusterStats.NumClusters,
 			MinSize:       meta.ClusterStats.MinSize,

@@ -50,6 +50,7 @@ import (
 	"github.com/opaque/opaque/go/pkg/auth"
 	"github.com/opaque/opaque/go/pkg/blob"
 	"github.com/opaque/opaque/go/pkg/client"
+	"github.com/opaque/opaque/go/pkg/encrypt"
 	"github.com/opaque/opaque/go/pkg/enterprise"
 	"github.com/opaque/opaque/go/pkg/hierarchical"
 	"github.com/opaque/opaque/go/pkg/pca"
@@ -204,6 +205,7 @@ type DB struct {
 	pcaModel      *pca.PCA // nil when PCA is disabled
 	clusterStats  hierarchical.ClusterStats
 	enterpriseCfg *enterprise.Config
+	loaded        bool // true when DB was restored via Load
 }
 
 // NewDB creates a new vector search database with the given configuration.
@@ -320,6 +322,14 @@ func (db *DB) Rebuild(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// If the DB was loaded from disk, extract existing vectors from the blob
+	// store so they're available for re-indexing alongside any new vectors.
+	if db.loaded && db.blobStore != nil {
+		if err := db.extractIndexedVectors(ctx); err != nil {
+			return fmt.Errorf("opaque: failed to extract indexed vectors: %w", err)
+		}
+	}
+
 	if len(db.pendingIDs) == 0 {
 		return ErrNoVectors
 	}
@@ -381,9 +391,15 @@ func (db *DB) Rebuild(ctx context.Context) error {
 	}
 
 	// Tear down old state.
+	storagePath := db.cfg.StoragePath
 	db.closeStoreLocked()
 	db.searchClient = nil
 	db.state = stateBuffered
+
+	// For file-backed storage, clear old blobs so Build can write fresh ones.
+	if db.cfg.Storage == File && storagePath != "" {
+		os.RemoveAll(storagePath)
+	}
 
 	return db.buildLocked(ctx)
 }
@@ -492,6 +508,57 @@ func (db *DB) Close() error {
 }
 
 // --- Internal helpers ---
+
+// extractIndexedVectors decrypts all vectors from the blob store and merges
+// them into pendingIDs/pendingVectors. This enables Rebuild on a loaded DB
+// where the original vectors only exist in encrypted blob storage.
+// Caller must hold db.mu write lock.
+func (db *DB) extractIndexedVectors(ctx context.Context) error {
+	if db.blobStore == nil || db.enterpriseCfg == nil {
+		return nil
+	}
+
+	enc, err := encrypt.NewAESGCM(db.enterpriseCfg.AESKey)
+	if err != nil {
+		return fmt.Errorf("encryptor: %w", err)
+	}
+
+	// Track IDs already in pending to avoid duplicates, but allow IDs
+	// that were updated (in both pendingIDs and deletedIDs) since the dedup
+	// logic needs both entries to distinguish updates from pure deletes.
+	existing := make(map[string]bool, len(db.pendingIDs))
+	for _, id := range db.pendingIDs {
+		if !db.deletedIDs[id] {
+			existing[id] = true
+		}
+	}
+
+	buckets, err := db.blobStore.ListBuckets(ctx)
+	if err != nil {
+		return fmt.Errorf("list buckets: %w", err)
+	}
+
+	for _, bucket := range buckets {
+		blobs, err := db.blobStore.GetBucket(ctx, bucket)
+		if err != nil {
+			continue
+		}
+		for _, b := range blobs {
+			if existing[b.ID] {
+				continue
+			}
+			vec, err := enc.DecryptVectorWithID(b.Ciphertext, b.ID)
+			if err != nil {
+				continue
+			}
+			db.pendingIDs = append(db.pendingIDs, b.ID)
+			db.pendingVectors = append(db.pendingVectors, vec)
+			existing[b.ID] = true
+		}
+	}
+
+	return nil
+}
 
 // buildLocked performs the actual index build. Caller must hold db.mu write lock.
 func (db *DB) buildLocked(ctx context.Context) error {
