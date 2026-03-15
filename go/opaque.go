@@ -230,17 +230,17 @@ func NewDB(cfg Config) (*DB, error) {
 // The vector is copied internally, so the caller may modify the slice after Add returns.
 func (db *DB) Add(ctx context.Context, id string, vector []float64) error {
 	if len(vector) != db.cfg.Dimension {
-		return fmt.Errorf("opaque: vector dimension %d does not match DB dimension %d", len(vector), db.cfg.Dimension)
+		return fmt.Errorf("%w: got %d, want %d", ErrDimensionMismatch, len(vector), db.cfg.Dimension)
 	}
 	if id == "" {
-		return fmt.Errorf("opaque: vector ID must not be empty")
+		return ErrEmptyID
 	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	if db.state == stateReady {
-		return fmt.Errorf("opaque: cannot Add after Build; use Rebuild to add vectors to an existing index")
+		return ErrAlreadyBuilt
 	}
 
 	v := make([]float64, len(vector))
@@ -265,15 +265,15 @@ func (db *DB) AddBatch(ctx context.Context, ids []string, vectors [][]float64) e
 	defer db.mu.Unlock()
 
 	if db.state == stateReady {
-		return fmt.Errorf("opaque: cannot AddBatch after Build; use Rebuild to add vectors to an existing index")
+		return ErrAlreadyBuilt
 	}
 
 	for i, v := range vectors {
 		if len(v) != db.cfg.Dimension {
-			return fmt.Errorf("opaque: vector %d (id=%q) has dimension %d, expected %d", i, ids[i], len(v), db.cfg.Dimension)
+			return fmt.Errorf("%w: vector %d (id=%q) has %d, want %d", ErrDimensionMismatch, i, ids[i], len(v), db.cfg.Dimension)
 		}
 		if ids[i] == "" {
-			return fmt.Errorf("opaque: vector %d has empty ID", i)
+			return fmt.Errorf("%w: vector %d", ErrEmptyID, i)
 		}
 	}
 
@@ -319,7 +319,7 @@ func (db *DB) Rebuild(ctx context.Context) error {
 	defer db.mu.Unlock()
 
 	if len(db.pendingIDs) == 0 {
-		return fmt.Errorf("opaque: no vectors to rebuild")
+		return ErrNoVectors
 	}
 
 	// Tear down old state.
@@ -339,7 +339,7 @@ func (db *DB) Rebuild(ctx context.Context) error {
 // It is safe for concurrent use from multiple goroutines after [DB.Build] completes.
 func (db *DB) Search(ctx context.Context, query []float64, topK int) ([]Result, error) {
 	if len(query) != db.cfg.Dimension {
-		return nil, fmt.Errorf("opaque: query dimension %d does not match DB dimension %d", len(query), db.cfg.Dimension)
+		return nil, fmt.Errorf("%w: got %d, want %d", ErrDimensionMismatch, len(query), db.cfg.Dimension)
 	}
 	if topK <= 0 {
 		return nil, fmt.Errorf("opaque: topK must be positive, got %d", topK)
@@ -350,9 +350,9 @@ func (db *DB) Search(ctx context.Context, query []float64, topK int) ([]Result, 
 
 	switch db.state {
 	case stateEmpty:
-		return nil, fmt.Errorf("opaque: no vectors indexed; call Add and Build first")
+		return nil, fmt.Errorf("%w: call Add and Build first", ErrNoVectors)
 	case stateBuffered:
-		return nil, fmt.Errorf("opaque: index not built; call Build before Search")
+		return nil, ErrNotBuilt
 	}
 
 	// Apply PCA transform to query if PCA is enabled.
@@ -435,7 +435,7 @@ func (db *DB) Close() error {
 // buildLocked performs the actual index build. Caller must hold db.mu write lock.
 func (db *DB) buildLocked(ctx context.Context) error {
 	if len(db.pendingIDs) == 0 {
-		return fmt.Errorf("opaque: no vectors added; call Add or AddBatch before Build")
+		return fmt.Errorf("%w: call Add or AddBatch before Build", ErrNoVectors)
 	}
 
 	// Apply PCA dimensionality reduction if configured.

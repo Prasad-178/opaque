@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"math/rand"
 	"os"
@@ -23,14 +24,16 @@ func TestSaveBeforeBuild(t *testing.T) {
 	defer db.Close()
 
 	tmpDir := t.TempDir()
-	if err := db.Save(filepath.Join(tmpDir, "out")); err == nil {
-		t.Fatal("expected error for Save before Build, got nil")
+	err = db.Save(filepath.Join(tmpDir, "out"))
+	if !errors.Is(err, ErrNotReady) {
+		t.Fatalf("expected ErrNotReady, got %v", err)
 	}
 
 	// Also try after Add but before Build.
 	db.Add(context.Background(), "a", []float64{1, 0, 0, 0})
-	if err := db.Save(filepath.Join(tmpDir, "out2")); err == nil {
-		t.Fatal("expected error for Save before Build (buffered state), got nil")
+	err = db.Save(filepath.Join(tmpDir, "out2"))
+	if !errors.Is(err, ErrNotReady) {
+		t.Fatalf("expected ErrNotReady (buffered state), got %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package opaque
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -114,8 +115,8 @@ func TestAdd_WrongDimension(t *testing.T) {
 	defer db.Close()
 
 	err = db.Add(context.Background(), "doc-1", make([]float64, 64))
-	if err == nil {
-		t.Fatal("expected error for wrong dimension, got nil")
+	if !errors.Is(err, ErrDimensionMismatch) {
+		t.Fatalf("expected ErrDimensionMismatch, got %v", err)
 	}
 }
 
@@ -127,8 +128,8 @@ func TestAdd_EmptyID(t *testing.T) {
 	defer db.Close()
 
 	err = db.Add(context.Background(), "", []float64{1, 0, 0, 0})
-	if err == nil {
-		t.Fatal("expected error for empty ID, got nil")
+	if !errors.Is(err, ErrEmptyID) {
+		t.Fatalf("expected ErrEmptyID, got %v", err)
 	}
 }
 
@@ -155,8 +156,8 @@ func TestBuild_NoVectors(t *testing.T) {
 	defer db.Close()
 
 	err = db.Build(context.Background())
-	if err == nil {
-		t.Fatal("expected error for Build with no vectors, got nil")
+	if !errors.Is(err, ErrNoVectors) {
+		t.Fatalf("expected ErrNoVectors, got %v", err)
 	}
 }
 
@@ -169,15 +170,15 @@ func TestSearch_BeforeBuild(t *testing.T) {
 
 	// Search on empty DB.
 	_, err = db.Search(context.Background(), []float64{1, 0, 0, 0}, 5)
-	if err == nil {
-		t.Fatal("expected error for Search on empty DB, got nil")
+	if !errors.Is(err, ErrNoVectors) {
+		t.Fatalf("expected ErrNoVectors on empty DB, got %v", err)
 	}
 
 	// Search after Add but before Build.
 	db.Add(context.Background(), "doc-1", []float64{1, 0, 0, 0})
 	_, err = db.Search(context.Background(), []float64{1, 0, 0, 0}, 5)
-	if err == nil {
-		t.Fatal("expected error for Search before Build, got nil")
+	if !errors.Is(err, ErrNotBuilt) {
+		t.Fatalf("expected ErrNotBuilt, got %v", err)
 	}
 }
 
@@ -314,8 +315,8 @@ func TestBuildAndSearch_Memory(t *testing.T) {
 
 	// Add after Build should fail.
 	err = db.Add(ctx, "extra", make([]float64, dim))
-	if err == nil {
-		t.Fatal("expected error for Add after Build, got nil")
+	if !errors.Is(err, ErrAlreadyBuilt) {
+		t.Fatalf("expected ErrAlreadyBuilt, got %v", err)
 	}
 }
 

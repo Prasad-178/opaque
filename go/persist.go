@@ -43,7 +43,7 @@ func (db *DB) Save(path string) error {
 	defer db.mu.RUnlock()
 
 	if db.state != stateReady {
-		return fmt.Errorf("opaque: cannot Save before Build")
+		return ErrNotReady
 	}
 
 	// Create directory.
