@@ -155,6 +155,20 @@ type Config struct {
 	// GapMultiplier times the median gap. Lower values probe fewer clusters.
 	// Default: 2.0.
 	GapMultiplier float64
+
+	// OnBuildProgress is called during [DB.Build] and [DB.Rebuild] to report progress.
+	// The phase parameter identifies the current step, and pct is a value between 0 and 1
+	// indicating completion within that phase.
+	//
+	// Phases reported (in order):
+	//   - "pca": PCA fitting and dimensionality reduction (only if PCADimension > 0)
+	//   - "clustering": k-means clustering of vectors
+	//   - "encrypting": AES-256-GCM encryption of vectors
+	//   - "indexing": blob storage and HE engine initialization
+	//
+	// The callback is invoked synchronously from the Build goroutine. Keep it fast.
+	// A nil callback disables progress reporting (default).
+	OnBuildProgress func(phase string, pct float64) `json:"-"`
 }
 
 // Result is a single search result containing the vector ID and its similarity score.
@@ -566,13 +580,21 @@ func (db *DB) buildLocked(ctx context.Context) error {
 		return fmt.Errorf("%w: call Add or AddBatch before Build", ErrNoVectors)
 	}
 
+	progress := db.cfg.OnBuildProgress
+
 	// Apply PCA dimensionality reduction if configured.
 	indexVectors := db.pendingVectors
 	indexDim := db.cfg.Dimension
 	if db.cfg.PCADimension > 0 {
+		if progress != nil {
+			progress("pca", 0)
+		}
 		model, err := pca.Fit(db.pendingVectors, db.cfg.PCADimension)
 		if err != nil {
 			return fmt.Errorf("opaque: PCA fitting failed: %w", err)
+		}
+		if progress != nil {
+			progress("pca", 0.5)
 		}
 		reduced, err := model.TransformBatch(db.pendingVectors)
 		if err != nil {
@@ -581,6 +603,9 @@ func (db *DB) buildLocked(ctx context.Context) error {
 		db.pcaModel = model
 		indexVectors = reduced
 		indexDim = db.cfg.PCADimension
+		if progress != nil {
+			progress("pca", 1)
+		}
 	} else {
 		db.pcaModel = nil
 	}
@@ -595,6 +620,9 @@ func (db *DB) buildLocked(ctx context.Context) error {
 	enterpriseID := db.cfg.enterpriseID()
 
 	// Build the k-means index: clusters vectors, encrypts with AES-256-GCM, stores blobs.
+	if progress != nil {
+		progress("clustering", 0)
+	}
 	ecfgBuild, err := enterprise.NewConfig(enterpriseID, indexDim, db.cfg.NumClusters)
 	if err != nil {
 		store.Close()
@@ -609,10 +637,16 @@ func (db *DB) buildLocked(ctx context.Context) error {
 		store.Close()
 		return fmt.Errorf("opaque: builder init: %w", err)
 	}
+	if progress != nil {
+		progress("clustering", 0.5)
+	}
 	_, err = builder.Build(ctx, db.pendingIDs, indexVectors, store)
 	if err != nil {
 		store.Close()
 		return fmt.Errorf("opaque: index build failed: %w", err)
+	}
+	if progress != nil {
+		progress("encrypting", 1)
 	}
 	db.clusterStats = builder.GetClusterStats()
 	enterpriseCfg := builder.GetEnterpriseConfig()
@@ -626,12 +660,18 @@ func (db *DB) buildLocked(ctx context.Context) error {
 	searchCfg := db.makeSearchConfig(enterpriseCfg, indexDim)
 
 	// Create the search client with configurable pool size.
+	if progress != nil {
+		progress("indexing", 0)
+	}
 	searchClient, err := client.NewEnterpriseHierarchicalClientWithPoolSize(
 		searchCfg, creds, store, db.cfg.WorkerPoolSize,
 	)
 	if err != nil {
 		store.Close()
 		return fmt.Errorf("opaque: failed to create search client: %w", err)
+	}
+	if progress != nil {
+		progress("indexing", 1)
 	}
 
 	db.blobStore = store

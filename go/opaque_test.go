@@ -692,3 +692,111 @@ func TestBuildAndSearch_WithPCA(t *testing.T) {
 		dim, pcaDim, db.pcaModel.TotalVarianceExplained()*100)
 	t.Logf("Top result: ID=%s, Score=%.4f", results[0].ID, results[0].Score)
 }
+
+func TestOnBuildProgress(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping HE engine test in short mode")
+	}
+
+	var mu sync.Mutex
+	var phases []string
+
+	db, err := NewDB(Config{
+		Dimension:   128,
+		NumClusters: 8,
+		OnBuildProgress: func(phase string, pct float64) {
+			mu.Lock()
+			defer mu.Unlock()
+			phases = append(phases, fmt.Sprintf("%s:%.0f", phase, pct*100))
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	ids, vecs := generateTestVectors(200, 128, 42)
+	db.AddBatch(context.Background(), ids, vecs)
+
+	if err := db.Build(context.Background()); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Should have clustering, encrypting, and indexing phases (no PCA).
+	if len(phases) == 0 {
+		t.Fatal("no progress callbacks received")
+	}
+
+	// Verify expected phases appeared.
+	phaseSet := make(map[string]bool)
+	for _, p := range phases {
+		// Extract phase name before ':'
+		for i, c := range p {
+			if c == ':' {
+				phaseSet[p[:i]] = true
+				break
+			}
+		}
+	}
+	for _, expected := range []string{"clustering", "encrypting", "indexing"} {
+		if !phaseSet[expected] {
+			t.Errorf("missing phase %q in progress callbacks: %v", expected, phases)
+		}
+	}
+	t.Logf("Progress phases: %v", phases)
+}
+
+func TestOnBuildProgress_WithPCA(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping HE engine test in short mode")
+	}
+
+	var mu sync.Mutex
+	var phases []string
+
+	db, err := NewDB(Config{
+		Dimension:    128,
+		PCADimension: 64,
+		NumClusters:  8,
+		OnBuildProgress: func(phase string, pct float64) {
+			mu.Lock()
+			defer mu.Unlock()
+			phases = append(phases, fmt.Sprintf("%s:%.0f", phase, pct*100))
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	ids, vecs := generateTestVectors(200, 128, 42)
+	db.AddBatch(context.Background(), ids, vecs)
+
+	if err := db.Build(context.Background()); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	phaseSet := make(map[string]bool)
+	for _, p := range phases {
+		for i, c := range p {
+			if c == ':' {
+				phaseSet[p[:i]] = true
+				break
+			}
+		}
+	}
+
+	// PCA phase should appear when PCADimension is set.
+	for _, expected := range []string{"pca", "clustering", "encrypting", "indexing"} {
+		if !phaseSet[expected] {
+			t.Errorf("missing phase %q in progress callbacks: %v", expected, phases)
+		}
+	}
+	t.Logf("Progress phases: %v", phases)
+}
