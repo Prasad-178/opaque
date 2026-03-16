@@ -2,228 +2,150 @@
 
 Privacy-preserving vector search using homomorphic encryption.
 
-**Search a remote vector database without revealing your query. The server computes on encrypted data and never sees what you're searching for or what it returns.**
+**Search encrypted vectors without revealing your query. The server computes on encrypted data and never sees what you're searching for.**
 
-## How It Works
+## Install
 
-Opaque uses a three-level hierarchical approach to provide both **query privacy** and **data privacy**:
-
+```bash
+go get github.com/Prasad-178/opaque
 ```
-Level 1: HE centroid scoring  -> Server can't see query or which clusters were selected
-Level 2: Decoy-based fetch    -> Server can't distinguish real from fake bucket requests
-Level 3: Local AES decrypt    -> All final scoring happens client-side
-```
-
-### The Search Pipeline
-
-```
-Client                                          Server
-  |                                               |
-  |-- 1. Encrypt query with CKKS HE ------------->|
-  |                                               |-- Compute HE(query) . centroid[i]
-  |                                               |   for ALL centroids (blindly)
-  |<-- Return encrypted scores -------------------|
-  |                                               |
-  |-- 2. Decrypt scores locally (server never sees)
-  |-- 3. Select top clusters + generate decoys
-  |                                               |
-  |-- 4. Request [real + decoy] bucket IDs ------>|
-  |      (shuffled, server can't tell apart)      |-- Return AES-encrypted blobs
-  |<-- Return encrypted blobs --------------------|
-  |                                               |
-  |-- 5. AES decrypt vectors locally
-  |-- 6. Score and rank locally
-  |-- 7. Return top-K results
-```
-
-### What the Server Never Sees
-
-| Information | Protected? | How |
-|-------------|-----------|-----|
-| Query vector | Yes | CKKS homomorphic encryption |
-| Which clusters selected | Yes | Client-side HE decryption |
-| Bucket access patterns | Obfuscated | Decoy buckets + shuffling |
-| Vector contents | Yes | AES-256-GCM encryption |
-| Similarity scores | Yes | Client-side computation |
-| Final ranking | Yes | Client-side only |
-
-## Cryptography
-
-| Component | Implementation | Security |
-|-----------|---------------|----------|
-| Homomorphic Encryption | [Lattigo v5](https://github.com/tuneinsight/lattigo) CKKS | 128-bit (RLWE) |
-| Symmetric Encryption | AES-256-GCM | 256-bit |
-| Key Derivation | Argon2id | Memory-hard |
-| Clustering | K-means with k-means++ init, multi-init, empty cluster recovery | N/A |
-
-CKKS (Cheon-Kim-Kim-Song) is used for approximate arithmetic on encrypted floating-point vectors. This allows the server to compute dot products on encrypted queries without ever seeing the plaintext.
-
-## Performance
-
-Benchmarked on Apple M4 Pro with 100K 128-dimensional vectors.
-
-### Core Operations
-
-| Operation | Latency |
-|-----------|---------|
-| CKKS Encryption (128D) | ~5 ms |
-| CKKS Decryption (128D) | ~0.8 ms |
-| HE Dot Product (128D) | ~33 ms |
-| AES-256-GCM Encrypt | <1 ms |
-
-### Search (100K Vectors, 64 Clusters)
-
-Measured with `TestBenchmark100KOptimized` — recall computed against brute-force cosine similarity ground truth.
-
-| Metric | Standard (64 HE ops) | Batch (1 HE op) |
-|--------|---------------------|------------------|
-| **Recall@10** | **96.0%** | **96.0%** |
-| **Average Latency** | 2.56s | **190ms** |
-| **Speedup** | 1x | **13.5x** |
-
-Batch mode uses CKKS slot packing to score all 64 centroids in a single HE operation.
-
-### SIFT10K (Real Dataset)
-
-Tested on the [SIFT10K](http://corpus-texmex.irisa.fr/) benchmark (10K real 128-dim embeddings):
-
-| Metric | Value |
-|--------|-------|
-| Recall@1 | 95.0% |
-| Recall@10 | 96.0% |
-| Dataset scanned | 14.9% |
-
-> Run `cd go && go test -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 10m` to reproduce. See [go/BENCHMARKS.md](go/BENCHMARKS.md) for full details.
 
 ## Quick Start
 
-### Library API
-
 ```go
-import opaque "github.com/opaque/opaque/go"
+package main
 
-// Create a database
-db, err := opaque.NewDB(opaque.Config{
-    Dimension:   128,
-    NumClusters: 64,
-})
-defer db.Close()
+import (
+	"context"
+	"fmt"
+	"log"
 
-// Add vectors
-db.Add(ctx, "doc-1", vector1)
-db.Add(ctx, "doc-2", vector2)
-// or: db.AddBatch(ctx, ids, vectors)
+	"github.com/Prasad-178/opaque"
+)
 
-// Build the index (k-means clustering + HE engine initialization)
-if err := db.Build(ctx); err != nil {
-    log.Fatal(err)
-}
+func main() {
+	db, err := opaque.NewDB(opaque.Config{Dimension: 128, NumClusters: 16})
+	if err != nil { log.Fatal(err) }
+	defer db.Close()
 
-// Search (safe for concurrent use after Build)
-results, err := db.Search(ctx, queryVector, 10)
-for _, r := range results {
-    fmt.Printf("  %s: %.4f\n", r.ID, r.Score)
+	ctx := context.Background()
+	db.Add(ctx, "doc-1", vector1)
+	db.Add(ctx, "doc-2", vector2)
+
+	db.Build(ctx) // k-means clustering + HE engine init
+
+	results, _ := db.Search(ctx, queryVector, 10)
+	for _, r := range results {
+		fmt.Printf("  %s: %.4f\n", r.ID, r.Score)
+	}
 }
 ```
 
-### Running Tests
+## Features
+
+- **Homomorphic encryption** — queries are encrypted with CKKS; the server scores centroids without seeing the query
+- **AES-256-GCM** — vectors encrypted at rest, decrypted only client-side
+- **Decoy requests** — real bucket fetches are mixed with fake ones to hide access patterns
+- **Metadata & filtered search** — attach key-value metadata to vectors, filter at search time
+- **CRUD operations** — Add, Update, Delete vectors with soft-delete and compaction via Rebuild
+- **Persistence** — Save/Load database state to disk
+- **File-backed storage** — memory or file-backed blob store for large datasets
+- **Progress callbacks** — `OnBuildProgress` hook for observability during index builds
+- **Batch operations** — AddBatch, AddBatchWithMetadata for bulk ingestion
+
+## Configuration
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `Dimension` | (required) | Vector dimension |
+| `NumClusters` | 64 | K-means clusters. More = faster search, less privacy |
+| `TopClusters` | NumClusters/2 | Clusters probed per search. More = better recall |
+| `NumDecoys` | 8 | Decoy clusters for access pattern hiding |
+| `WorkerPoolSize` | min(NumCPU, 8) | Parallel HE engines (~50MB each) |
+| `Storage` | Memory | `opaque.Memory` or `opaque.File` |
+| `StoragePath` | "" | Directory for file storage |
+| `ProbeThreshold` | 0.95 | Multi-probe inclusion threshold |
+| `ProbeStrategy` | "threshold" | `"threshold"` or `"gap"` (adaptive score-gap detection) |
+| `GapMultiplier` | 2.0 | Gap sensitivity for `"gap"` strategy |
+| `RedundantAssignments` | 1 | Clusters per vector (2 = better boundary recall, 2x storage) |
+| `NumKMeansInit` | 1 | K-means initializations (higher = better centroids) |
+| `NormalizedStorage` | true | Pre-normalize vectors for faster search |
+
+## Examples
+
+| Example | Description |
+|---------|-------------|
+| [`basic`](examples/basic/) | Minimal workflow: create, add, build, search |
+| [`persistence`](examples/persistence/) | Save and load database state |
+| [`metadata`](examples/metadata/) | Attach metadata and use filtered search |
+| [`large-scale`](examples/large-scale/) | 10K+ vectors with batch operations |
+| [`file-storage`](examples/file-storage/) | File-backed blob store for large datasets |
+| [`http-server`](examples/http-server/) | HTTP API wrapping Opaque for self-hosted deployment |
+
+Run any example:
 
 ```bash
-cd go
-
-# Use the Makefile for common operations
-make test-fast    # go test -short ./...
-make test         # go test ./...
-make lint         # go vet ./...
-make test-bench   # Micro-benchmarks (crypto, LSH)
-make test-sift    # SIFT10K accuracy test
-make test-100k    # 100K vector benchmark
-
-# Or run directly
-go test -v -run TestBuildAndSearch ./...
-go test -v -run TestSIFTKMeansEndToEnd ./pkg/client/ -timeout 5m
-go test -v -run TestBenchmark100KOptimized ./pkg/client/ -timeout 10m
-
-# Run the dev server
-go run ./cmd/devserver/main.go
+go run ./examples/basic/
 ```
 
-CI runs automatically via GitHub Actions on every push/PR. See `.github/workflows/` for details.
+## Performance
 
-## Project Structure
+Benchmarked on Apple M4 Pro, 100K 128-dimensional vectors, 64 clusters.
 
-```
-opaque/
-├── go/
-│   ├── opaque.go               # Library API (NewDB, Add, Build, Search)
-│   ├── pkg/
-│   │   ├── crypto/           # CKKS homomorphic encryption (Lattigo v5)
-│   │   ├── encrypt/          # AES-256-GCM symmetric encryption
-│   │   ├── lsh/              # Locality-sensitive hashing
-│   │   ├── cluster/          # K-means clustering (k-means++ init)
-│   │   ├── blob/             # Encrypted blob storage (memory + file backends)
-│   │   ├── cache/            # Centroid cache + batch CKKS packing
-│   │   ├── hierarchical/     # Index builder (K-means + AES encryption)
-│   │   ├── client/           # Search client (standard + batch modes)
-│   │   ├── auth/             # Authentication service (token-based)
-│   │   ├── enterprise/       # Per-enterprise config + key isolation
-│   │   ├── server/           # REST API server
-│   │   └── embeddings/       # SIFT dataset loader, embedding client
-│   ├── internal/
-│   │   ├── service/          # Search service (LSH + HE scoring)
-│   │   ├── session/          # Session management with TTL
-│   │   └── store/            # Vector storage interface
-│   ├── cmd/
-│   │   ├── devserver/        # Development server
-│   │   ├── search-service/   # Production server entry point
-│   │   └── cli/              # CLI benchmarking tool
-│   ├── test/                 # Integration benchmarks
-│   └── BENCHMARKS.md         # Detailed benchmark data
-├── data/
-│   └── siftsmall/            # SIFT10K dataset (10K real embeddings)
-├── docs/
-│   └── ARCHITECTURE.md       # System architecture details
-├── ROADMAP.md                # Future plans
-└── README.md
-```
+| Metric | Standard (64 HE ops) | Batch (1 HE op) |
+|--------|---------------------|------------------|
+| **Recall@10** | 96.0% | 96.0% |
+| **Latency** | 2.56s | 190ms |
 
-## Key Optimizations
+SIFT10K (real dataset): 95% Recall@1, 96% Recall@10 scanning 14.9% of data.
 
-### CKKS Slot Packing (Batch Mode)
-CKKS supports packing multiple values into a single ciphertext (up to 16,384 slots with LogN=14). Opaque packs all 64 centroids into a single plaintext and computes all dot products in one HE operation, reducing centroid scoring from ~1.7s to ~28ms.
-
-### Redundant Cluster Assignment
-Each vector is assigned to its top-K nearest clusters (default K=2). This costs 2x storage but significantly improves recall for boundary queries that fall between clusters.
-
-### Multi-Probe Cluster Selection
-After HE scoring, clusters within a configurable threshold of the top-K score are also included. This compensates for CKKS approximation noise that can cause near-miss exclusions.
-
-### Adaptive Score-Gap Probing
-Instead of a fixed ratio threshold for cluster selection, gap-based probing detects natural breaks in HE score distributions — probing deeper when scores are tightly clustered, stopping early when there's a clear gap. Configurable via `ProbeStrategy: "gap"`.
-
-### Pre-Normalized Vector Storage
-Vectors are stored pre-normalized during Build, eliminating per-vector normalization during search. This speeds up local scoring by 10-15% with no accuracy impact (normalized dot product = cosine similarity).
-
-### Parallel Build & Search
-Vector encryption during Build and AES decryption during Search both use multi-core worker pools (`runtime.NumCPU()` goroutines) for significant throughput improvements.
-
-### Decoy Buckets
-When fetching encrypted blobs, the client adds random "decoy" bucket requests and shuffles the order. The server cannot distinguish real requests from decoys, hiding the client's true access pattern.
+See [BENCHMARKS.md](BENCHMARKS.md) for full details.
 
 ## Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed system design, privacy model, and security analysis.
+Opaque uses a three-level privacy pipeline:
 
-## Roadmap
+1. **HE centroid scoring** — server scores encrypted query against all centroids, can't see query or results
+2. **Decoy-based fetch** — client requests real + fake buckets, server can't tell them apart
+3. **Local AES decrypt + rank** — all final scoring happens client-side
 
-See [ROADMAP.md](ROADMAP.md) for planned features including library API, gRPC service completion, PIR integration, and more.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system design, threat model, and crypto details.
 
-## References
+## Self-Hosting
 
-- [Lattigo](https://github.com/tuneinsight/lattigo) - Go library for lattice-based homomorphic encryption
-- [CKKS Scheme](https://eprint.iacr.org/2016/421) - Cheon-Kim-Kim-Song approximate HE
-- [SIFT Dataset](http://corpus-texmex.irisa.fr/) - Standard benchmark for nearest neighbor search
+### Docker (gRPC search service)
+
+```bash
+docker build -t opaque .
+docker run -p 50051:50051 opaque
+```
+
+### HTTP API (example)
+
+```bash
+go run ./examples/http-server/
+
+# Add vectors
+curl -X POST localhost:8080/vectors -d '{"vectors":[{"id":"v1","values":[0.1,0.2,...]}]}'
+
+# Build index
+curl -X POST localhost:8080/admin/build
+
+# Search
+curl -X POST localhost:8080/search -d '{"vector":[0.1,0.2,...],"top_k":5}'
+```
+
+## Development
+
+```bash
+make test-fast    # go test -short ./...
+make test         # full test suite
+make lint         # go vet ./...
+make test-bench   # crypto/LSH micro-benchmarks
+make test-sift    # SIFT10K accuracy
+make test-100k    # 100K vector benchmark
+```
 
 ## License
 
-MIT
+[MIT](LICENSE)
