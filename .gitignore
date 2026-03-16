@@ -1,6 +1,6 @@
 # Go
-go/bin/
-go/vendor/
+bin/
+vendor/
 
 # IDE
 .idea/
@@ -21,6 +21,14 @@ data/
 GO_PRODUCTION_PLAN.md
 PRD.md
 notes.txt
+
+# Compiled example binaries
+/basic
+/persistence
+/metadata
+/large-scale
+/file-storage
+/http-server
 
 # Ignore articles
 *ARTICLE*.md
