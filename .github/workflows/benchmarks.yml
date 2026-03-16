@@ -5,10 +5,6 @@ on:
   schedule:
     - cron: "0 6 * * 1" # Weekly on Monday at 06:00 UTC
 
-defaults:
-  run:
-    working-directory: go
-
 jobs:
   micro-benchmarks:
     name: Micro-benchmarks
@@ -34,7 +30,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: micro-benchmarks
-          path: go/bench-output.txt
+          path: bench-output.txt
 
   accuracy-sift10k:
     name: SIFT10K accuracy
@@ -65,7 +61,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: sift10k-results
-          path: go/sift-output.txt
+          path: sift-output.txt
 
   benchmark-100k:
     name: 100K vector benchmark
@@ -91,7 +87,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: benchmark-100k-results
-          path: go/100k-output.txt
+          path: 100k-output.txt
 
   accuracy-sift1m:
     name: SIFT1M accuracy
@@ -102,7 +98,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
-          cache-dependency-path: go/go.sum
 
       - name: Cache SIFT1M dataset
         id: cache-sift1m
@@ -114,9 +109,9 @@ jobs:
       - name: Download SIFT1M dataset
         if: steps.cache-sift1m.outputs.cache-hit != 'true'
         run: |
-          mkdir -p ../data/sift
+          mkdir -p data/sift
           curl -fSL ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz -o /tmp/sift.tar.gz
-          tar xzf /tmp/sift.tar.gz -C ../data/sift --strip-components=1
+          tar xzf /tmp/sift.tar.gz -C data/sift --strip-components=1
           rm -f /tmp/sift.tar.gz
 
       - name: Run SIFT1M accuracy benchmark
@@ -139,4 +134,4 @@ jobs:
         if: always()
         with:
           name: sift1m-results
-          path: go/sift1m-output.txt
+          path: sift1m-output.txt
