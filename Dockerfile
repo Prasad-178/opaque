@@ -7,5 +7,5 @@ RUN CGO_ENABLED=0 go build -o /opaque-server ./cmd/search-service
 
 FROM alpine:3.19
 COPY --from=builder /opaque-server /usr/local/bin/opaque-server
-EXPOSE 8080
+EXPOSE 50051
 ENTRYPOINT ["opaque-server"]

@@ -4,14 +4,14 @@ services:
     container_name: opaque-search
     restart: unless-stopped
     ports:
+      - "50051:50051"
       - "8080:8080"
     environment:
-      OPAQUE_DB_PATH: /var/lib/opaque/db
+      OPAQUE_STORAGE_BACKEND: file
+      OPAQUE_STORAGE_PATH: /var/lib/opaque/vectors.json
       OPAQUE_DIMENSION: "128"
-      OPAQUE_NUM_CLUSTERS: "64"
-      OPAQUE_AUTO_INDEX_ENABLED: "true"
-      OPAQUE_AUTO_INDEX_INTERVAL: 5s
-      OPAQUE_AUTO_INDEX_MIN_CHANGES: "1"
+      OPAQUE_LSH_BITS: "128"
+      OPAQUE_DEMO_VECTORS: "0"
     volumes:
       - opaque-data:/var/lib/opaque
 

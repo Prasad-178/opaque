@@ -113,35 +113,30 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system design, thr
 
 ## Self-Hosting
 
-### Docker (SDK search service)
+### Docker (gRPC search service)
 
 ```bash
 docker build -t opaque .
-docker run -p 8080:8080 \
-  -e OPAQUE_DB_PATH=/var/lib/opaque/db \
-  -e OPAQUE_DIMENSION=128 \
-  -e OPAQUE_AUTO_INDEX_ENABLED=true \
+docker run -p 50051:50051 -p 8080:8080 \
+  -e OPAQUE_STORAGE_BACKEND=file \
+  -e OPAQUE_STORAGE_PATH=/var/lib/opaque/vectors.json \
   -v opaque-data:/var/lib/opaque \
   opaque
 ```
 
-### HTTP API (search service)
+### HTTP API (example)
 
 ```bash
-go run ./cmd/search-service/
+go run ./examples/http-server/
 
-# Add vectors (queued for auto-indexing)
-curl -X POST localhost:8080/v1/vectors/batch \
-  -H "Content-Type: application/json" \
-  -d '{"vectors":[{"id":"v1","values":[0.1,0.2,...]}]}'
+# Add vectors
+curl -X POST localhost:8080/vectors -d '{"vectors":[{"id":"v1","values":[0.1,0.2,...]}]}'
 
-# Search (returns 503 until index is ready)
-curl -X POST localhost:8080/v1/search \
-  -H "Content-Type: application/json" \
-  -d '{"vector":[0.1,0.2,...],"top_k":5}'
+# Build index
+curl -X POST localhost:8080/admin/build
 
-# Service stats
-curl localhost:8080/v1/stats
+# Search
+curl -X POST localhost:8080/search -d '{"vector":[0.1,0.2,...],"top_k":5}'
 ```
 
 ## Development

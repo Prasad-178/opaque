@@ -1,41 +1,30 @@
-# AWS Deployment (SDK Search Service)
+# AWS Deployment (Search Service)
 
-`cmd/search-service` now runs the `opaque.DB` SDK internally, including autonomous background index lifecycle management.
+This service is now configured via environment variables, which maps cleanly to ECS task definitions.
 
 ## Required env vars
 
-- `OPAQUE_DB_PATH=/var/lib/opaque/db`
-- `OPAQUE_DIMENSION=128`
-
-## Recommended env vars
-
-- `OPAQUE_NUM_CLUSTERS=64`
-- `OPAQUE_AUTO_INDEX_ENABLED=true`
-- `OPAQUE_AUTO_INDEX_INTERVAL=5s`
-- `OPAQUE_AUTO_INDEX_MIN_CHANGES=1`
-- `OPAQUE_AUTO_INDEX_TIMEOUT=15m`
+- `OPAQUE_STORAGE_BACKEND=file`
+- `OPAQUE_STORAGE_PATH=/var/lib/opaque/vectors.json`
+- `OPAQUE_DIMENSION=128` (must match your vectors)
 
 ## Optional env vars
 
+- `OPAQUE_GRPC_PORT` (default `50051`)
 - `OPAQUE_HTTP_PORT` (default `8080`)
-- `OPAQUE_TOP_CLUSTERS` (default `0`, SDK defaulting)
-- `OPAQUE_NUM_DECOYS` (default `8`)
-- `OPAQUE_WORKER_POOL_SIZE` (default `0`)
-- `OPAQUE_BOOTSTRAP_VECTORS` (JSON path)
+- `OPAQUE_LSH_BITS` (default `128`)
+- `OPAQUE_LSH_SEED` (default `42`)
+- `OPAQUE_BOOTSTRAP_VECTORS` (JSON file path mounted into container)
+- `OPAQUE_DEMO_VECTORS` (default `0`; keep disabled in production)
+- `OPAQUE_ALLOW_UNSAFE_DEMO_DATA` (default `false`)
+- `OPAQUE_TLS_CERT` / `OPAQUE_TLS_KEY`
 
-## API endpoints
+## Health checks
 
-- `GET /healthz`
-- `GET /readyz`
-- `POST /v1/vectors/batch`
-- `PUT /v1/vectors/{id}`
-- `DELETE /v1/vectors/{id}`
-- `POST /v1/search`
-- `GET /v1/stats`
-- `POST /v1/admin/build`
-- `POST /v1/admin/save`
+- Liveness: `GET /healthz`
+- Readiness: `GET /readyz`
 
 ## Storage recommendations
 
 - Use EFS or an attached persistent volume for `/var/lib/opaque`.
-- Keep `OPAQUE_DB_PATH` on persistent storage so snapshots survive restarts.
+- Avoid memory backend in production.
