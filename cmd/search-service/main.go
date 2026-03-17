@@ -3,14 +3,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,25 +31,38 @@ import (
 )
 
 var (
-	grpcPort    = flag.Int("grpc-port", 50051, "gRPC server port")
-	httpPort    = flag.Int("http-port", 8080, "HTTP metrics/health port")
-	dimension   = flag.Int("dimension", 128, "Vector dimension")
-	lshBits     = flag.Int("lsh-bits", 128, "Number of LSH bits")
-	lshSeed     = flag.Int64("lsh-seed", 42, "LSH random seed")
-	demoVectors = flag.Int("demo-vectors", 1000, "Number of demo vectors to generate")
-	tlsCert     = flag.String("tls-cert", "", "TLS certificate file (optional)")
-	tlsKey      = flag.String("tls-key", "", "TLS key file (optional)")
+	grpcPort            = flag.Int("grpc-port", 50051, "gRPC server port")
+	httpPort            = flag.Int("http-port", 8080, "HTTP metrics/health port")
+	dimension           = flag.Int("dimension", 128, "Vector dimension")
+	lshBits             = flag.Int("lsh-bits", 128, "Number of LSH bits")
+	lshSeed             = flag.Int64("lsh-seed", 42, "LSH random seed")
+	storageBackend      = flag.String("storage-backend", "file", "Vector storage backend: file|memory")
+	storagePath         = flag.String("storage-path", "./data/vectors.json", "Path for file storage backend")
+	bootstrapVectors    = flag.String("bootstrap-vectors", "", "Optional JSON file containing vectors to preload")
+	demoVectors         = flag.Int("demo-vectors", 0, "Number of generated demo vectors to seed (disabled by default)")
+	allowUnsafeDemoData = flag.Bool("allow-unsafe-demo-data", false, "Allow startup with generated demo vectors")
+	tlsCert             = flag.String("tls-cert", "", "TLS certificate file (optional)")
+	tlsKey              = flag.String("tls-key", "", "TLS key file (optional)")
 )
+
+type bootstrapVector struct {
+	ID       string         `json:"id"`
+	Values   []float64      `json:"values"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
 
 func main() {
 	flag.Parse()
 
 	log.Println("Starting Opaque Search Service...")
 
-	// Create in-memory vector store (replace with Milvus for production)
-	vectorStore := store.NewMemoryStore()
+	// Create vector store.
+	vectorStore, err := createStore()
+	if err != nil {
+		log.Fatalf("Failed to create vector store: %v", err)
+	}
+	defer vectorStore.Close()
 
-	// Create search service
 	cfg := service.Config{
 		LSHNumBits:          *lshBits,
 		LSHDimension:        *dimension,
@@ -58,16 +76,12 @@ func main() {
 		log.Fatalf("Failed to create search service: %v", err)
 	}
 
-	// Generate demo vectors
-	if *demoVectors > 0 {
-		log.Printf("Generating %d demo vectors...", *demoVectors)
-		generateDemoVectors(svc, *demoVectors, *dimension)
-		log.Printf("Generated %d vectors", *demoVectors)
+	if err := seedVectors(svc); err != nil {
+		log.Fatalf("Failed to seed vectors: %v", err)
 	}
 
-	// Create gRPC server
 	serverOpts := []grpc.ServerOption{
-		grpc.MaxRecvMsgSize(50 * 1024 * 1024), // 50MB for large ciphertexts
+		grpc.MaxRecvMsgSize(50 * 1024 * 1024),
 		grpc.MaxSendMsgSize(50 * 1024 * 1024),
 		grpc.ChainUnaryInterceptor(
 			grpcserver.RecoveryUnaryInterceptor(),
@@ -88,18 +102,13 @@ func main() {
 	}
 	grpcServer := grpc.NewServer(serverOpts...)
 
-	// Register health service
 	healthServer := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
 	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 
-	// Register reflection for grpcurl/grpcui
 	reflection.Register(grpcServer)
-
-	// Register Opaque search service
 	pb.RegisterOpaqueSearchServer(grpcServer, grpcserver.New(svc))
 
-	// Start gRPC server
 	grpcLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *grpcPort))
 	if err != nil {
 		log.Fatalf("Failed to listen on port %d: %v", *grpcPort, err)
@@ -112,7 +121,6 @@ func main() {
 		}
 	}()
 
-	// Start HTTP server for metrics/health
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		healthy, msg, sessions, vectors := svc.HealthCheck(r.Context())
@@ -139,30 +147,107 @@ func main() {
 
 	go func() {
 		log.Printf("HTTP server listening on :%d", *httpPort)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("HTTP server failed: %v", err)
 		}
 	}()
 
-	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 
 	log.Println("Shutting down...")
-
-	// Graceful shutdown
 	grpcServer.GracefulStop()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	httpServer.Shutdown(ctx)
+	_ = httpServer.Shutdown(ctx)
 
 	log.Println("Shutdown complete")
 }
 
-// generateDemoVectors creates synthetic vectors for testing
+func createStore() (store.VectorStore, error) {
+	switch strings.ToLower(*storageBackend) {
+	case "memory":
+		log.Println("Using in-memory vector store (non-durable)")
+		return store.NewMemoryStore(), nil
+	case "file":
+		if *storagePath == "" {
+			return nil, fmt.Errorf("storage-path is required when storage-backend=file")
+		}
+		absPath, err := filepath.Abs(*storagePath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve storage path: %w", err)
+		}
+		fs, err := store.NewFileStore(absPath)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("Using file vector store at %s", absPath)
+		return fs, nil
+	default:
+		return nil, fmt.Errorf("unknown storage backend %q (expected file|memory)", *storageBackend)
+	}
+}
+
+func seedVectors(svc *service.SearchService) error {
+	if *bootstrapVectors != "" {
+		if err := loadBootstrapVectors(svc, *bootstrapVectors); err != nil {
+			return err
+		}
+	}
+
+	if *demoVectors > 0 {
+		if !*allowUnsafeDemoData {
+			return fmt.Errorf("refusing to generate demo vectors without --allow-unsafe-demo-data")
+		}
+		log.Printf("Generating %d demo vectors (unsafe demo mode enabled)", *demoVectors)
+		generateDemoVectors(svc, *demoVectors, *dimension)
+	}
+
+	return nil
+}
+
+func loadBootstrapVectors(svc *service.SearchService, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read bootstrap file: %w", err)
+	}
+
+	var records []bootstrapVector
+	if err := json.Unmarshal(data, &records); err != nil {
+		return fmt.Errorf("parse bootstrap file: %w", err)
+	}
+	if len(records) == 0 {
+		return nil
+	}
+
+	ids := make([]string, 0, len(records))
+	vectors := make([][]float64, 0, len(records))
+	metas := make([]map[string]any, 0, len(records))
+
+	for i, rec := range records {
+		if rec.ID == "" {
+			return fmt.Errorf("bootstrap vector %d has empty id", i)
+		}
+		if len(rec.Values) != *dimension {
+			return fmt.Errorf("bootstrap vector %q has dimension %d, expected %d", rec.ID, len(rec.Values), *dimension)
+		}
+		ids = append(ids, rec.ID)
+		vectors = append(vectors, rec.Values)
+		metas = append(metas, rec.Metadata)
+	}
+
+	if err := svc.AddVectors(context.Background(), ids, vectors, metas); err != nil {
+		return fmt.Errorf("add bootstrap vectors: %w", err)
+	}
+	log.Printf("Loaded %d vectors from %s", len(records), path)
+	return nil
+}
+
+// generateDemoVectors creates synthetic vectors for testing.
 func generateDemoVectors(svc *service.SearchService, n, dim int) {
-	rand.Seed(time.Now().UnixNano())
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	ids := make([]string, n)
 	vectors := make([][]float64, n)
@@ -170,16 +255,18 @@ func generateDemoVectors(svc *service.SearchService, n, dim int) {
 	for i := 0; i < n; i++ {
 		ids[i] = fmt.Sprintf("doc_%d", i)
 
-		// Generate random normalized vector
 		vec := make([]float64, dim)
-		var norm float64
+		var normSq float64
 		for j := 0; j < dim; j++ {
-			vec[j] = rand.NormFloat64()
-			norm += vec[j] * vec[j]
+			vec[j] = rng.NormFloat64()
+			normSq += vec[j] * vec[j]
 		}
-		norm = float64(1.0 / float64(norm))
+		norm := math.Sqrt(normSq)
+		if norm == 0 {
+			norm = 1
+		}
 		for j := range vec {
-			vec[j] *= norm
+			vec[j] /= norm
 		}
 
 		vectors[i] = vec
