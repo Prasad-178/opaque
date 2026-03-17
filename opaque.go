@@ -169,6 +169,37 @@ type Config struct {
 	// The callback is invoked synchronously from the Build goroutine. Keep it fast.
 	// A nil callback disables progress reporting (default).
 	OnBuildProgress func(phase string, pct float64) `json:"-"`
+
+	// AutoIndexEnabled enables a background lifecycle manager that automatically
+	// calls Build/Rebuild when data changes are detected.
+	//
+	// When enabled:
+	//   - A new DB will auto-Build once vectors are added.
+	//   - A built DB will auto-Rebuild after Add/Update/Delete changes.
+	//
+	// Default: false (manual lifecycle).
+	AutoIndexEnabled bool
+
+	// AutoIndexInterval is how often the background lifecycle manager checks for
+	// pending changes.
+	//
+	// Default: 5s.
+	AutoIndexInterval time.Duration
+
+	// AutoIndexMinChanges is the minimum number of data mutations required before
+	// the background lifecycle manager triggers Build/Rebuild.
+	//
+	// Default: 1.
+	AutoIndexMinChanges int
+
+	// AutoIndexBuildTimeout is the timeout used for each background Build/Rebuild.
+	//
+	// Default: 15m.
+	AutoIndexBuildTimeout time.Duration
+
+	// OnAutoIndexError receives asynchronous lifecycle errors when AutoIndexEnabled
+	// is true. The callback must be non-blocking.
+	OnAutoIndexError func(error) `json:"-"`
 }
 
 // Result is a single search result containing the vector ID and its similarity score.
@@ -220,6 +251,11 @@ type DB struct {
 	clusterStats  hierarchical.ClusterStats
 	enterpriseCfg *enterprise.Config
 	loaded        bool // true when DB was restored via Load
+	lifecycle     *lifecycleManager
+
+	// Lifecycle revision tracking.
+	dataVersion  uint64
+	builtVersion uint64
 }
 
 // NewDB creates a new vector search database with the given configuration.
@@ -238,10 +274,16 @@ func NewDB(cfg Config) (*DB, error) {
 
 	applyDefaults(&cfg)
 
-	return &DB{
+	db := &DB{
 		cfg:   cfg,
 		state: stateEmpty,
-	}, nil
+	}
+
+	if cfg.AutoIndexEnabled {
+		db.startLifecycleManager()
+	}
+
+	return db, nil
 }
 
 // Add buffers a single vector for indexing. The id must be unique within the DB.
@@ -269,6 +311,7 @@ func (db *DB) Add(ctx context.Context, id string, vector []float64) error {
 	if db.state == stateEmpty {
 		db.state = stateBuffered
 	}
+	db.dataVersion++
 	return nil
 }
 
@@ -302,6 +345,7 @@ func (db *DB) AddBatch(ctx context.Context, ids []string, vectors [][]float64) e
 	if db.state == stateEmpty {
 		db.state = stateBuffered
 	}
+	db.dataVersion += uint64(len(ids))
 	return nil
 }
 
@@ -512,6 +556,15 @@ type ClusterStats struct {
 // HE engine pool. The DB must not be used after Close is called.
 func (db *DB) Close() error {
 	db.mu.Lock()
+	lifecycle := db.lifecycle
+	db.lifecycle = nil
+	db.mu.Unlock()
+
+	if lifecycle != nil {
+		lifecycle.Stop()
+	}
+
+	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	db.searchClient = nil
@@ -677,6 +730,7 @@ func (db *DB) buildLocked(ctx context.Context) error {
 	db.blobStore = store
 	db.searchClient = searchClient
 	db.state = stateReady
+	db.builtVersion = db.dataVersion
 	return nil
 }
 
@@ -787,6 +841,15 @@ func applyDefaults(cfg *Config) {
 		t := true
 		cfg.NormalizedStorage = &t
 	}
+	if cfg.AutoIndexInterval <= 0 {
+		cfg.AutoIndexInterval = 5 * time.Second
+	}
+	if cfg.AutoIndexMinChanges <= 0 {
+		cfg.AutoIndexMinChanges = 1
+	}
+	if cfg.AutoIndexBuildTimeout <= 0 {
+		cfg.AutoIndexBuildTimeout = 15 * time.Minute
+	}
 }
 
 // validateConfig checks user-provided config values before defaults are applied.
@@ -806,6 +869,15 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.PCADimension != 0 && cfg.PCADimension >= cfg.Dimension {
 		return fmt.Errorf("opaque: PCADimension (%d) must be less than Dimension (%d)", cfg.PCADimension, cfg.Dimension)
+	}
+	if cfg.AutoIndexInterval < 0 {
+		return fmt.Errorf("opaque: AutoIndexInterval must be >= 0, got %s", cfg.AutoIndexInterval)
+	}
+	if cfg.AutoIndexMinChanges < 0 {
+		return fmt.Errorf("opaque: AutoIndexMinChanges must be >= 0, got %d", cfg.AutoIndexMinChanges)
+	}
+	if cfg.AutoIndexBuildTimeout < 0 {
+		return fmt.Errorf("opaque: AutoIndexBuildTimeout must be >= 0, got %s", cfg.AutoIndexBuildTimeout)
 	}
 	return nil
 }

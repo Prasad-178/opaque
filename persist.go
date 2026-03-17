@@ -129,9 +129,9 @@ func (db *DB) Save(path string) error {
 
 	// Write metadata last (acts as commit marker).
 	meta := saveMetadata{
-		Version:      persistVersion,
-		SavedAt:      time.Now(),
-		Config:       db.cfg,
+		Version: persistVersion,
+		SavedAt: time.Now(),
+		Config:  db.cfg,
 		ClusterStats: ClusterStats{
 			NumClusters:   db.clusterStats.NumClusters,
 			MinSize:       db.clusterStats.MinSize,
@@ -140,9 +140,9 @@ func (db *DB) Save(path string) error {
 			EmptyClusters: db.clusterStats.EmptyClusters,
 			Iterations:    db.clusterStats.Iterations,
 		},
-		HasPCA:       hasPCA,
-		DeletedIDs:   deletedIDsList(db.deletedIDs),
-		HasMetadata:  hasVectorMetadata,
+		HasPCA:      hasPCA,
+		DeletedIDs:  deletedIDsList(db.deletedIDs),
+		HasMetadata: hasVectorMetadata,
 	}
 	metaData, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
@@ -247,6 +247,8 @@ func Load(path string) (*DB, error) {
 		deletedIDs:    deletedIDsMap(meta.DeletedIDs),
 		metadata:      vectorMetadata,
 		loaded:        true,
+		dataVersion:   1,
+		builtVersion:  1,
 		clusterStats: hierarchical.ClusterStats{
 			NumClusters:   meta.ClusterStats.NumClusters,
 			MinSize:       meta.ClusterStats.MinSize,
@@ -267,6 +269,9 @@ func Load(path string) (*DB, error) {
 		return nil, fmt.Errorf("opaque: failed to create search client: %w", err)
 	}
 	db.searchClient = searchClient
+	if cfg.AutoIndexEnabled {
+		db.startLifecycleManager()
+	}
 
 	return db, nil
 }

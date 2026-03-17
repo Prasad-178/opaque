@@ -44,6 +44,7 @@ func (db *DB) AddWithMetadata(ctx context.Context, id string, vector []float64, 
 	if db.state == stateEmpty {
 		db.state = stateBuffered
 	}
+	db.dataVersion++
 
 	// Store metadata.
 	if meta != nil {
@@ -103,6 +104,7 @@ func (db *DB) AddBatchWithMetadata(ctx context.Context, ids []string, vectors []
 	if db.state == stateEmpty {
 		db.state = stateBuffered
 	}
+	db.dataVersion += uint64(len(ids))
 	return nil
 }
 

@@ -42,7 +42,11 @@ func (db *DB) Delete(ctx context.Context, id string) error {
 	if db.deletedIDs == nil {
 		db.deletedIDs = make(map[string]bool)
 	}
+	if db.deletedIDs[id] {
+		return nil
+	}
 	db.deletedIDs[id] = true
+	db.dataVersion++
 	return nil
 }
 
@@ -96,6 +100,7 @@ func (db *DB) Update(ctx context.Context, id string, vector []float64) error {
 	copy(v, vector)
 	db.pendingIDs = append(db.pendingIDs, id)
 	db.pendingVectors = append(db.pendingVectors, v)
+	db.dataVersion++
 
 	return nil
 }
