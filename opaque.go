@@ -605,9 +605,11 @@ func (db *DB) extractIndexedVectors(ctx context.Context) error {
 		return fmt.Errorf("list buckets: %w", err)
 	}
 
+	var extractErrors []error
 	for _, bucket := range buckets {
 		blobs, err := db.blobStore.GetBucket(ctx, bucket)
 		if err != nil {
+			extractErrors = append(extractErrors, fmt.Errorf("bucket %v: %w", bucket, err))
 			continue
 		}
 		for _, b := range blobs {
@@ -616,12 +618,17 @@ func (db *DB) extractIndexedVectors(ctx context.Context) error {
 			}
 			vec, err := enc.DecryptVectorWithID(b.Ciphertext, b.ID)
 			if err != nil {
+				extractErrors = append(extractErrors, fmt.Errorf("decrypt %q: %w", b.ID, err))
 				continue
 			}
 			db.pendingIDs = append(db.pendingIDs, b.ID)
 			db.pendingVectors = append(db.pendingVectors, vec)
 			existing[b.ID] = true
 		}
+	}
+
+	if len(extractErrors) > 0 {
+		return fmt.Errorf("opaque: %d extraction errors (first: %w)", len(extractErrors), extractErrors[0])
 	}
 
 	return nil

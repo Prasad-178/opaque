@@ -252,7 +252,9 @@ type SearchStats struct {
 	BlobsFetched    int
 
 	// Level 3
-	VectorsScored int
+	VectorsScored    int
+	DecryptSucceeded int // Blobs successfully decrypted
+	DecryptFailed    int // Blobs that failed decryption (expected for decoys)
 
 	// Cluster selection diagnostics (for accuracy analysis)
 	// These help identify WHERE recall is lost:

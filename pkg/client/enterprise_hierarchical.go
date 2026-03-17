@@ -325,8 +325,10 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 
 	// Decrypt all vectors in parallel
 	startAES := time.Now()
-	decrypted := parallelDecryptBlobs(blobs, c.encryptor)
+	decrypted, decryptStats := parallelDecryptBlobs(blobs, c.encryptor)
 	result.Timing.AESDecrypt = time.Since(startAES)
+	result.Stats.DecryptSucceeded = decryptStats.Succeeded
+	result.Stats.DecryptFailed = decryptStats.Failed
 
 	// Score locally with deduplication for redundant assignment
 	// Keep only the highest score for each unique original ID
@@ -501,8 +503,10 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 
 	// Decrypt and score locally (same as Search)
 	startAES := time.Now()
-	decrypted := parallelDecryptBlobs(blobs, c.encryptor)
+	decrypted, batchDecryptStats := parallelDecryptBlobs(blobs, c.encryptor)
 	result.Timing.AESDecrypt = time.Since(startAES)
+	result.Stats.DecryptSucceeded = batchDecryptStats.Succeeded
+	result.Stats.DecryptFailed = batchDecryptStats.Failed
 
 	startScore := time.Now()
 	scoreMap := make(map[string]float64)
@@ -561,11 +565,18 @@ type decryptedVec struct {
 	vector []float64 // Decrypted vector
 }
 
+// DecryptStats reports on blob decryption outcomes.
+type DecryptStats struct {
+	Succeeded int // Vectors successfully decrypted
+	Failed    int // Decryption failures (expected for decoys)
+}
+
 // parallelDecryptBlobs decrypts blobs in parallel using multiple goroutines.
-// Failed decryptions (decoys or corrupted blobs) are silently skipped.
-func parallelDecryptBlobs(blobs []*blob.Blob, encryptor *encrypt.AESGCM) []decryptedVec {
+// Decoy blobs are expected to fail decryption and are skipped.
+// Returns decrypted vectors and statistics about the decryption outcomes.
+func parallelDecryptBlobs(blobs []*blob.Blob, encryptor *encrypt.AESGCM) ([]decryptedVec, DecryptStats) {
 	if len(blobs) == 0 {
-		return nil
+		return nil, DecryptStats{}
 	}
 
 	numWorkers := runtime.NumCPU()
@@ -576,6 +587,7 @@ func parallelDecryptBlobs(blobs []*blob.Blob, encryptor *encrypt.AESGCM) []decry
 
 	// Each worker writes to its own slice to avoid locking
 	workerResults := make([][]decryptedVec, numWorkers)
+	workerFailed := make([]int, numWorkers)
 
 	var wg sync.WaitGroup
 	for w := 0; w < numWorkers; w++ {
@@ -597,7 +609,8 @@ func parallelDecryptBlobs(blobs []*blob.Blob, encryptor *encrypt.AESGCM) []decry
 				origID := extractOriginalID(b.ID)
 				vec, err := encryptor.DecryptVectorWithID(b.Ciphertext, origID)
 				if err != nil {
-					continue // Skip failed decryptions (likely decoy)
+					workerFailed[w]++
+					continue // Skip failed decryptions (expected for decoy blobs)
 				}
 				local = append(local, decryptedVec{id: origID, blobID: b.ID, vector: vec})
 			}
@@ -608,14 +621,16 @@ func parallelDecryptBlobs(blobs []*blob.Blob, encryptor *encrypt.AESGCM) []decry
 
 	// Merge results
 	total := 0
-	for _, r := range workerResults {
+	totalFailed := 0
+	for i, r := range workerResults {
 		total += len(r)
+		totalFailed += workerFailed[i]
 	}
 	result := make([]decryptedVec, 0, total)
 	for _, r := range workerResults {
 		result = append(result, r...)
 	}
-	return result
+	return result, DecryptStats{Succeeded: total, Failed: totalFailed}
 }
 
 // shuffleInts shuffles a slice of ints in place using crypto/rand.

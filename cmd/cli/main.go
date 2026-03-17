@@ -8,14 +8,9 @@ import (
 	"log"
 	"math"
 	"math/rand"
-	"sort"
 	"time"
 
-	"github.com/Prasad-178/opaque/internal/service"
-	"github.com/Prasad-178/opaque/internal/store"
-	"github.com/Prasad-178/opaque/pkg/client"
-	"github.com/Prasad-178/opaque/pkg/crypto"
-	"github.com/Prasad-178/opaque/pkg/lsh"
+	opaque "github.com/Prasad-178/opaque"
 )
 
 var (
@@ -34,61 +29,34 @@ func main() {
 
 	rand.Seed(42)
 
-	// Create vector store and service
-	vectorStore := store.NewMemoryStore()
-	cfg := service.Config{
-		LSHNumBits:          64,
-		LSHDimension:        *dimension,
-		LSHSeed:             42,
-		MaxSessionTTL:       time.Hour,
-		MaxConcurrentScores: 8,
-	}
-
-	svc, err := service.NewSearchService(cfg, vectorStore)
+	// Create opaque DB
+	db, err := opaque.NewDB(opaque.Config{
+		Dimension:   *dimension,
+		NumClusters: 16,
+	})
 	if err != nil {
-		log.Fatalf("Failed to create service: %v", err)
+		log.Fatalf("Failed to create DB: %v", err)
 	}
+	defer db.Close()
 
 	// Generate test data
 	fmt.Printf("Generating %d vectors of dimension %d...\n", *numVectors, *dimension)
 	ids, vectors := generateVectors(*numVectors, *dimension)
 
-	// Add to service
-	if err := svc.AddVectors(context.Background(), ids, vectors, nil); err != nil {
+	// Add to DB
+	ctx := context.Background()
+	if err := db.AddBatch(ctx, ids, vectors); err != nil {
 		log.Fatalf("Failed to add vectors: %v", err)
 	}
-	fmt.Printf("Indexed %d vectors\n\n", *numVectors)
+	fmt.Printf("Added %d vectors\n", *numVectors)
 
-	// Create client
-	fmt.Println("Initializing client...")
-	cli, err := client.NewClient(client.Config{
-		Dimension:         *dimension,
-		LSHBits:           64,
-		MaxCandidates:     100,
-		HECandidates:      *topK,
-		TopK:              *topK,
-		EnableHashMasking: true,
-	})
-	if err != nil {
-		log.Fatalf("Failed to create client: %v", err)
+	// Build the index
+	fmt.Println("Building index...")
+	start := time.Now()
+	if err := db.Build(ctx); err != nil {
+		log.Fatalf("Failed to build index: %v", err)
 	}
-
-	// Get and set LSH planes
-	planes := svc.GetLSHIndex().GetPlanes()
-	flatPlanes := make([]float64, 0, len(planes)**dimension)
-	for _, p := range planes {
-		flatPlanes = append(flatPlanes, p...)
-	}
-	cli.SetLSHPlanes(flatPlanes, len(planes), *dimension)
-
-	// Create a map for local lookup
-	vectorMap := make(map[string][]float64)
-	for i, id := range ids {
-		vectorMap[id] = vectors[i]
-	}
-
-	fmt.Println("Client initialized")
-	fmt.Println()
+	fmt.Printf("Index built in %v\n\n", time.Since(start))
 
 	// Run queries
 	fmt.Printf("Running %d queries (top-%d results each)...\n\n", *numQueries, *topK)
@@ -101,8 +69,12 @@ func main() {
 		fmt.Printf("Query %d (similar to %s):\n", i+1, ids[targetIdx])
 
 		start := time.Now()
-		results := searchWithPlaintext(cli, svc.GetLSHIndex(), query, vectorMap, *topK)
+		results, err := db.Search(ctx, query, *topK)
 		elapsed := time.Since(start)
+		if err != nil {
+			fmt.Printf("  Error: %v\n\n", err)
+			continue
+		}
 
 		for j, r := range results {
 			match := ""
@@ -116,49 +88,10 @@ func main() {
 
 	// Run benchmarks
 	if *benchmark {
-		runBenchmarks(cli, svc.GetLSHIndex(), vectors, vectorMap)
+		runBenchmarks(db, vectors)
 	}
 
 	fmt.Println("=== Done ===")
-}
-
-// searchWithPlaintext performs search using LSH for candidates and plaintext scoring
-func searchWithPlaintext(cli *client.Client, idx *lsh.Index, query []float64, vectors map[string][]float64, k int) []client.Result {
-	// Normalize query
-	normalizedQuery := crypto.NormalizeVector(query)
-
-	// Get LSH hash
-	queryHash := idx.HashBytes(normalizedQuery)
-
-	// Get candidates
-	candidates, err := idx.Search(queryHash, 50)
-	if err != nil {
-		log.Printf("LSH search failed: %v", err)
-		return nil
-	}
-
-	// Score candidates
-	results := make([]client.Result, 0, len(candidates))
-	for _, cand := range candidates {
-		vec, ok := vectors[cand.ID]
-		if !ok {
-			continue
-		}
-		normalizedVec := crypto.NormalizeVector(vec)
-		score := dotProduct(normalizedQuery, normalizedVec)
-		results = append(results, client.Result{ID: cand.ID, Score: score})
-	}
-
-	// Sort by score
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
-	})
-
-	if len(results) > k {
-		results = results[:k]
-	}
-
-	return results
 }
 
 func generateVectors(n, dim int) ([]string, [][]float64) {
@@ -197,43 +130,20 @@ func addNoise(vec []float64, scale float64) []float64 {
 	return noisy
 }
 
-func dotProduct(a, b []float64) float64 {
-	var sum float64
-	for i := range a {
-		sum += a[i] * b[i]
-	}
-	return sum
-}
-
-func runBenchmarks(cli *client.Client, idx *lsh.Index, vectors [][]float64, vectorMap map[string][]float64) {
+func runBenchmarks(db *opaque.DB, vectors [][]float64) {
 	fmt.Println("=== Benchmarks ===")
 	fmt.Println()
 
+	ctx := context.Background()
 	query := vectors[0]
-	n := 100
-
-	// LSH hash
-	start := time.Now()
-	for i := 0; i < n; i++ {
-		idx.HashBytes(query)
-	}
-	fmt.Printf("LSH hash:       %v/op\n", time.Since(start)/time.Duration(n))
-
-	// Encryption
-	start = time.Now()
-	encN := 10
-	for i := 0; i < encN; i++ {
-		cli.EncryptQuery(query)
-	}
-	fmt.Printf("Encryption:     %v/op\n", time.Since(start)/time.Duration(encN))
 
 	// Full search
-	start = time.Now()
-	searchN := 20
-	for i := 0; i < searchN; i++ {
-		searchWithPlaintext(cli, idx, query, vectorMap, 5)
+	n := 20
+	start := time.Now()
+	for i := 0; i < n; i++ {
+		db.Search(ctx, query, 5)
 	}
-	searchTime := time.Since(start) / time.Duration(searchN)
+	searchTime := time.Since(start) / time.Duration(n)
 	fmt.Printf("Full search:    %v/op\n", searchTime)
 	fmt.Printf("Estimated QPS:  %.1f\n", float64(time.Second)/float64(searchTime))
 	fmt.Println()

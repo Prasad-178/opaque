@@ -6,8 +6,25 @@ import (
 	"time"
 )
 
+func TestManager_Close(t *testing.T) {
+	m := NewManager(time.Minute)
+	defer m.Close()
+
+	_, err := m.Create([]byte("pk"), time.Second)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Close should not panic or block.
+	m.Close()
+
+	// Re-create to verify the deferred Close on a new manager doesn't panic.
+	m2 := NewManager(time.Minute)
+	m2.Close()
+}
+
 func TestManager_CreateAndGet(t *testing.T) {
 	m := NewManager(time.Minute)
+	defer m.Close()
 
 	s, err := m.Create([]byte("pk"), time.Second)
 	if err != nil {
@@ -28,6 +45,7 @@ func TestManager_CreateAndGet(t *testing.T) {
 
 func TestManager_ExpiredSession(t *testing.T) {
 	m := NewManager(100 * time.Millisecond)
+	defer m.Close()
 
 	s, err := m.Create([]byte("pk"), 50*time.Millisecond)
 	if err != nil {
@@ -43,6 +61,7 @@ func TestManager_ExpiredSession(t *testing.T) {
 
 func TestManager_Refresh(t *testing.T) {
 	m := NewManager(time.Second)
+	defer m.Close()
 
 	s, err := m.Create([]byte("pk"), 200*time.Millisecond)
 	if err != nil {

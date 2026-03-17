@@ -29,6 +29,7 @@ type Manager struct {
 	sessions map[string]*Session
 	maxTTL   time.Duration
 	mu       sync.RWMutex
+	done     chan struct{}
 }
 
 // NewManager creates a new session manager.
@@ -36,12 +37,26 @@ func NewManager(maxTTL time.Duration) *Manager {
 	m := &Manager{
 		sessions: make(map[string]*Session),
 		maxTTL:   maxTTL,
+		done:     make(chan struct{}),
 	}
 
 	// Start cleanup goroutine
 	go m.cleanupLoop()
 
 	return m
+}
+
+// Close stops the background cleanup goroutine and releases resources.
+// Close is safe to call multiple times.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	select {
+	case <-m.done:
+		// Already closed.
+	default:
+		close(m.done)
+	}
 }
 
 // Create creates a new session with the given public key.
@@ -145,8 +160,13 @@ func (m *Manager) cleanupLoop() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		m.cleanup()
+	for {
+		select {
+		case <-m.done:
+			return
+		case <-ticker.C:
+			m.cleanup()
+		}
 	}
 }
 

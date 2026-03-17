@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,19 +25,18 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	pb "github.com/Prasad-178/opaque/api/proto"
-	"github.com/Prasad-178/opaque/internal/service"
-	"github.com/Prasad-178/opaque/internal/store"
 	"github.com/Prasad-178/opaque/pkg/grpcserver"
+
+	opaque "github.com/Prasad-178/opaque"
 )
 
 var (
 	grpcPort            = flag.Int("grpc-port", envInt("OPAQUE_GRPC_PORT", 50051), "gRPC server port")
 	httpPort            = flag.Int("http-port", envInt("OPAQUE_HTTP_PORT", 8080), "HTTP metrics/health port")
 	dimension           = flag.Int("dimension", envInt("OPAQUE_DIMENSION", 128), "Vector dimension")
-	lshBits             = flag.Int("lsh-bits", envInt("OPAQUE_LSH_BITS", 128), "Number of LSH bits")
-	lshSeed             = flag.Int64("lsh-seed", envInt64("OPAQUE_LSH_SEED", 42), "LSH random seed")
-	storageBackend      = flag.String("storage-backend", envString("OPAQUE_STORAGE_BACKEND", "file"), "Vector storage backend: file|memory")
-	storagePath         = flag.String("storage-path", envString("OPAQUE_STORAGE_PATH", "./data/vectors.json"), "Path for file storage backend")
+	numClusters         = flag.Int("num-clusters", envInt("OPAQUE_NUM_CLUSTERS", 64), "Number of k-means clusters")
+	storageBackend      = flag.String("storage-backend", envString("OPAQUE_STORAGE_BACKEND", "memory"), "Vector storage backend: file|memory")
+	storagePath         = flag.String("storage-path", envString("OPAQUE_STORAGE_PATH", ""), "Path for file storage backend")
 	bootstrapVectors    = flag.String("bootstrap-vectors", envString("OPAQUE_BOOTSTRAP_VECTORS", ""), "Optional JSON file containing vectors to preload")
 	demoVectors         = flag.Int("demo-vectors", envInt("OPAQUE_DEMO_VECTORS", 0), "Number of generated demo vectors to seed (disabled by default)")
 	allowUnsafeDemoData = flag.Bool("allow-unsafe-demo-data", envBool("OPAQUE_ALLOW_UNSAFE_DEMO_DATA", false), "Allow startup with generated demo vectors")
@@ -57,30 +55,47 @@ func main() {
 
 	log.Println("Starting Opaque Search Service...")
 
-	// Create vector store.
-	vectorStore, err := createStore()
+	// Configure the opaque DB.
+	cfg := opaque.Config{
+		Dimension:   *dimension,
+		NumClusters: *numClusters,
+	}
+
+	switch strings.ToLower(*storageBackend) {
+	case "file":
+		if *storagePath == "" {
+			log.Fatal("storage-path is required when storage-backend=file")
+		}
+		cfg.Storage = opaque.File
+		cfg.StoragePath = *storagePath
+		log.Printf("Using file storage at %s", *storagePath)
+	case "memory":
+		cfg.Storage = opaque.Memory
+		log.Println("Using in-memory storage (non-durable)")
+	default:
+		log.Fatalf("Unknown storage backend %q (expected file|memory)", *storageBackend)
+	}
+
+	db, err := opaque.NewDB(cfg)
 	if err != nil {
-		log.Fatalf("Failed to create vector store: %v", err)
+		log.Fatalf("Failed to create DB: %v", err)
 	}
-	defer vectorStore.Close()
+	defer db.Close()
 
-	cfg := service.Config{
-		LSHNumBits:          *lshBits,
-		LSHDimension:        *dimension,
-		LSHSeed:             *lshSeed,
-		MaxSessionTTL:       24 * time.Hour,
-		MaxConcurrentScores: 16,
-	}
-
-	svc, err := service.NewSearchService(cfg, vectorStore)
-	if err != nil {
-		log.Fatalf("Failed to create search service: %v", err)
-	}
-
-	if err := seedVectors(svc); err != nil {
+	if err := seedVectors(db); err != nil {
 		log.Fatalf("Failed to seed vectors: %v", err)
 	}
 
+	// Build the index if vectors were seeded.
+	if db.Size() > 0 {
+		log.Printf("Building index for %d vectors...", db.Size())
+		if err := db.Build(context.Background()); err != nil {
+			log.Fatalf("Failed to build index: %v", err)
+		}
+		log.Println("Index built successfully")
+	}
+
+	// Start gRPC server.
 	serverOpts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(50 * 1024 * 1024),
 		grpc.MaxSendMsgSize(50 * 1024 * 1024),
@@ -108,7 +123,7 @@ func main() {
 	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 
 	reflection.Register(grpcServer)
-	pb.RegisterOpaqueSearchServer(grpcServer, grpcserver.New(svc))
+	pb.RegisterOpaqueSearchServer(grpcServer, grpcserver.New(db))
 
 	grpcLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *grpcPort))
 	if err != nil {
@@ -122,23 +137,26 @@ func main() {
 		}
 	}()
 
+	// Start HTTP health/readiness server.
 	httpMux := http.NewServeMux()
 	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		healthy, msg, sessions, vectors := svc.HealthCheck(r.Context())
-		if healthy {
+		if db.IsReady() {
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, "OK\n")
+			fmt.Fprintf(w, "OK\nVectors: %d\n", db.Size())
 		} else {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, "ERROR: %s\n", msg)
+			fmt.Fprintf(w, "NOT READY\nVectors: %d\n", db.Size())
 		}
-		fmt.Fprintf(w, "Sessions: %d\n", sessions)
-		fmt.Fprintf(w, "Vectors: %d\n", vectors)
 	})
 
 	httpMux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "Ready\n")
+		if db.IsReady() {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, "Ready\n")
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, "Not Ready\n")
+		}
 	})
 
 	httpServer := &http.Server{
@@ -167,33 +185,9 @@ func main() {
 	log.Println("Shutdown complete")
 }
 
-func createStore() (store.VectorStore, error) {
-	switch strings.ToLower(*storageBackend) {
-	case "memory":
-		log.Println("Using in-memory vector store (non-durable)")
-		return store.NewMemoryStore(), nil
-	case "file":
-		if *storagePath == "" {
-			return nil, fmt.Errorf("storage-path is required when storage-backend=file")
-		}
-		absPath, err := filepath.Abs(*storagePath)
-		if err != nil {
-			return nil, fmt.Errorf("resolve storage path: %w", err)
-		}
-		fs, err := store.NewFileStore(absPath)
-		if err != nil {
-			return nil, err
-		}
-		log.Printf("Using file vector store at %s", absPath)
-		return fs, nil
-	default:
-		return nil, fmt.Errorf("unknown storage backend %q (expected file|memory)", *storageBackend)
-	}
-}
-
-func seedVectors(svc *service.SearchService) error {
+func seedVectors(db *opaque.DB) error {
 	if *bootstrapVectors != "" {
-		if err := loadBootstrapVectors(svc, *bootstrapVectors); err != nil {
+		if err := loadBootstrapVectors(db, *bootstrapVectors); err != nil {
 			return err
 		}
 	}
@@ -203,13 +197,13 @@ func seedVectors(svc *service.SearchService) error {
 			return fmt.Errorf("refusing to generate demo vectors without --allow-unsafe-demo-data")
 		}
 		log.Printf("Generating %d demo vectors (unsafe demo mode enabled)", *demoVectors)
-		generateDemoVectors(svc, *demoVectors, *dimension)
+		generateDemoVectors(db, *demoVectors, *dimension)
 	}
 
 	return nil
 }
 
-func loadBootstrapVectors(svc *service.SearchService, path string) error {
+func loadBootstrapVectors(db *opaque.DB, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read bootstrap file: %w", err)
@@ -225,7 +219,6 @@ func loadBootstrapVectors(svc *service.SearchService, path string) error {
 
 	ids := make([]string, 0, len(records))
 	vectors := make([][]float64, 0, len(records))
-	metas := make([]map[string]any, 0, len(records))
 
 	for i, rec := range records {
 		if rec.ID == "" {
@@ -236,10 +229,10 @@ func loadBootstrapVectors(svc *service.SearchService, path string) error {
 		}
 		ids = append(ids, rec.ID)
 		vectors = append(vectors, rec.Values)
-		metas = append(metas, rec.Metadata)
 	}
 
-	if err := svc.AddVectors(context.Background(), ids, vectors, metas); err != nil {
+	ctx := context.Background()
+	if err := db.AddBatch(ctx, ids, vectors); err != nil {
 		return fmt.Errorf("add bootstrap vectors: %w", err)
 	}
 	log.Printf("Loaded %d vectors from %s", len(records), path)
@@ -247,7 +240,7 @@ func loadBootstrapVectors(svc *service.SearchService, path string) error {
 }
 
 // generateDemoVectors creates synthetic vectors for testing.
-func generateDemoVectors(svc *service.SearchService, n, dim int) {
+func generateDemoVectors(db *opaque.DB, n, dim int) {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
 	ids := make([]string, n)
@@ -273,7 +266,7 @@ func generateDemoVectors(svc *service.SearchService, n, dim int) {
 		vectors[i] = vec
 	}
 
-	if err := svc.AddVectors(context.Background(), ids, vectors, nil); err != nil {
+	if err := db.AddBatch(context.Background(), ids, vectors); err != nil {
 		log.Printf("Failed to add demo vectors: %v", err)
 	}
 }
@@ -292,19 +285,6 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	parsed, err := strconv.Atoi(v)
-	if err != nil {
-		log.Printf("Invalid %s=%q, using default %d", key, v, fallback)
-		return fallback
-	}
-	return parsed
-}
-
-func envInt64(key string, fallback int64) int64 {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseInt(v, 10, 64)
 	if err != nil {
 		log.Printf("Invalid %s=%q, using default %d", key, v, fallback)
 		return fallback
