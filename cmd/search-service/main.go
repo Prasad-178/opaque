@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,18 +32,18 @@ import (
 )
 
 var (
-	grpcPort            = flag.Int("grpc-port", 50051, "gRPC server port")
-	httpPort            = flag.Int("http-port", 8080, "HTTP metrics/health port")
-	dimension           = flag.Int("dimension", 128, "Vector dimension")
-	lshBits             = flag.Int("lsh-bits", 128, "Number of LSH bits")
-	lshSeed             = flag.Int64("lsh-seed", 42, "LSH random seed")
-	storageBackend      = flag.String("storage-backend", "file", "Vector storage backend: file|memory")
-	storagePath         = flag.String("storage-path", "./data/vectors.json", "Path for file storage backend")
-	bootstrapVectors    = flag.String("bootstrap-vectors", "", "Optional JSON file containing vectors to preload")
-	demoVectors         = flag.Int("demo-vectors", 0, "Number of generated demo vectors to seed (disabled by default)")
-	allowUnsafeDemoData = flag.Bool("allow-unsafe-demo-data", false, "Allow startup with generated demo vectors")
-	tlsCert             = flag.String("tls-cert", "", "TLS certificate file (optional)")
-	tlsKey              = flag.String("tls-key", "", "TLS key file (optional)")
+	grpcPort            = flag.Int("grpc-port", envInt("OPAQUE_GRPC_PORT", 50051), "gRPC server port")
+	httpPort            = flag.Int("http-port", envInt("OPAQUE_HTTP_PORT", 8080), "HTTP metrics/health port")
+	dimension           = flag.Int("dimension", envInt("OPAQUE_DIMENSION", 128), "Vector dimension")
+	lshBits             = flag.Int("lsh-bits", envInt("OPAQUE_LSH_BITS", 128), "Number of LSH bits")
+	lshSeed             = flag.Int64("lsh-seed", envInt64("OPAQUE_LSH_SEED", 42), "LSH random seed")
+	storageBackend      = flag.String("storage-backend", envString("OPAQUE_STORAGE_BACKEND", "file"), "Vector storage backend: file|memory")
+	storagePath         = flag.String("storage-path", envString("OPAQUE_STORAGE_PATH", "./data/vectors.json"), "Path for file storage backend")
+	bootstrapVectors    = flag.String("bootstrap-vectors", envString("OPAQUE_BOOTSTRAP_VECTORS", ""), "Optional JSON file containing vectors to preload")
+	demoVectors         = flag.Int("demo-vectors", envInt("OPAQUE_DEMO_VECTORS", 0), "Number of generated demo vectors to seed (disabled by default)")
+	allowUnsafeDemoData = flag.Bool("allow-unsafe-demo-data", envBool("OPAQUE_ALLOW_UNSAFE_DEMO_DATA", false), "Allow startup with generated demo vectors")
+	tlsCert             = flag.String("tls-cert", envString("OPAQUE_TLS_CERT", ""), "TLS certificate file (optional)")
+	tlsKey              = flag.String("tls-key", envString("OPAQUE_TLS_KEY", ""), "TLS key file (optional)")
 )
 
 type bootstrapVector struct {
@@ -275,4 +276,51 @@ func generateDemoVectors(svc *service.SearchService, n, dim int) {
 	if err := svc.AddVectors(context.Background(), ids, vectors, nil); err != nil {
 		log.Printf("Failed to add demo vectors: %v", err)
 	}
+}
+
+func envString(key, fallback string) string {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	return v
+}
+
+func envInt(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(v)
+	if err != nil {
+		log.Printf("Invalid %s=%q, using default %d", key, v, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func envInt64(key string, fallback int64) int64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		log.Printf("Invalid %s=%q, using default %d", key, v, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func envBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		log.Printf("Invalid %s=%q, using default %t", key, v, fallback)
+		return fallback
+	}
+	return parsed
 }

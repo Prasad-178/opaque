@@ -117,7 +117,11 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system design, thr
 
 ```bash
 docker build -t opaque .
-docker run -p 50051:50051 opaque
+docker run -p 50051:50051 -p 8080:8080 \
+  -e OPAQUE_STORAGE_BACKEND=file \
+  -e OPAQUE_STORAGE_PATH=/var/lib/opaque/vectors.json \
+  -v opaque-data:/var/lib/opaque \
+  opaque
 ```
 
 ### HTTP API (example)

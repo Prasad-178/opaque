@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -105,5 +106,40 @@ func TestLoadBootstrapVectors(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("count = %d, want 2", count)
+	}
+}
+
+func TestEnvHelpers(t *testing.T) {
+	const key = "OPAQUE_TEST_VALUE"
+
+	t.Setenv(key, "")
+	if got := envString(key, "fallback"); got != "fallback" {
+		t.Fatalf("envString empty = %q, want fallback", got)
+	}
+
+	t.Setenv(key, "12")
+	if got := envInt(key, 7); got != 12 {
+		t.Fatalf("envInt = %d, want 12", got)
+	}
+	if got := envInt64(key, 7); got != 12 {
+		t.Fatalf("envInt64 = %d, want 12", got)
+	}
+
+	t.Setenv(key, "true")
+	if got := envBool(key, false); !got {
+		t.Fatal("envBool should parse true")
+	}
+
+	t.Setenv(key, "bad")
+	if got := envInt(key, 7); got != 7 {
+		t.Fatalf("envInt fallback = %d, want 7", got)
+	}
+	if got := envInt64(key, 7); got != 7 {
+		t.Fatalf("envInt64 fallback = %d, want 7", got)
+	}
+
+	t.Setenv(key, strconv.FormatBool(false))
+	if got := envBool(key, true); got {
+		t.Fatal("envBool should parse false")
 	}
 }

@@ -1,0 +1,19 @@
+services:
+  opaque-search:
+    image: opaque:latest
+    container_name: opaque-search
+    restart: unless-stopped
+    ports:
+      - "50051:50051"
+      - "8080:8080"
+    environment:
+      OPAQUE_STORAGE_BACKEND: file
+      OPAQUE_STORAGE_PATH: /var/lib/opaque/vectors.json
+      OPAQUE_DIMENSION: "128"
+      OPAQUE_LSH_BITS: "128"
+      OPAQUE_DEMO_VECTORS: "0"
+    volumes:
+      - opaque-data:/var/lib/opaque
+
+volumes:
+  opaque-data:
