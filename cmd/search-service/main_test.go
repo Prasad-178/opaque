@@ -1,113 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
-	"github.com/Prasad-178/opaque/internal/service"
-	"github.com/Prasad-178/opaque/internal/store"
+	"github.com/Prasad-178/opaque"
 )
-
-func newTestService(t *testing.T, dim int) *service.SearchService {
-	t.Helper()
-	svc, err := service.NewSearchService(service.Config{
-		LSHNumBits:          16,
-		LSHDimension:        dim,
-		LSHSeed:             42,
-		MaxSessionTTL:       time.Minute,
-		MaxConcurrentScores: 2,
-	}, store.NewMemoryStore())
-	if err != nil {
-		t.Fatalf("NewSearchService: %v", err)
-	}
-	return svc
-}
-
-func TestCreateStore_InvalidBackend(t *testing.T) {
-	old := *storageBackend
-	*storageBackend = "bad"
-	t.Cleanup(func() { *storageBackend = old })
-
-	if _, err := createStore(); err == nil {
-		t.Fatal("expected error for unknown storage backend")
-	}
-}
-
-func TestCreateStore_FileBackend(t *testing.T) {
-	oldBackend := *storageBackend
-	oldPath := *storagePath
-	*storageBackend = "file"
-	*storagePath = filepath.Join(t.TempDir(), "vectors.json")
-	t.Cleanup(func() {
-		*storageBackend = oldBackend
-		*storagePath = oldPath
-	})
-
-	s, err := createStore()
-	if err != nil {
-		t.Fatalf("createStore: %v", err)
-	}
-	defer s.Close()
-
-	if _, ok := s.(*store.FileStore); !ok {
-		t.Fatalf("expected FileStore, got %T", s)
-	}
-}
-
-func TestSeedVectors_RequiresUnsafeFlagForDemoData(t *testing.T) {
-	svc := newTestService(t, 8)
-
-	oldDemo := *demoVectors
-	oldUnsafe := *allowUnsafeDemoData
-	*demoVectors = 10
-	*allowUnsafeDemoData = false
-	t.Cleanup(func() {
-		*demoVectors = oldDemo
-		*allowUnsafeDemoData = oldUnsafe
-	})
-
-	if err := seedVectors(svc); err == nil {
-		t.Fatal("expected error when demo vectors are enabled without unsafe flag")
-	}
-}
-
-func TestLoadBootstrapVectors(t *testing.T) {
-	svc := newTestService(t, 4)
-
-	path := filepath.Join(t.TempDir(), "bootstrap.json")
-	payload := []bootstrapVector{
-		{ID: "v1", Values: []float64{1, 0, 0, 0}},
-		{ID: "v2", Values: []float64{0, 1, 0, 0}},
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	oldDim := *dimension
-	*dimension = 4
-	t.Cleanup(func() { *dimension = oldDim })
-
-	if err := loadBootstrapVectors(svc, path); err != nil {
-		t.Fatalf("loadBootstrapVectors: %v", err)
-	}
-
-	count, err := svc.GetVectorCount(context.Background())
-	if err != nil {
-		t.Fatalf("GetVectorCount: %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("count = %d, want 2", count)
-	}
-}
 
 func TestEnvHelpers(t *testing.T) {
 	const key = "OPAQUE_TEST_VALUE"
@@ -121,9 +26,6 @@ func TestEnvHelpers(t *testing.T) {
 	if got := envInt(key, 7); got != 12 {
 		t.Fatalf("envInt = %d, want 12", got)
 	}
-	if got := envInt64(key, 7); got != 12 {
-		t.Fatalf("envInt64 = %d, want 12", got)
-	}
 
 	t.Setenv(key, "true")
 	if got := envBool(key, false); !got {
@@ -134,12 +36,110 @@ func TestEnvHelpers(t *testing.T) {
 	if got := envInt(key, 7); got != 7 {
 		t.Fatalf("envInt fallback = %d, want 7", got)
 	}
-	if got := envInt64(key, 7); got != 7 {
-		t.Fatalf("envInt64 fallback = %d, want 7", got)
+
+	t.Setenv(key, "1s")
+	if got := envDuration(key, time.Minute); got != time.Second {
+		t.Fatalf("envDuration = %s, want 1s", got)
+	}
+}
+
+func TestOpenOrCreateDB_NewAndLoad(t *testing.T) {
+	dir := t.TempDir()
+
+	oldPath := *dbPath
+	oldDim := *dimension
+	oldClusters := *numClusters
+	t.Cleanup(func() {
+		*dbPath = oldPath
+		*dimension = oldDim
+		*numClusters = oldClusters
+	})
+	*dbPath = dir
+	*dimension = 4
+	*numClusters = 2
+
+	db, err := openOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("openOrCreateDB(new): %v", err)
 	}
 
-	t.Setenv(key, strconv.FormatBool(false))
-	if got := envBool(key, true); got {
-		t.Fatal("envBool should parse false")
+	if err := db.Add(context.Background(), "v1", []float64{1, 0, 0, 0}); err != nil {
+		t.Fatalf("Add v1: %v", err)
+	}
+	if err := db.Add(context.Background(), "v2", []float64{0, 1, 0, 0}); err != nil {
+		t.Fatalf("Add v2: %v", err)
+	}
+	if err := db.Build(context.Background()); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := db.Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	db.Close()
+
+	loaded, err := openOrCreateDB(dir)
+	if err != nil {
+		t.Fatalf("openOrCreateDB(load): %v", err)
+	}
+	defer loaded.Close()
+
+	if !loaded.IsReady() {
+		t.Fatal("loaded DB should be ready")
+	}
+}
+
+func TestHandleAddBatch(t *testing.T) {
+	db, err := opaque.NewDB(opaque.Config{Dimension: 4, NumClusters: 2})
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	rt := &serviceRuntime{db: db, dbPath: t.TempDir()}
+
+	reqBody := addBatchRequest{Vectors: []bootstrapVector{{ID: "v1", Values: []float64{1, 0, 0, 0}}}}
+	body, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest(http.MethodPost, "/v1/vectors/batch", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	rt.handleAddBatch(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d body=%s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+
+	if !db.Has(context.Background(), "v1") {
+		t.Fatal("vector v1 should be present after add")
+	}
+}
+
+func TestSeedVectors(t *testing.T) {
+	db, err := opaque.NewDB(opaque.Config{Dimension: 4, NumClusters: 2})
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	rt := &serviceRuntime{db: db, dbPath: t.TempDir()}
+
+	file := filepath.Join(t.TempDir(), "bootstrap.json")
+	data, _ := json.Marshal([]bootstrapVector{{ID: "v1", Values: []float64{1, 0, 0, 0}}})
+	if err := os.WriteFile(file, data, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	oldBootstrap := *bootstrapVectors
+	oldDim := *dimension
+	t.Cleanup(func() {
+		*bootstrapVectors = oldBootstrap
+		*dimension = oldDim
+	})
+	*bootstrapVectors = file
+	*dimension = 4
+
+	if err := rt.seedVectors(); err != nil {
+		t.Fatalf("seedVectors: %v", err)
+	}
+	if !db.Has(context.Background(), "v1") {
+		t.Fatal("bootstrap vector not queued")
 	}
 }

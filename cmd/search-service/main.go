@@ -1,4 +1,4 @@
-// Command search-service runs the Opaque search gRPC server.
+// Command search-service runs the Opaque SDK-backed search service.
 package main
 
 import (
@@ -8,9 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"math"
-	"math/rand"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,30 +17,22 @@ import (
 	"syscall"
 	"time"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/reflection"
-
-	pb "github.com/Prasad-178/opaque/api/proto"
-	"github.com/Prasad-178/opaque/internal/service"
-	"github.com/Prasad-178/opaque/internal/store"
-	"github.com/Prasad-178/opaque/pkg/grpcserver"
+	"github.com/Prasad-178/opaque"
 )
 
 var (
-	grpcPort            = flag.Int("grpc-port", envInt("OPAQUE_GRPC_PORT", 50051), "gRPC server port")
-	httpPort            = flag.Int("http-port", envInt("OPAQUE_HTTP_PORT", 8080), "HTTP metrics/health port")
+	httpPort            = flag.Int("http-port", envInt("OPAQUE_HTTP_PORT", 8080), "HTTP API/health port")
 	dimension           = flag.Int("dimension", envInt("OPAQUE_DIMENSION", 128), "Vector dimension")
-	lshBits             = flag.Int("lsh-bits", envInt("OPAQUE_LSH_BITS", 128), "Number of LSH bits")
-	lshSeed             = flag.Int64("lsh-seed", envInt64("OPAQUE_LSH_SEED", 42), "LSH random seed")
-	storageBackend      = flag.String("storage-backend", envString("OPAQUE_STORAGE_BACKEND", "file"), "Vector storage backend: file|memory")
-	storagePath         = flag.String("storage-path", envString("OPAQUE_STORAGE_PATH", "./data/vectors.json"), "Path for file storage backend")
+	numClusters         = flag.Int("num-clusters", envInt("OPAQUE_NUM_CLUSTERS", 64), "Number of k-means clusters")
+	topClusters         = flag.Int("top-clusters", envInt("OPAQUE_TOP_CLUSTERS", 0), "Top clusters probed during search (0=default)")
+	numDecoys           = flag.Int("num-decoys", envInt("OPAQUE_NUM_DECOYS", 8), "Decoy clusters per search")
+	workerPoolSize      = flag.Int("worker-pool-size", envInt("OPAQUE_WORKER_POOL_SIZE", 0), "HE worker pool size (0=auto)")
+	dbPath              = flag.String("db-path", envString("OPAQUE_DB_PATH", "./data/db"), "Opaque DB snapshot directory")
 	bootstrapVectors    = flag.String("bootstrap-vectors", envString("OPAQUE_BOOTSTRAP_VECTORS", ""), "Optional JSON file containing vectors to preload")
-	demoVectors         = flag.Int("demo-vectors", envInt("OPAQUE_DEMO_VECTORS", 0), "Number of generated demo vectors to seed (disabled by default)")
-	allowUnsafeDemoData = flag.Bool("allow-unsafe-demo-data", envBool("OPAQUE_ALLOW_UNSAFE_DEMO_DATA", false), "Allow startup with generated demo vectors")
-	tlsCert             = flag.String("tls-cert", envString("OPAQUE_TLS_CERT", ""), "TLS certificate file (optional)")
-	tlsKey              = flag.String("tls-key", envString("OPAQUE_TLS_KEY", ""), "TLS key file (optional)")
+	autoIndexEnabled    = flag.Bool("auto-index-enabled", envBool("OPAQUE_AUTO_INDEX_ENABLED", true), "Enable autonomous background Build/Rebuild")
+	autoIndexInterval   = flag.Duration("auto-index-interval", envDuration("OPAQUE_AUTO_INDEX_INTERVAL", 5*time.Second), "Auto-index check interval")
+	autoIndexMinChanges = flag.Int("auto-index-min-changes", envInt("OPAQUE_AUTO_INDEX_MIN_CHANGES", 1), "Minimum pending mutations before auto-index runs")
+	autoIndexTimeout    = flag.Duration("auto-index-timeout", envDuration("OPAQUE_AUTO_INDEX_TIMEOUT", 15*time.Minute), "Timeout per auto Build/Rebuild")
 )
 
 type bootstrapVector struct {
@@ -52,94 +41,47 @@ type bootstrapVector struct {
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
+type serviceRuntime struct {
+	db     *opaque.DB
+	dbPath string
+}
+
+type addBatchRequest struct {
+	Vectors []bootstrapVector `json:"vectors"`
+}
+
+type searchRequest struct {
+	Vector []float64      `json:"vector"`
+	TopK   int            `json:"top_k"`
+	Filter *opaque.Filter `json:"filter,omitempty"`
+}
+
+type updateRequest struct {
+	Values   []float64      `json:"values"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+type saveRequest struct {
+	Path string `json:"path"`
+}
+
 func main() {
 	flag.Parse()
 
-	log.Println("Starting Opaque Search Service...")
+	log.Println("Starting Opaque SDK Search Service...")
 
-	// Create vector store.
-	vectorStore, err := createStore()
+	runtime, err := newServiceRuntime()
 	if err != nil {
-		log.Fatalf("Failed to create vector store: %v", err)
+		log.Fatalf("Failed to initialize runtime: %v", err)
 	}
-	defer vectorStore.Close()
+	defer runtime.db.Close()
 
-	cfg := service.Config{
-		LSHNumBits:          *lshBits,
-		LSHDimension:        *dimension,
-		LSHSeed:             *lshSeed,
-		MaxSessionTTL:       24 * time.Hour,
-		MaxConcurrentScores: 16,
-	}
-
-	svc, err := service.NewSearchService(cfg, vectorStore)
-	if err != nil {
-		log.Fatalf("Failed to create search service: %v", err)
-	}
-
-	if err := seedVectors(svc); err != nil {
+	if err := runtime.seedVectors(); err != nil {
 		log.Fatalf("Failed to seed vectors: %v", err)
 	}
 
-	serverOpts := []grpc.ServerOption{
-		grpc.MaxRecvMsgSize(50 * 1024 * 1024),
-		grpc.MaxSendMsgSize(50 * 1024 * 1024),
-		grpc.ChainUnaryInterceptor(
-			grpcserver.RecoveryUnaryInterceptor(),
-			grpcserver.LoggingUnaryInterceptor(),
-		),
-		grpc.ChainStreamInterceptor(
-			grpcserver.RecoveryStreamInterceptor(),
-			grpcserver.LoggingStreamInterceptor(),
-		),
-	}
-	if *tlsCert != "" && *tlsKey != "" {
-		creds, err := grpcserver.LoadTLSCredentials(*tlsCert, *tlsKey)
-		if err != nil {
-			log.Fatalf("Failed to load TLS credentials: %v", err)
-		}
-		serverOpts = append(serverOpts, grpc.Creds(creds))
-		log.Println("TLS enabled")
-	}
-	grpcServer := grpc.NewServer(serverOpts...)
-
-	healthServer := health.NewServer()
-	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
-	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
-
-	reflection.Register(grpcServer)
-	pb.RegisterOpaqueSearchServer(grpcServer, grpcserver.New(svc))
-
-	grpcLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *grpcPort))
-	if err != nil {
-		log.Fatalf("Failed to listen on port %d: %v", *grpcPort, err)
-	}
-
-	go func() {
-		log.Printf("gRPC server listening on :%d", *grpcPort)
-		if err := grpcServer.Serve(grpcLis); err != nil {
-			log.Fatalf("gRPC server failed: %v", err)
-		}
-	}()
-
 	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		healthy, msg, sessions, vectors := svc.HealthCheck(r.Context())
-		if healthy {
-			w.WriteHeader(http.StatusOK)
-			fmt.Fprintf(w, "OK\n")
-		} else {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, "ERROR: %s\n", msg)
-		}
-		fmt.Fprintf(w, "Sessions: %d\n", sessions)
-		fmt.Fprintf(w, "Vectors: %d\n", vectors)
-	})
-
-	httpMux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "Ready\n")
-	})
+	runtime.registerRoutes(httpMux)
 
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", *httpPort),
@@ -158,59 +100,71 @@ func main() {
 	<-sigCh
 
 	log.Println("Shutting down...")
-	grpcServer.GracefulStop()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(ctx)
-
 	log.Println("Shutdown complete")
 }
 
-func createStore() (store.VectorStore, error) {
-	switch strings.ToLower(*storageBackend) {
-	case "memory":
-		log.Println("Using in-memory vector store (non-durable)")
-		return store.NewMemoryStore(), nil
-	case "file":
-		if *storagePath == "" {
-			return nil, fmt.Errorf("storage-path is required when storage-backend=file")
-		}
-		absPath, err := filepath.Abs(*storagePath)
-		if err != nil {
-			return nil, fmt.Errorf("resolve storage path: %w", err)
-		}
-		fs, err := store.NewFileStore(absPath)
-		if err != nil {
-			return nil, err
-		}
-		log.Printf("Using file vector store at %s", absPath)
-		return fs, nil
-	default:
-		return nil, fmt.Errorf("unknown storage backend %q (expected file|memory)", *storageBackend)
+func newServiceRuntime() (*serviceRuntime, error) {
+	absPath, err := filepath.Abs(*dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve db path: %w", err)
 	}
+
+	db, err := openOrCreateDB(absPath)
+	if err != nil {
+		return nil, err
+	}
+
+	db.ConfigureAutoIndex(
+		*autoIndexEnabled,
+		*autoIndexInterval,
+		*autoIndexMinChanges,
+		*autoIndexTimeout,
+		func(err error) { log.Printf("auto-index error: %v", err) },
+	)
+
+	return &serviceRuntime{db: db, dbPath: absPath}, nil
 }
 
-func seedVectors(svc *service.SearchService) error {
-	if *bootstrapVectors != "" {
-		if err := loadBootstrapVectors(svc, *bootstrapVectors); err != nil {
-			return err
+func openOrCreateDB(path string) (*opaque.DB, error) {
+	if _, err := os.Stat(filepath.Join(path, "metadata.json")); err == nil {
+		db, loadErr := opaque.Load(path)
+		if loadErr != nil {
+			return nil, fmt.Errorf("load db: %w", loadErr)
 		}
+		log.Printf("Loaded DB snapshot from %s", path)
+		return db, nil
 	}
 
-	if *demoVectors > 0 {
-		if !*allowUnsafeDemoData {
-			return fmt.Errorf("refusing to generate demo vectors without --allow-unsafe-demo-data")
-		}
-		log.Printf("Generating %d demo vectors (unsafe demo mode enabled)", *demoVectors)
-		generateDemoVectors(svc, *demoVectors, *dimension)
+	cfg := opaque.Config{
+		Dimension:             *dimension,
+		NumClusters:           *numClusters,
+		TopClusters:           *topClusters,
+		NumDecoys:             *numDecoys,
+		WorkerPoolSize:        *workerPoolSize,
+		AutoIndexEnabled:      *autoIndexEnabled,
+		AutoIndexInterval:     *autoIndexInterval,
+		AutoIndexMinChanges:   *autoIndexMinChanges,
+		AutoIndexBuildTimeout: *autoIndexTimeout,
+		OnAutoIndexError:      func(err error) { log.Printf("auto-index error: %v", err) },
 	}
 
-	return nil
+	db, err := opaque.NewDB(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("new db: %w", err)
+	}
+	log.Printf("Created new DB (dim=%d, clusters=%d)", *dimension, *numClusters)
+	return db, nil
 }
 
-func loadBootstrapVectors(svc *service.SearchService, path string) error {
-	data, err := os.ReadFile(path)
+func (rt *serviceRuntime) seedVectors() error {
+	if *bootstrapVectors == "" {
+		return nil
+	}
+
+	data, err := os.ReadFile(*bootstrapVectors)
 	if err != nil {
 		return fmt.Errorf("read bootstrap file: %w", err)
 	}
@@ -223,10 +177,7 @@ func loadBootstrapVectors(svc *service.SearchService, path string) error {
 		return nil
 	}
 
-	ids := make([]string, 0, len(records))
-	vectors := make([][]float64, 0, len(records))
-	metas := make([]map[string]any, 0, len(records))
-
+	ctx := context.Background()
 	for i, rec := range records {
 		if rec.ID == "" {
 			return fmt.Errorf("bootstrap vector %d has empty id", i)
@@ -234,48 +185,195 @@ func loadBootstrapVectors(svc *service.SearchService, path string) error {
 		if len(rec.Values) != *dimension {
 			return fmt.Errorf("bootstrap vector %q has dimension %d, expected %d", rec.ID, len(rec.Values), *dimension)
 		}
-		ids = append(ids, rec.ID)
-		vectors = append(vectors, rec.Values)
-		metas = append(metas, rec.Metadata)
+		if rec.Metadata != nil {
+			if err := rt.db.AddWithMetadata(ctx, rec.ID, rec.Values, rec.Metadata); err != nil {
+				return fmt.Errorf("add bootstrap vector %q: %w", rec.ID, err)
+			}
+		} else {
+			if err := rt.db.Add(ctx, rec.ID, rec.Values); err != nil {
+				return fmt.Errorf("add bootstrap vector %q: %w", rec.ID, err)
+			}
+		}
 	}
 
-	if err := svc.AddVectors(context.Background(), ids, vectors, metas); err != nil {
-		return fmt.Errorf("add bootstrap vectors: %w", err)
-	}
-	log.Printf("Loaded %d vectors from %s", len(records), path)
+	log.Printf("Queued %d bootstrap vectors from %s", len(records), *bootstrapVectors)
 	return nil
 }
 
-// generateDemoVectors creates synthetic vectors for testing.
-func generateDemoVectors(svc *service.SearchService, n, dim int) {
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+func (rt *serviceRuntime) registerRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/healthz", rt.handleHealth)
+	mux.HandleFunc("/readyz", rt.handleReady)
 
-	ids := make([]string, n)
-	vectors := make([][]float64, n)
+	mux.HandleFunc("POST /v1/vectors/batch", rt.handleAddBatch)
+	mux.HandleFunc("PUT /v1/vectors/{id}", rt.handleUpdate)
+	mux.HandleFunc("DELETE /v1/vectors/{id}", rt.handleDelete)
+	mux.HandleFunc("POST /v1/search", rt.handleSearch)
+	mux.HandleFunc("GET /v1/stats", rt.handleStats)
 
-	for i := 0; i < n; i++ {
-		ids[i] = fmt.Sprintf("doc_%d", i)
+	mux.HandleFunc("POST /v1/admin/build", rt.handleBuild)
+	mux.HandleFunc("POST /v1/admin/save", rt.handleSave)
+}
 
-		vec := make([]float64, dim)
-		var normSq float64
-		for j := 0; j < dim; j++ {
-			vec[j] = rng.NormFloat64()
-			normSq += vec[j] * vec[j]
-		}
-		norm := math.Sqrt(normSq)
-		if norm == 0 {
-			norm = 1
-		}
-		for j := range vec {
-			vec[j] /= norm
-		}
+func (rt *serviceRuntime) handleHealth(w http.ResponseWriter, r *http.Request) {
+	stats := rt.db.Stats(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":          "healthy",
+		"is_ready":        stats.IsReady,
+		"indexed_vectors": stats.IndexedVectors,
+	})
+}
 
-		vectors[i] = vec
+func (rt *serviceRuntime) handleReady(w http.ResponseWriter, r *http.Request) {
+	if !rt.db.IsReady() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not-ready"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ready"})
+}
+
+func (rt *serviceRuntime) handleAddBatch(w http.ResponseWriter, r *http.Request) {
+	var req addBatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Vectors) == 0 {
+		writeError(w, http.StatusBadRequest, "vectors must not be empty")
+		return
 	}
 
-	if err := svc.AddVectors(context.Background(), ids, vectors, nil); err != nil {
-		log.Printf("Failed to add demo vectors: %v", err)
+	ctx := r.Context()
+	for i, v := range req.Vectors {
+		if v.Metadata != nil {
+			if err := rt.db.AddWithMetadata(ctx, v.ID, v.Values, v.Metadata); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("vector %d: %v", i, err))
+				return
+			}
+		} else {
+			if err := rt.db.Add(ctx, v.ID, v.Values); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("vector %d: %v", i, err))
+				return
+			}
+		}
 	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"queued":       len(req.Vectors),
+		"auto_index":   *autoIndexEnabled,
+		"next_rebuild": *autoIndexInterval,
+	})
+}
+
+func (rt *serviceRuntime) handleUpdate(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "missing id")
+		return
+	}
+
+	var req updateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx := r.Context()
+	if req.Metadata == nil {
+		if err := rt.db.Update(ctx, id, req.Values); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	} else {
+		if err := rt.db.Delete(ctx, id); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := rt.db.AddWithMetadata(ctx, id, req.Values, req.Metadata); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "queued"})
+}
+
+func (rt *serviceRuntime) handleDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := rt.db.Delete(r.Context(), id); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "queued"})
+}
+
+func (rt *serviceRuntime) handleSearch(w http.ResponseWriter, r *http.Request) {
+	var req searchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.TopK <= 0 {
+		req.TopK = 10
+	}
+
+	var (
+		results []opaque.Result
+		err     error
+	)
+	if req.Filter != nil {
+		results, err = rt.db.SearchWithFilter(r.Context(), req.Vector, req.TopK, *req.Filter)
+	} else {
+		results, err = rt.db.Search(r.Context(), req.Vector, req.TopK)
+	}
+	if err != nil {
+		if errors.Is(err, opaque.ErrNotBuilt) || errors.Is(err, opaque.ErrNoVectors) {
+			writeError(w, http.StatusServiceUnavailable, "index not ready yet")
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+
+func (rt *serviceRuntime) handleStats(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, rt.db.Stats(r.Context()))
+}
+
+func (rt *serviceRuntime) handleBuild(w http.ResponseWriter, r *http.Request) {
+	if err := rt.db.Build(r.Context()); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "built"})
+}
+
+func (rt *serviceRuntime) handleSave(w http.ResponseWriter, r *http.Request) {
+	var req saveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	path := req.Path
+	if path == "" {
+		path = rt.dbPath
+	}
+	if err := rt.db.Save(path); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "saved", "path": path})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }
 
 func envString(key, fallback string) string {
@@ -299,19 +397,6 @@ func envInt(key string, fallback int) int {
 	return parsed
 }
 
-func envInt64(key string, fallback int64) int64 {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return fallback
-	}
-	parsed, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		log.Printf("Invalid %s=%q, using default %d", key, v, fallback)
-		return fallback
-	}
-	return parsed
-}
-
 func envBool(key string, fallback bool) bool {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
@@ -320,6 +405,19 @@ func envBool(key string, fallback bool) bool {
 	parsed, err := strconv.ParseBool(v)
 	if err != nil {
 		log.Printf("Invalid %s=%q, using default %t", key, v, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(v)
+	if err != nil {
+		log.Printf("Invalid %s=%q, using default %s", key, v, fallback)
 		return fallback
 	}
 	return parsed
