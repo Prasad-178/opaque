@@ -1,6 +1,7 @@
 # Go
 bin/
 vendor/
+.gocache/
 
 # IDE
 .idea/
