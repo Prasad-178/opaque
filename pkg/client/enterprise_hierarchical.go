@@ -664,11 +664,17 @@ func (c *EnterpriseHierarchicalClient) UpdateCredentials(creds *auth.ClientCrede
 	c.credentials = creds
 	c.encryptor = encryptor
 
-	// Reload centroid cache if centroids changed
-	if c.centroidCache != nil && len(creds.Centroids) > 0 {
-		if c.centroidCache.NeedsRefresh(creds.Centroids) {
-			if err := c.centroidCache.LoadCentroids(creds.Centroids, c.hePool.GetParams().MaxLevel()); err != nil {
+	// Reload centroid caches if centroids changed.
+	if len(creds.Centroids) > 0 {
+		level := c.hePool.GetParams().MaxLevel()
+		if c.centroidCache != nil && c.centroidCache.NeedsRefresh(creds.Centroids) {
+			if err := c.centroidCache.LoadCentroids(creds.Centroids, level); err != nil {
 				return fmt.Errorf("failed to reload centroid cache: %w", err)
+			}
+		}
+		if c.batchCentroidCache != nil {
+			if err := c.batchCentroidCache.LoadCentroids(creds.Centroids, level); err != nil {
+				return fmt.Errorf("failed to reload batch centroid cache: %w", err)
 			}
 		}
 	}

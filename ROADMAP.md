@@ -97,8 +97,8 @@ After the initial `Build()`, new vectors added via `Add()` are immediately assig
 
 This eliminates the O(n) rebuild cost for every mutation. Each `Add()` after `Build()` is now O(k·d) (one nearest-centroid lookup) instead of requiring a full re-index.
 
-### Incremental Indexing (Tier 2: Incremental Centroid Updates)
-Update centroids incrementally when vectors are added or removed using the running mean formula:
+### ~~Incremental Indexing (Tier 2: Incremental Centroid Updates)~~ (Done)
+Update centroids incrementally when vectors are added using the running mean formula:
 ```
 c_new = c_old + (x - c_old) / (n + 1)    # add
 c_new = (n · c_old - x) / (n - 1)         # remove

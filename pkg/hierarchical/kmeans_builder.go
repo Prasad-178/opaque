@@ -310,6 +310,15 @@ type ClusterStats struct {
 	Iterations    int
 }
 
+// GetClusterCounts returns the number of vectors in each cluster (primary assignments only).
+func (b *KMeansBuilder) GetClusterCounts() []int {
+	counts := make([]int, len(b.superBuckets))
+	for i, sb := range b.superBuckets {
+		counts[i] = sb.VectorCount
+	}
+	return counts
+}
+
 // BuildKMeansIndex is a convenience function for building with k-means.
 func BuildKMeansIndex(
 	ctx context.Context,

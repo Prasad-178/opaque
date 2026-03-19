@@ -269,11 +269,29 @@ func Load(path string) (*DB, error) {
 		return nil, fmt.Errorf("opaque: failed to create search client: %w", err)
 	}
 	db.searchClient = searchClient
+
+	// Compute per-cluster vector counts from blob store for incremental centroid updates.
+	db.clusterCounts = computeClusterCounts(store, cfg.NumClusters)
+
 	if cfg.AutoIndexEnabled {
 		db.startLifecycleManager()
 	}
 
 	return db, nil
+}
+
+// computeClusterCounts counts vectors per cluster bucket from the blob store.
+func computeClusterCounts(store blob.Store, numClusters int) []int {
+	counts := make([]int, numClusters)
+	ctx := context.Background()
+	for i := 0; i < numClusters; i++ {
+		bucketKey := fmt.Sprintf("%02d", i)
+		blobs, err := store.GetBucket(ctx, bucketKey)
+		if err == nil {
+			counts[i] = len(blobs)
+		}
+	}
+	return counts
 }
 
 // deletedIDsList converts the deletedIDs map to a sorted slice for serialization.

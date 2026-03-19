@@ -253,7 +253,8 @@ type DB struct {
 	pcaModel      *pca.PCA // nil when PCA is disabled
 	clusterStats  hierarchical.ClusterStats
 	enterpriseCfg *enterprise.Config
-	loaded        bool // true when DB was restored via Load
+	clusterCounts []int // per-cluster vector counts for incremental centroid updates
+	loaded        bool  // true when DB was restored via Load
 	lifecycle     *lifecycleManager
 
 	// Lifecycle revision tracking.
@@ -600,7 +601,12 @@ func (db *DB) Close() error {
 
 // addToIndexLocked assigns a vector to the nearest existing centroid, encrypts it,
 // and stores it in the blob store — making it immediately searchable.
-// This is the "train once, assign many" pattern: centroids stay frozen from Build().
+//
+// It also updates centroids incrementally using the running mean formula:
+//
+//	c_new = c_old + (x - c_old) / (n + 1)
+//
+// This keeps centroids accurate as data is added without requiring a full rebuild.
 // Caller must hold db.mu write lock. State must be stateReady.
 func (db *DB) addToIndexLocked(ctx context.Context, id string, vector []float64) error {
 	// Apply PCA if enabled.
@@ -655,7 +661,35 @@ func (db *DB) addToIndexLocked(ctx context.Context, id string, vector []float64)
 		}
 	}
 
+	// Tier 2: Incrementally update the primary cluster's centroid.
+	// c_new = c_old + (x - c_old) / (n + 1)
+	primaryCluster := assignments[0]
+	if db.clusterCounts != nil && primaryCluster < len(db.clusterCounts) {
+		n := db.clusterCounts[primaryCluster]
+		c := centroids[primaryCluster]
+		scale := 1.0 / float64(n+1)
+		for j := range c {
+			c[j] += (normalized[j] - c[j]) * scale
+		}
+		db.clusterCounts[primaryCluster] = n + 1
+
+		// Refresh the search client's centroid caches so searches use the updated centroids.
+		db.refreshCentroidCaches()
+	}
+
 	return nil
+}
+
+// refreshCentroidCaches updates the search client's HE centroid caches
+// after an incremental centroid update. This re-encodes the modified centroids
+// as HE plaintexts so subsequent searches use the updated values.
+func (db *DB) refreshCentroidCaches() {
+	if db.searchClient == nil || db.enterpriseCfg == nil {
+		return
+	}
+	creds := makeCredentials(db.enterpriseCfg)
+	// UpdateCredentials reloads both centroid cache and batch centroid cache.
+	db.searchClient.UpdateCredentials(creds)
 }
 
 // findNearestCentroids returns the indices of the k nearest centroids to the query vector
@@ -834,6 +868,7 @@ func (db *DB) buildLocked(ctx context.Context) error {
 		progress("encrypting", 1)
 	}
 	db.clusterStats = builder.GetClusterStats()
+	db.clusterCounts = builder.GetClusterCounts()
 	enterpriseCfg := builder.GetEnterpriseConfig()
 	enterpriseCfg.UpdatedAt = time.Now()
 	db.enterpriseCfg = enterpriseCfg
