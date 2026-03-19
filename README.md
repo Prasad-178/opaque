@@ -46,10 +46,13 @@ func main() {
 - **Homomorphic encryption** — queries are encrypted with CKKS; the server scores centroids without seeing the query
 - **AES-256-GCM** — vectors encrypted at rest, decrypted only client-side
 - **Decoy requests** — real bucket fetches are mixed with fake ones to hide access patterns
+- **Incremental indexing** — vectors added after `Build()` are instantly searchable, no rebuild needed
+- **Incremental centroid updates** — centroids are updated via running mean as vectors are added, maintaining cluster quality
 - **Metadata & filtered search** — attach key-value metadata to vectors, filter at search time
 - **CRUD operations** — Add, Update, Delete vectors with soft-delete and compaction via Rebuild
-- **Persistence** — Save/Load database state to disk
+- **Persistence** — Save/Load database state to disk with encrypted metadata
 - **File-backed storage** — memory or file-backed blob store for large datasets
+- **PCA dimensionality reduction** — optional client-side PCA for reduced latency
 - **Progress callbacks** — `OnBuildProgress` hook for observability during index builds
 - **Batch operations** — AddBatch, AddBatchWithMetadata for bulk ingestion
 
@@ -70,6 +73,30 @@ func main() {
 | `RedundantAssignments` | 1 | Clusters per vector (2 = better boundary recall, 2x storage) |
 | `NumKMeansInit` | 1 | K-means initializations (higher = better centroids) |
 | `NormalizedStorage` | true | Pre-normalize vectors for faster search |
+| `PCADimension` | 0 (off) | Target dimension for PCA reduction |
+| `AutoIndexEnabled` | false | Enable automatic background re-indexing |
+
+## Incremental Indexing
+
+After `Build()`, new vectors added via `Add()` are **instantly searchable** without calling `Rebuild()`:
+
+```go
+db.Build(ctx) // initial k-means clustering
+
+// These are immediately searchable — no rebuild needed
+db.Add(ctx, "new-1", newVector1)
+db.Add(ctx, "new-2", newVector2)
+
+results, _ := db.Search(ctx, query, 10) // finds new-1, new-2
+```
+
+**How it works:**
+1. New vectors are assigned to their nearest existing centroid — O(k·d) per vector
+2. Centroids are updated incrementally via the running mean formula: `c_new = c_old + (x - c_old) / (n + 1)`
+3. Vectors are encrypted and stored in the appropriate cluster bucket
+4. HE centroid caches are refreshed so searches use updated centroids
+
+Call `Rebuild()` when data distribution has drifted significantly or cluster sizes become skewed.
 
 ## Examples
 
@@ -81,6 +108,7 @@ func main() {
 | [`large-scale`](examples/large-scale/) | 10K+ vectors with batch operations |
 | [`file-storage`](examples/file-storage/) | File-backed blob store for large datasets |
 | [`http-server`](examples/http-server/) | HTTP API wrapping Opaque for self-hosted deployment |
+| [`benchmark`](examples/benchmark/) | Comprehensive benchmark: build, search, recall, privacy, incremental indexing |
 
 Run any example:
 
@@ -90,16 +118,23 @@ go run ./examples/basic/
 
 ## Performance
 
-Benchmarked on Apple M4 Pro, 100K 128-dimensional vectors, 64 clusters.
+Benchmarked on Apple M4 Pro, 128-dimensional vectors, 64 clusters.
 
-| Metric | Standard (64 HE ops) | Batch (1 HE op) |
-|--------|---------------------|------------------|
-| **Recall@10** | 96.0% | 96.0% |
-| **Latency** | 2.56s | 190ms |
+| Metric | Value |
+|--------|-------|
+| **Build** (1K vectors) | ~3,400 vectors/sec |
+| **Search latency** | ~68ms avg (batch HE) |
+| **Incremental add** | ~300µs/vector |
+| **Recall@10** (SIFT10K) | 96% at 14.9% data scanned |
+| **Recall@10** (SIFT1M) | 96.8% at 6.2% data scanned |
 
-SIFT10K (real dataset): 95% Recall@1, 96% Recall@10 scanning 14.9% of data.
+Run the benchmark yourself:
 
-See [BENCHMARKS.md](BENCHMARKS.md) for full details.
+```bash
+go run ./examples/benchmark/
+```
+
+See [BENCHMARKS.md](BENCHMARKS.md) for full details including SIFT1M results.
 
 ## Architecture
 

@@ -154,7 +154,20 @@ After `Build()` creates the initial k-means index, subsequent `Add()` calls are 
 4. **Store** in the appropriate cluster bucket(s) in the blob store
 5. Vector is **immediately searchable** — no rebuild needed
 
-Centroids remain frozen from the initial k-means run. This is the same approach FAISS uses: `train()` computes centroids once, `add()` just assigns to nearest.
+### Tier 2: Incremental Centroid Updates
+
+Rather than freezing centroids, Opaque updates them incrementally using the running mean formula:
+
+```
+Add:    c_new = c_old + (x - c_old) / (n + 1)
+Delete: c_new = (n · c_old - x) / (n - 1)
+```
+
+This keeps centroids accurate as new data arrives without re-clustering. After each update, HE centroid caches are refreshed so subsequent searches use the updated centroids.
+
+**Batch optimization:** When adding multiple vectors via `AddBatch()`, centroid caches are refreshed once after all vectors are processed, not per-vector. This reduces incremental add cost from ~117ms/vec to ~300µs/vec.
+
+This is the same approach used by Milvus (segment-level centroid updates) and Elasticsearch (incremental IVF maintenance).
 
 ### When to Rebuild
 
