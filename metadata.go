@@ -41,6 +41,14 @@ func (db *DB) AddWithMetadata(ctx context.Context, id string, vector []float64, 
 
 	db.pendingIDs = append(db.pendingIDs, id)
 	db.pendingVectors = append(db.pendingVectors, v)
+
+	// If the index is already built, assign to nearest centroid and store immediately.
+	if db.state == stateReady {
+		if err := db.addToIndexLocked(ctx, id, v); err != nil {
+			return fmt.Errorf("opaque: incremental add failed: %w", err)
+		}
+	}
+
 	if db.state == stateEmpty {
 		db.state = stateBuffered
 	}
@@ -89,6 +97,13 @@ func (db *DB) AddBatchWithMetadata(ctx context.Context, ids []string, vectors []
 		copy(vc, v)
 		db.pendingIDs = append(db.pendingIDs, ids[i])
 		db.pendingVectors = append(db.pendingVectors, vc)
+
+		// If the index is already built, assign to nearest centroid and store immediately.
+		if db.state == stateReady {
+			if err := db.addToIndexLocked(ctx, ids[i], vc); err != nil {
+				return fmt.Errorf("opaque: incremental add failed for %q: %w", ids[i], err)
+			}
+		}
 
 		if metadatas[i] != nil {
 			if db.metadata == nil {
