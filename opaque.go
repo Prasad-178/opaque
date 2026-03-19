@@ -320,6 +320,7 @@ func (db *DB) Add(ctx context.Context, id string, vector []float64) error {
 		if err := db.addToIndexLocked(ctx, id, v); err != nil {
 			return fmt.Errorf("opaque: incremental add failed: %w", err)
 		}
+		db.refreshCentroidCaches()
 	}
 
 	if db.state == stateEmpty {
@@ -351,6 +352,7 @@ func (db *DB) AddBatch(ctx context.Context, ids []string, vectors [][]float64) e
 		}
 	}
 
+	ready := db.state == stateReady
 	for i, v := range vectors {
 		vc := make([]float64, len(v))
 		copy(vc, v)
@@ -358,11 +360,16 @@ func (db *DB) AddBatch(ctx context.Context, ids []string, vectors [][]float64) e
 		db.pendingVectors = append(db.pendingVectors, vc)
 
 		// If the index is already built, assign to nearest centroid and store immediately.
-		if db.state == stateReady {
+		if ready {
 			if err := db.addToIndexLocked(ctx, ids[i], vc); err != nil {
 				return fmt.Errorf("opaque: incremental add failed for %q: %w", ids[i], err)
 			}
 		}
+	}
+
+	// Refresh centroid caches once after all vectors are added (not per-vector).
+	if ready {
+		db.refreshCentroidCaches()
 	}
 
 	if db.state == stateEmpty {
@@ -672,9 +679,6 @@ func (db *DB) addToIndexLocked(ctx context.Context, id string, vector []float64)
 			c[j] += (normalized[j] - c[j]) * scale
 		}
 		db.clusterCounts[primaryCluster] = n + 1
-
-		// Refresh the search client's centroid caches so searches use the updated centroids.
-		db.refreshCentroidCaches()
 	}
 
 	return nil
