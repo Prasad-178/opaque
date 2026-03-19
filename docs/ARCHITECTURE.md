@@ -140,6 +140,36 @@ Each vector is assigned to its top-K nearest centroids (default K=2). This creat
 - **Decoys are not PIR**: Decoy-based hiding provides k-anonymity but not cryptographic access pattern privacy. A future PIR integration is planned for stronger guarantees.
 - **Cluster count leaks structure**: The number of clusters and their sizes are visible to the server. This reveals the coarse distribution of the dataset but not individual vectors.
 
+## Incremental Indexing
+
+The index supports incremental updates without full re-clustering, following the "train once, assign many" pattern used by production vector databases (FAISS, Milvus, Pinecone).
+
+### Post-Build Additions
+
+After `Build()` creates the initial k-means index, subsequent `Add()` calls are handled incrementally:
+
+1. **Normalize** the new vector (for cosine similarity)
+2. **Find nearest centroid(s)** from the frozen centroid set — O(k·d) per vector
+3. **Encrypt** with AES-256-GCM using the existing enterprise key
+4. **Store** in the appropriate cluster bucket(s) in the blob store
+5. Vector is **immediately searchable** — no rebuild needed
+
+Centroids remain frozen from the initial k-means run. This is the same approach FAISS uses: `train()` computes centroids once, `add()` just assigns to nearest.
+
+### When to Rebuild
+
+`Rebuild()` performs a full re-clustering and is recommended when:
+- Data distribution has drifted significantly from the training set
+- Cluster sizes become highly skewed (some clusters much larger than others)
+- Recall has degraded below an acceptable threshold
+- The dataset size has roughly doubled since the last build
+
+### Deletion
+
+Deletion uses a two-phase soft-delete pattern:
+1. **Immediate**: `deletedIDs` map filters deleted vectors from search results at query time
+2. **Deferred**: `Rebuild()` physically removes deleted vectors and reclaims storage
+
 ## Authentication
 
 The auth service provides:

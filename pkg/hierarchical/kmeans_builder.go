@@ -251,6 +251,11 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 
 // formatSuperBucketKey formats a super-bucket ID as a bucket key.
 func formatSuperBucketKey(superID int) string {
+	return FormatBucketKey(superID)
+}
+
+// FormatBucketKey formats a super-bucket ID as a two-digit zero-padded bucket key.
+func FormatBucketKey(superID int) string {
 	return fmt.Sprintf("%02d", superID)
 }
 

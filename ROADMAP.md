@@ -92,6 +92,22 @@ Optimized the existing k-means + HE pipeline for better build speed, cluster qua
 - **Pre-normalized vector storage** (`NormalizedStorage`) — stores unit-length vectors, skips per-vector normalization during search (10-15% faster local scoring)
 - **Parallel AES decryption** in search pipeline (multi-goroutine blob decryption)
 
+### ~~Incremental Indexing (Tier 1: Train Once, Assign Many)~~ (Done)
+After the initial `Build()`, new vectors added via `Add()` are immediately assigned to their nearest existing centroid, encrypted, and stored — making them **instantly searchable** without calling `Rebuild()`. Centroids are frozen after the initial k-means run. `Rebuild()` remains available for full re-clustering when cluster quality degrades.
+
+This eliminates the O(n) rebuild cost for every mutation. Each `Add()` after `Build()` is now O(k·d) (one nearest-centroid lookup) instead of requiring a full re-index.
+
+### Incremental Indexing (Tier 2: Incremental Centroid Updates)
+Update centroids incrementally when vectors are added or removed using the running mean formula:
+```
+c_new = c_old + (x - c_old) / (n + 1)    # add
+c_new = (n · c_old - x) / (n - 1)         # remove
+```
+Add split/merge logic when cluster sizes become skewed. These formulas are exact (not approximations) and map directly to CKKS depth-1 operations, making them feasible in the encrypted domain.
+
+### Incremental Indexing (Tier 3: HE-Native Centroid Updates)
+Perform centroid updates entirely in the homomorphic encryption domain — the server updates encrypted centroids without ever decrypting them. This eliminates the plaintext-during-rebuild window and provides end-to-end encrypted index maintenance. The incremental mean formula requires only one HE subtraction, one scalar multiplication, and one HE addition (depth-1 circuit).
+
 ### GPU Acceleration
 Lattigo supports GPU acceleration for HE operations. Investigate and benchmark CUDA/Metal backends for further latency reduction.
 

@@ -34,8 +34,10 @@
 //  2. Build the index with [DB.Build] (expensive: k-means clustering + HE engine initialization)
 //  3. Search with [DB.Search] (safe for concurrent use)
 //
-// K-means clustering requires all vectors upfront, so [DB.Build] must be called after
-// all vectors are added. To add vectors after building, use [DB.Add] followed by [DB.Rebuild].
+// After [DB.Build], new vectors added via [DB.Add] are incrementally assigned to the
+// nearest existing cluster centroid and become immediately searchable (no rebuild needed).
+// Call [DB.Rebuild] only when you want to re-cluster from scratch (e.g., after significant
+// data distribution changes).
 package opaque
 
 import (
@@ -50,6 +52,7 @@ import (
 	"github.com/Prasad-178/opaque/pkg/auth"
 	"github.com/Prasad-178/opaque/pkg/blob"
 	"github.com/Prasad-178/opaque/pkg/client"
+	"github.com/Prasad-178/opaque/pkg/cluster"
 	"github.com/Prasad-178/opaque/pkg/encrypt"
 	"github.com/Prasad-178/opaque/pkg/enterprise"
 	"github.com/Prasad-178/opaque/pkg/hierarchical"
@@ -286,10 +289,12 @@ func NewDB(cfg Config) (*DB, error) {
 	return db, nil
 }
 
-// Add buffers a single vector for indexing. The id must be unique within the DB.
+// Add adds a single vector to the DB. The id must be unique within the DB.
 //
 // Before [DB.Build], vectors are buffered for the initial index build.
-// After Build, vectors are buffered for the next [DB.Rebuild].
+// After Build, vectors are immediately assigned to the nearest existing cluster
+// centroid, encrypted, and stored — making them instantly searchable without
+// calling [DB.Rebuild]. Centroids remain frozen from the initial Build.
 //
 // The vector is copied internally, so the caller may modify the slice after Add returns.
 func (db *DB) Add(ctx context.Context, id string, vector []float64) error {
@@ -308,6 +313,14 @@ func (db *DB) Add(ctx context.Context, id string, vector []float64) error {
 
 	db.pendingIDs = append(db.pendingIDs, id)
 	db.pendingVectors = append(db.pendingVectors, v)
+
+	// If the index is already built, assign to nearest centroid and store immediately.
+	if db.state == stateReady {
+		if err := db.addToIndexLocked(ctx, id, v); err != nil {
+			return fmt.Errorf("opaque: incremental add failed: %w", err)
+		}
+	}
+
 	if db.state == stateEmpty {
 		db.state = stateBuffered
 	}
@@ -315,10 +328,11 @@ func (db *DB) Add(ctx context.Context, id string, vector []float64) error {
 	return nil
 }
 
-// AddBatch buffers multiple vectors for indexing. The ids and vectors slices must
+// AddBatch adds multiple vectors to the DB. The ids and vectors slices must
 // have the same length. Each vector must have exactly [Config.Dimension] elements.
 //
 // This is equivalent to calling [DB.Add] for each vector, but acquires the lock once.
+// After [DB.Build], vectors are immediately indexed and searchable.
 func (db *DB) AddBatch(ctx context.Context, ids []string, vectors [][]float64) error {
 	if len(ids) != len(vectors) {
 		return fmt.Errorf("opaque: ids length %d does not match vectors length %d", len(ids), len(vectors))
@@ -341,7 +355,15 @@ func (db *DB) AddBatch(ctx context.Context, ids []string, vectors [][]float64) e
 		copy(vc, v)
 		db.pendingIDs = append(db.pendingIDs, ids[i])
 		db.pendingVectors = append(db.pendingVectors, vc)
+
+		// If the index is already built, assign to nearest centroid and store immediately.
+		if db.state == stateReady {
+			if err := db.addToIndexLocked(ctx, ids[i], vc); err != nil {
+				return fmt.Errorf("opaque: incremental add failed for %q: %w", ids[i], err)
+			}
+		}
 	}
+
 	if db.state == stateEmpty {
 		db.state = stateBuffered
 	}
@@ -575,6 +597,109 @@ func (db *DB) Close() error {
 }
 
 // --- Internal helpers ---
+
+// addToIndexLocked assigns a vector to the nearest existing centroid, encrypts it,
+// and stores it in the blob store — making it immediately searchable.
+// This is the "train once, assign many" pattern: centroids stay frozen from Build().
+// Caller must hold db.mu write lock. State must be stateReady.
+func (db *DB) addToIndexLocked(ctx context.Context, id string, vector []float64) error {
+	// Apply PCA if enabled.
+	indexVec := vector
+	if db.pcaModel != nil {
+		reduced, err := db.pcaModel.Transform(vector)
+		if err != nil {
+			return fmt.Errorf("PCA transform: %w", err)
+		}
+		indexVec = reduced
+	}
+
+	// Normalize for centroid comparison (centroids are normalized from k-means).
+	normalized := cluster.NormalizeVector(indexVec)
+
+	// Find nearest centroid(s).
+	centroids := db.enterpriseCfg.Centroids
+	numAssignments := db.cfg.RedundantAssignments
+	if numAssignments <= 0 {
+		numAssignments = 1
+	}
+	assignments := findNearestCentroids(normalized, centroids, numAssignments)
+
+	// Encrypt and store in each assigned bucket.
+	enc, err := encrypt.NewAESGCM(db.enterpriseCfg.AESKey)
+	if err != nil {
+		return fmt.Errorf("encryptor: %w", err)
+	}
+
+	// Use normalized or original vector based on config.
+	storeVec := indexVec
+	if db.cfg.normalizedStorage() {
+		storeVec = normalized
+	}
+
+	for assignIdx, superID := range assignments {
+		bucketKey := hierarchical.FormatBucketKey(superID)
+
+		blobID := id
+		if assignIdx > 0 {
+			blobID = fmt.Sprintf("%s_dup%d", id, assignIdx)
+		}
+
+		ciphertext, err := enc.EncryptVectorWithID(storeVec, id)
+		if err != nil {
+			return fmt.Errorf("encrypt vector %q: %w", id, err)
+		}
+
+		dim := len(storeVec)
+		if err := db.blobStore.Put(ctx, blob.NewBlob(blobID, bucketKey, ciphertext, dim)); err != nil {
+			return fmt.Errorf("store vector %q: %w", id, err)
+		}
+	}
+
+	return nil
+}
+
+// findNearestCentroids returns the indices of the k nearest centroids to the query vector
+// using squared Euclidean distance.
+func findNearestCentroids(query []float64, centroids [][]float64, k int) []int {
+	if k <= 0 {
+		k = 1
+	}
+	if k > len(centroids) {
+		k = len(centroids)
+	}
+
+	type centroidDist struct {
+		idx  int
+		dist float64
+	}
+
+	distances := make([]centroidDist, len(centroids))
+	for i, c := range centroids {
+		var sum float64
+		for j := range query {
+			d := query[j] - c[j]
+			sum += d * d
+		}
+		distances[i] = centroidDist{i, sum}
+	}
+
+	// Partial sort to get top-k nearest.
+	for i := 0; i < k; i++ {
+		minIdx := i
+		for j := i + 1; j < len(distances); j++ {
+			if distances[j].dist < distances[minIdx].dist {
+				minIdx = j
+			}
+		}
+		distances[i], distances[minIdx] = distances[minIdx], distances[i]
+	}
+
+	result := make([]int, k)
+	for i := range result {
+		result[i] = distances[i].idx
+	}
+	return result
+}
 
 // extractIndexedVectors decrypts all vectors from the blob store and merges
 // them into pendingIDs/pendingVectors. This enables Rebuild on a loaded DB

@@ -559,6 +559,143 @@ func TestRebuild(t *testing.T) {
 	}
 }
 
+func TestIncrementalAdd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping HE engine test in short mode")
+	}
+
+	const (
+		dim      = 128
+		clusters = 8
+		topK     = 5
+	)
+
+	ctx := context.Background()
+
+	db, err := NewDB(Config{
+		Dimension:      dim,
+		NumClusters:    clusters,
+		TopClusters:    4,
+		NumDecoys:      2,
+		WorkerPoolSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	// Build with initial vectors.
+	ids, vectors := generateTestVectors(100, dim, 42)
+	if err := db.AddBatch(ctx, ids, vectors); err != nil {
+		t.Fatalf("AddBatch: %v", err)
+	}
+	if err := db.Build(ctx); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// Add a new vector after build — should be immediately searchable.
+	newID := "incremental-1"
+	newVec := vectors[0] // use an existing vector so we know it should be findable
+	// Slightly perturb it so it's not identical.
+	perturbedVec := make([]float64, dim)
+	copy(perturbedVec, newVec)
+	perturbedVec[0] += 0.01
+
+	if err := db.Add(ctx, newID, perturbedVec); err != nil {
+		t.Fatalf("Add after Build: %v", err)
+	}
+
+	// Search using the perturbed vector as query — should find the incrementally added vector.
+	results, err := db.Search(ctx, perturbedVec, topK)
+	if err != nil {
+		t.Fatalf("Search after incremental add: %v", err)
+	}
+
+	found := false
+	for _, r := range results {
+		if r.ID == newID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Incrementally added vector %q not found in search results (got %d results)", newID, len(results))
+		for _, r := range results {
+			t.Logf("  result: %s (score=%.4f)", r.ID, r.Score)
+		}
+	}
+
+	// Verify Size reflects the new vector.
+	if db.Size() != 101 {
+		t.Errorf("Size after incremental add = %d, want 101", db.Size())
+	}
+}
+
+func TestIncrementalAddBatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping HE engine test in short mode")
+	}
+
+	const (
+		dim      = 128
+		clusters = 8
+		topK     = 10
+	)
+
+	ctx := context.Background()
+
+	db, err := NewDB(Config{
+		Dimension:      dim,
+		NumClusters:    clusters,
+		TopClusters:    4,
+		NumDecoys:      2,
+		WorkerPoolSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	// Build with initial vectors.
+	ids, vectors := generateTestVectors(100, dim, 99)
+	if err := db.AddBatch(ctx, ids, vectors); err != nil {
+		t.Fatalf("AddBatch: %v", err)
+	}
+	if err := db.Build(ctx); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// Add batch of new vectors after build.
+	newIDs, newVecs := generateTestVectors(20, dim, 200)
+	for i := range newIDs {
+		newIDs[i] = fmt.Sprintf("new-%d", i)
+	}
+	if err := db.AddBatch(ctx, newIDs, newVecs); err != nil {
+		t.Fatalf("AddBatch after Build: %v", err)
+	}
+
+	// Search for one of the new vectors — should be immediately findable.
+	results, err := db.Search(ctx, newVecs[0], topK)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+
+	found := false
+	for _, r := range results {
+		if r.ID == "new-0" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Batch-added vector 'new-0' not found in search results")
+	}
+
+	if db.Size() != 120 {
+		t.Errorf("Size = %d, want 120", db.Size())
+	}
+}
+
 func TestClose_BuiltDB(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping HE engine test in short mode")
