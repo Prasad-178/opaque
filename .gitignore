@@ -33,3 +33,6 @@ notes.txt
 
 # Ignore articles
 *ARTICLE*.md
+
+# Private meeting notes
+GUY_MEETING_NOTES.md

@@ -134,7 +134,7 @@ Run the benchmark yourself:
 go run ./examples/benchmark/
 ```
 
-See [BENCHMARKS.md](BENCHMARKS.md) for full details including SIFT1M results.
+See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for full details including SIFT1M results.
 
 ## Architecture
 
