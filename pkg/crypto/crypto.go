@@ -297,9 +297,22 @@ func (e *Engine) SerializeCiphertext(ct *rlwe.Ciphertext) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// DeserializeCiphertext deserializes bytes to a ciphertext
-func (e *Engine) DeserializeCiphertext(data []byte) (*rlwe.Ciphertext, error) {
-	ct := rlwe.NewCiphertext(e.params, 1, e.params.MaxLevel())
+// DeserializeCiphertext deserializes bytes to a ciphertext.
+// Validates input size and recovers from panics in Lattigo's ReadFrom.
+func (e *Engine) DeserializeCiphertext(data []byte) (ct *rlwe.Ciphertext, err error) {
+	if len(data) == 0 {
+		return nil, errors.New("empty ciphertext data")
+	}
+
+	// Lattigo's ReadFrom can panic on malformed input; recover gracefully.
+	defer func() {
+		if r := recover(); r != nil {
+			ct = nil
+			err = fmt.Errorf("ciphertext deserialization panic: %v", r)
+		}
+	}()
+
+	ct = rlwe.NewCiphertext(e.params, 1, e.params.MaxLevel())
 	if _, err := ct.ReadFrom(bytes.NewReader(data)); err != nil {
 		return nil, fmt.Errorf("failed to deserialize ciphertext: %w", err)
 	}

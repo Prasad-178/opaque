@@ -62,10 +62,12 @@ func (s *FileStore) indexPath() string {
 
 // blobPath returns the path to a blob file.
 func (s *FileStore) blobPath(id string) string {
-	// Sanitize ID to prevent path traversal
-	safeID := strings.ReplaceAll(id, "/", "_")
-	safeID = strings.ReplaceAll(safeID, "\\", "_")
-	safeID = strings.ReplaceAll(safeID, "..", "_")
+	// Use filepath.Base to strip any directory components, preventing path traversal.
+	// This handles /, \, .., null bytes, and any other path separator tricks.
+	safeID := filepath.Base(id)
+	if safeID == "." || safeID == "/" || safeID == "\\" {
+		safeID = "_invalid_"
+	}
 	return filepath.Join(s.blobsPath, safeID+".json")
 }
 
@@ -86,15 +88,21 @@ func (s *FileStore) loadIndex() error {
 	return nil
 }
 
-// saveIndex saves the bucket index to disk.
+// saveIndex saves the bucket index to disk atomically via write-then-rename.
 func (s *FileStore) saveIndex() error {
 	data, err := json.MarshalIndent(s.buckets, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal index: %w", err)
 	}
 
-	if err := os.WriteFile(s.indexPath(), data, 0644); err != nil {
+	// Write to temp file, then rename for atomic update.
+	tmpPath := s.indexPath() + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write index: %w", err)
+	}
+	if err := os.Rename(tmpPath, s.indexPath()); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename index: %w", err)
 	}
 
 	return nil
@@ -117,7 +125,7 @@ func (s *FileStore) Put(ctx context.Context, blob *Blob) error {
 	}
 
 	// Write blob file
-	if err := os.WriteFile(s.blobPath(blob.ID), data, 0644); err != nil {
+	if err := os.WriteFile(s.blobPath(blob.ID), data, 0600); err != nil {
 		return fmt.Errorf("failed to write blob: %w", err)
 	}
 
@@ -158,7 +166,7 @@ func (s *FileStore) PutBatch(ctx context.Context, blobs []*Blob) error {
 			return fmt.Errorf("failed to serialize blob %s: %w", blob.ID, err)
 		}
 
-		if err := os.WriteFile(s.blobPath(blob.ID), data, 0644); err != nil {
+		if err := os.WriteFile(s.blobPath(blob.ID), data, 0600); err != nil {
 			// Rollback
 			for _, id := range writtenIDs {
 				os.Remove(s.blobPath(id))

@@ -136,7 +136,9 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 }
 
 func (s *FileStore) configPath(enterpriseID string) string {
-	return filepath.Join(s.baseDir, enterpriseID+".gob")
+	// Use filepath.Base to prevent path traversal via enterprise IDs.
+	safeID := filepath.Base(enterpriseID)
+	return filepath.Join(s.baseDir, safeID+".gob")
 }
 
 // Get retrieves an enterprise configuration by ID.
@@ -172,21 +174,28 @@ func (s *FileStore) Put(ctx context.Context, cfg *Config) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Write to temp file with restrictive permissions, then rename atomically.
 	path := s.configPath(cfg.EnterpriseID)
-	f, err := os.Create(path)
+	tmpPath := path + ".tmp"
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create config file: %w", err)
 	}
-	defer f.Close()
 
 	enc := gob.NewEncoder(f)
 	if err := enc.Encode(cfg); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
 		return fmt.Errorf("failed to encode config: %w", err)
 	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to close config file: %w", err)
+	}
 
-	// Set restrictive permissions (owner read/write only)
-	if err := os.Chmod(path, 0600); err != nil {
-		return fmt.Errorf("failed to set permissions: %w", err)
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename config file: %w", err)
 	}
 
 	return nil
