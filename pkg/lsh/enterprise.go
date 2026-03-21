@@ -2,7 +2,6 @@ package lsh
 
 import (
 	"math"
-	"math/rand"
 )
 
 // EnterpriseHasher provides LSH hashing using pre-distributed hyperplanes.
@@ -78,7 +77,7 @@ func (h *EnterpriseHasher) NumBits() int {
 // The hyperplanes are normalized to unit length to ensure consistent
 // hashing behavior.
 func GenerateHyperplanes(seed int64, numBits, dimension int) [][]float64 {
-	rng := rand.New(rand.NewSource(seed))
+	rng := newSeededRNG(seed)
 
 	planes := make([][]float64, numBits)
 	for i := 0; i < numBits; i++ {
@@ -101,12 +100,27 @@ func GenerateHyperplanes(seed int64, numBits, dimension int) [][]float64 {
 }
 
 // GenerateHyperplanesFromBytes generates hyperplanes from a byte seed.
-// Useful when the seed comes from a cryptographically random source.
+// Uses all 32 bytes of the seed (via ChaCha8) for full entropy.
 func GenerateHyperplanesFromBytes(seed []byte, numBits, dimension int) [][]float64 {
-	// Convert first 8 bytes to int64
-	var seedInt int64
-	for i := 0; i < 8 && i < len(seed); i++ {
-		seedInt |= int64(seed[i]) << (uint(i) * 8)
+	var seedBytes [32]byte
+	copy(seedBytes[:], seed)
+	rng := newSeededRNGFromBytes(seedBytes)
+
+	planes := make([][]float64, numBits)
+	for i := 0; i < numBits; i++ {
+		plane := make([]float64, dimension)
+		var norm float64
+		for j := 0; j < dimension; j++ {
+			plane[j] = rng.NormFloat64()
+			norm += plane[j] * plane[j]
+		}
+		norm = math.Sqrt(norm)
+		if norm > 0 {
+			for j := range plane {
+				plane[j] /= norm
+			}
+		}
+		planes[i] = plane
 	}
-	return GenerateHyperplanes(seedInt, numBits, dimension)
+	return planes
 }

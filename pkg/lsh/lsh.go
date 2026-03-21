@@ -2,13 +2,14 @@
 package lsh
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/gob"
 	"fmt"
 	"io"
 	"math"
 	"math/bits"
-	"math/rand"
+	mathrand "math/rand/v2"
 	"os"
 	"sort"
 	"sync"
@@ -40,7 +41,7 @@ type Config struct {
 
 // NewIndex creates a new LSH index with random hyperplanes.
 func NewIndex(cfg Config) *Index {
-	rng := rand.New(rand.NewSource(cfg.Seed))
+	rng := newSeededRNG(cfg.Seed)
 
 	idx := &Index{
 		planes:    make([][]float64, cfg.NumBits),
@@ -472,11 +473,27 @@ func UnmaskHash(maskedHash []byte, sessionKey []byte) []byte {
 	return MaskHash(maskedHash, sessionKey) // XOR is its own inverse
 }
 
-// GenerateSessionKey generates a random session key for hash masking.
+// GenerateSessionKey generates a cryptographically random session key for hash masking.
 func GenerateSessionKey(numBytes int) []byte {
 	key := make([]byte, numBytes)
-	rand.Read(key)
+	if _, err := rand.Read(key); err != nil {
+		panic("crypto/rand.Read failed: " + err.Error())
+	}
 	return key
+}
+
+// newSeededRNG creates a ChaCha8-based PRNG from an int64 seed.
+// This is deterministic (same seed → same output) but uses a
+// cryptographic PRNG, unlike math/rand.
+func newSeededRNG(seed int64) *mathrand.Rand {
+	var seedBytes [32]byte
+	binary.LittleEndian.PutUint64(seedBytes[:8], uint64(seed))
+	return mathrand.New(mathrand.NewChaCha8(seedBytes))
+}
+
+// newSeededRNGFromBytes creates a ChaCha8-based PRNG from a full 32-byte seed.
+func newSeededRNGFromBytes(seed [32]byte) *mathrand.Rand {
+	return mathrand.New(mathrand.NewChaCha8(seed))
 }
 
 // HashToIndex converts a hash to a bucket index in range [0, numBuckets).
