@@ -391,6 +391,25 @@ func (e *Engine) DecryptBatchScalars(ct *rlwe.Ciphertext, numCentroids, dimensio
 	return results, nil
 }
 
+// Close zeros secret key material from memory.
+// Must be called when the engine is no longer needed.
+func (e *Engine) Close() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.secretKey != nil {
+		// Zero all coefficients in the secret key polynomial
+		for i := range e.secretKey.Value.Q.Coeffs {
+			for j := range e.secretKey.Value.Q.Coeffs[i] {
+				e.secretKey.Value.Q.Coeffs[i][j] = 0
+			}
+		}
+		e.secretKey = nil
+	}
+	e.decryptor = nil
+	e.encryptor = nil
+}
+
 // NormalizeVector normalizes a vector to unit length
 func NormalizeVector(vector []float64) []float64 {
 	var norm float64

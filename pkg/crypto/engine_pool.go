@@ -80,6 +80,18 @@ func (p *EnginePool) Release(e *Engine) {
 	p.free <- e
 }
 
+// Close zeros all secret key material from all engines in the pool.
+func (p *EnginePool) Close() {
+	// Drain the pool to prevent further use
+	for i := 0; i < len(p.engines); i++ {
+		select {
+		case e := <-p.free:
+			e.Close()
+		default:
+		}
+	}
+}
+
 // Size returns the number of engines in the pool.
 func (p *EnginePool) Size() int {
 	return len(p.engines)

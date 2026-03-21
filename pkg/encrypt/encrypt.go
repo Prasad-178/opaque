@@ -141,6 +141,14 @@ func (e *AESGCM) DecryptWithAAD(ciphertext, aad []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
+// Close zeros the key material from memory.
+// Must be called when the encryptor is no longer needed.
+func (e *AESGCM) Close() {
+	for i := range e.key {
+		e.key[i] = 0
+	}
+}
+
 // KeyFingerprint returns a SHA-256 fingerprint of the key (first 8 bytes, hex encoded).
 // Useful for verifying key matches without exposing the key.
 func (e *AESGCM) KeyFingerprint() string {
