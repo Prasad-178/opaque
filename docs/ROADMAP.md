@@ -118,11 +118,23 @@ Optional PCA via SVD in `go/pkg/pca/`. Enabled with `Config.PCADimension`. Appli
 
 ## Long Term
 
+### Threshold CKKS (Key Ownership)
+Split the CKKS secret key across an independent key committee using Lattigo's `mhe` package. The DB server holds only evaluation keys and cannot decrypt. Decryption is a single-round protocol where t-of-N committee nodes produce partial key-switches, re-encrypting results directly under the querying client's ephemeral public key.
+
+Implementation phases:
+1. **Engine refactor** — split `crypto.Engine` into `EvaluatorEngine` (server) and `ThresholdParticipantEngine` (committee node)
+2. **Threshold POC** — local proof-of-concept with simulated committee nodes using Lattigo's `mhe` package
+3. **Committee gRPC service** — lightweight service for committee nodes (PartialKeySwitch RPC)
+4. **Integration** — wire threshold decryption into the main search pipeline
+5. **Hardening** — redundancy-based bad node detection, metrics, stress testing
+
+See `docs/THRESHOLD_CKKS.md` for the full architecture.
+
 ### Private Information Retrieval (PIR)
 Replace decoy-based bucket fetching with cryptographic PIR for stronger access pattern privacy. The current decoy approach provides k-anonymity; PIR would provide cryptographic guarantees. This is a significant performance tradeoff that needs careful benchmarking.
 
 ### Key Rotation
-Implement periodic key rotation for AES encryption keys and HE parameters without requiring full re-encryption of the database.
+Implement periodic key rotation for AES encryption keys, HE parameters, and (with threshold CKKS) committee key shares without requiring full re-encryption of the database.
 
 ### Distributed Storage
 Support distributed blob storage backends (e.g., Redis, S3) for horizontal scaling beyond single-node deployments.
