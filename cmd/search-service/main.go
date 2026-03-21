@@ -122,7 +122,11 @@ func main() {
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
 	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 
-	reflection.Register(grpcServer)
+	// Only enable gRPC reflection in development (aids reconnaissance in production).
+	if envBool("OPAQUE_GRPC_REFLECTION", false) {
+		reflection.Register(grpcServer)
+		log.Println("gRPC reflection enabled (development mode)")
+	}
 	pb.RegisterOpaqueSearchServer(grpcServer, grpcserver.New(db))
 
 	grpcLis, err := net.Listen("tcp", fmt.Sprintf(":%d", *grpcPort))

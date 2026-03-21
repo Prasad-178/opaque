@@ -48,6 +48,10 @@ type Server struct {
 	// HTTP server
 	httpServer *http.Server
 	mux        *http.ServeMux
+
+	// TLS config (optional)
+	tlsCert string
+	tlsKey  string
 }
 
 // Config holds server configuration.
@@ -58,6 +62,10 @@ type Config struct {
 	// Read/write timeouts
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+
+	// TLS certificate and key file paths (optional; if set, server uses HTTPS)
+	TLSCert string
+	TLSKey  string
 }
 
 // DefaultConfig returns sensible defaults for local development.
@@ -76,6 +84,8 @@ func New(cfg Config, blobStore blob.Store, authService *auth.Service, enterprise
 		authService:     authService,
 		enterpriseStore: enterpriseStore,
 		mux:             http.NewServeMux(),
+		tlsCert:         cfg.TLSCert,
+		tlsKey:          cfg.TLSKey,
 	}
 
 	// Register routes
@@ -105,9 +115,13 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/v1/buckets/{enterpriseID}/{superID}", s.withAuth(s.handleGetBuckets))
 }
 
-// Start starts the HTTP server.
+// Start starts the HTTP server. Uses TLS if cert and key are configured.
 func (s *Server) Start() error {
-	log.Printf("Server starting on %s", s.httpServer.Addr)
+	if s.tlsCert != "" && s.tlsKey != "" {
+		log.Printf("Server starting with TLS on %s", s.httpServer.Addr)
+		return s.httpServer.ListenAndServeTLS(s.tlsCert, s.tlsKey)
+	}
+	log.Printf("Server starting on %s (no TLS)", s.httpServer.Addr)
 	return s.httpServer.ListenAndServe()
 }
 
