@@ -3,12 +3,13 @@ package auth
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Prasad-178/opaque/pkg/enterprise"
 	"github.com/Prasad-178/opaque/pkg/lsh"
@@ -54,11 +55,17 @@ func NewService(cfg ServiceConfig, configStore enterprise.Store) *Service {
 }
 
 // RegisterUser registers a new user for an enterprise.
-// In production, use bcrypt for password hashing.
-func (s *Service) RegisterUser(ctx context.Context, userID, enterpriseID string, passwordHash []byte, scopes []string) error {
+// The password is hashed with bcrypt before storage.
+func (s *Service) RegisterUser(ctx context.Context, userID, enterpriseID string, password []byte, scopes []string) error {
 	// Verify enterprise exists
 	if !s.configStore.Exists(ctx, enterpriseID) {
 		return enterprise.ErrEnterpriseNotFound
+	}
+
+	// Hash password with bcrypt (cost 12)
+	hashedPassword, err := bcrypt.GenerateFromPassword(password, 12)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
 	s.mu.Lock()
@@ -71,7 +78,7 @@ func (s *Service) RegisterUser(ctx context.Context, userID, enterpriseID string,
 	s.users[userID] = &User{
 		UserID:       userID,
 		EnterpriseID: enterpriseID,
-		PasswordHash: passwordHash,
+		PasswordHash: hashedPassword,
 		Scopes:       scopes,
 		Enabled:      true,
 		CreatedAt:    time.Now(),
@@ -86,15 +93,17 @@ func (s *Service) Authenticate(ctx context.Context, userID string, password []by
 
 	user, ok := s.users[userID]
 	if !ok {
-		return nil, ErrUserNotFound
+		// Return generic error to prevent user enumeration
+		return nil, ErrInvalidCredentials
 	}
 
 	if !user.Enabled {
-		return nil, ErrUserDisabled
+		// Return generic error to prevent user enumeration
+		return nil, ErrInvalidCredentials
 	}
 
-	// Constant-time password comparison
-	if subtle.ConstantTimeCompare(user.PasswordHash, password) != 1 {
+	// Compare password against bcrypt hash (constant-time internally)
+	if err := bcrypt.CompareHashAndPassword(user.PasswordHash, password); err != nil {
 		return nil, ErrInvalidCredentials
 	}
 
@@ -363,6 +372,8 @@ func (s *Service) ActiveTokenCount() int {
 // generateTokenID creates a cryptographically secure token ID.
 func generateTokenID() string {
 	b := make([]byte, 32)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand.Read failed: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }

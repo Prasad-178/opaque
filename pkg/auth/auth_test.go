@@ -91,10 +91,10 @@ func TestAuthenticate(t *testing.T) {
 		t.Errorf("expected ErrInvalidCredentials, got %v", err)
 	}
 
-	// Authenticate with non-existent user
+	// Authenticate with non-existent user (returns generic error to prevent user enumeration)
 	_, err = service.Authenticate(ctx, "non-existent", password)
-	if err != ErrUserNotFound {
-		t.Errorf("expected ErrUserNotFound, got %v", err)
+	if err != ErrInvalidCredentials {
+		t.Errorf("expected ErrInvalidCredentials, got %v", err)
 	}
 }
 
@@ -221,10 +221,10 @@ func TestDisableUser(t *testing.T) {
 		t.Errorf("token should be invalid after user disabled, got %v", err)
 	}
 
-	// Should not be able to authenticate
+	// Should not be able to authenticate (returns generic error to prevent user enumeration)
 	_, err = service.Authenticate(ctx, "user1", password)
-	if err != ErrUserDisabled {
-		t.Errorf("expected ErrUserDisabled, got %v", err)
+	if err != ErrInvalidCredentials {
+		t.Errorf("expected ErrInvalidCredentials, got %v", err)
 	}
 
 	// Re-enable user
@@ -276,8 +276,8 @@ func TestCleanupExpiredTokens(t *testing.T) {
 	store.Put(ctx, enterpriseCfg)
 
 	cfg := ServiceConfig{
-		TokenTTL:      100 * time.Millisecond,
-		RefreshWindow: 50 * time.Millisecond,
+		TokenTTL:      2 * time.Second,
+		RefreshWindow: 500 * time.Millisecond,
 		LSHBits:       8,
 		Dimension:     128,
 	}
@@ -294,7 +294,7 @@ func TestCleanupExpiredTokens(t *testing.T) {
 	}
 
 	// Wait for expiry
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(2100 * time.Millisecond)
 
 	// Cleanup
 	cleaned := service.CleanupExpiredTokens()
