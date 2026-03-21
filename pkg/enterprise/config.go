@@ -207,9 +207,9 @@ func (c *Config) Save(w io.Writer) error {
 	return enc.Encode(c)
 }
 
-// SaveToFile saves the configuration to a file.
+// SaveToFile saves the configuration to a file with restrictive permissions.
 func (c *Config) SaveToFile(path string) error {
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}

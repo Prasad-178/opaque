@@ -1057,8 +1057,8 @@ func validateConfig(cfg *Config) error {
 func generateID() string {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		// crypto/rand should never fail; fall back to timestamp.
-		return fmt.Sprintf("opaque-%d", time.Now().UnixNano())
+		// crypto/rand failure is a system-level problem; don't silently degrade.
+		panic("crypto/rand.Read failed: " + err.Error())
 	}
 	return fmt.Sprintf("opaque-%x", b)
 }
