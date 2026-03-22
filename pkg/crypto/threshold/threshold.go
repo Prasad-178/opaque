@@ -17,6 +17,7 @@ package threshold
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/tuneinsight/lattigo/v5/core/rlwe"
 	"github.com/tuneinsight/lattigo/v5/he/hefloat"
@@ -66,6 +67,13 @@ type Committee struct {
 
 	// crs is the common reference string shared by all participants.
 	crs mhe.CRS
+
+	// SimulatedRTT adds a simulated network round-trip delay per participant
+	// in ThresholdDecrypt to model real distributed deployment. Zero means no delay.
+	// In a real deployment, the coordinator sends ct+clientPK to each node (1 RTT)
+	// and each node sends back its partial share (1 RTT), all in parallel.
+	// Typical values: 1-2ms (same data center), 50-100ms (cross-region).
+	SimulatedRTT time.Duration
 }
 
 // ClientSession represents a querying client's ephemeral session.
@@ -274,6 +282,11 @@ func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicK
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
+				// Simulate network: coordinator sends ct+clientPK to node (1 RTT),
+				// node computes share, sends it back (1 RTT). Both happen per-node.
+				if c.SimulatedRTT > 0 {
+					time.Sleep(2 * c.SimulatedRTT)
+				}
 				// Each participant gets its own PCKS instance (internal PRNG state).
 				pcks, err := mhe.NewPublicKeySwitchProtocol(c.params, noiseFlood)
 				if err != nil {

@@ -113,13 +113,19 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 
 	directResults := runSearchBenchmark(t, directClient, vectors, queryIndices, topK, ids)
 
-	// --- Threshold mode (3-of-5) ---
-	fmt.Println("\n[5] THRESHOLD MODE (3-of-5 committee)")
+	// --- Threshold mode (3-of-5) with simulated network latency ---
+	// In a real deployment, each committee node runs on a separate machine.
+	// We simulate 2ms RTT (same data center) — each node needs 2 RTTs
+	// (receive ct + send share back), but all nodes operate in parallel.
+	simulatedRTT := 2 * time.Millisecond
+
+	fmt.Printf("\n[5] THRESHOLD MODE (3-of-5 committee, simulated %v RTT)\n", simulatedRTT)
 	startCommittee := time.Now()
 	committee, err := threshold.NewCommittee(5, 3)
 	if err != nil {
 		t.Fatalf("NewCommittee: %v", err)
 	}
+	committee.SimulatedRTT = simulatedRTT
 	committeeSetup := time.Since(startCommittee)
 	fmt.Printf("  Committee setup: %v\n", committeeSetup)
 
@@ -140,7 +146,7 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 
 	// --- Comparison table ---
 	fmt.Println("\n============================================================")
-	fmt.Println("COMPARISON SUMMARY (100K vectors, 128-dim)")
+	fmt.Printf("COMPARISON SUMMARY (100K vectors, 128-dim, %v simulated RTT)\n", simulatedRTT)
 	fmt.Println("============================================================")
 	fmt.Println()
 	fmt.Println("┌──────────────────┬──────────────┬──────────────┬──────────────┐")
@@ -156,6 +162,7 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 	fmt.Println("├──────────────────┼──────────────┼──────────────┼──────────────┤")
 	fmt.Println("│ PRIVACY          │     NONE     │   PARTIAL    │     FULL     │")
 	fmt.Println("│ Key Ownership    │      n/a     │  single-key  │  3-of-5 t/N  │")
+	fmt.Println("│ Network Model    │      n/a     │      n/a     │  2ms RTT DC  │")
 	fmt.Println("└──────────────────┴──────────────┴──────────────┴──────────────┘")
 	fmt.Println()
 	fmt.Printf("Threshold overhead vs direct: %.2fx total, %.2fx HE\n",
