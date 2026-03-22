@@ -278,24 +278,23 @@ For threshold mode, `ThresholdHEProvider` creates:
 
 Decrypt overhead scales modestly with committee size: 2.1x at 2-of-3, 2.2x at 3-of-5, 2.5x at 5-of-7. Full cycle overhead stays at 1.1x because dot product dominates.
 
-#### 100K Vector Benchmark (SearchBatch with SIMD Packing, 128-dim, 3-of-5 committee)
+#### SIFT 100K Benchmark (SearchBatch with SIMD Packing, 128-dim, 3-of-5 committee)
 
-20 independent random query vectors (not from the dataset), recall measured against brute-force cosine similarity ground truth. Network latency simulated with 2ms RTT (same datacenter), 2 round trips per committee node, all nodes queried in parallel. RTT is configurable via `Committee.SimulatedRTT`.
+First 100K vectors of SIFT1M (real image descriptor embeddings, NOT random Gaussian). 50 real SIFT query vectors, recall measured against brute-force cosine similarity ground truth. Network latency simulated with 2ms RTT (same datacenter), 2 round trips per committee node, all nodes queried in parallel. RTT is configurable via `Committee.SimulatedRTT`.
 
-| Metric | Direct | Threshold (3-of-5) |
-|--------|--------|---------------------|
-| Avg query latency | 78ms | 89ms |
-| HE encrypt | 6ms | 6ms |
-| HE dot+decrypt | 53ms | 65ms |
-| AES + scoring | 19ms | 18ms |
-| Total overhead | — | 1.14x |
-| HE overhead | — | 1.22x |
-| Recall@10 | 36.5% | 40.5% |
-| Vectors scored | ~24.5K | ~24.5K |
+| Config | Probe% | Direct (latency / recall@10) | Threshold (latency / recall@10) | Overhead |
+|--------|--------|------------------------------|--------------------------------|----------|
+| probe-4 | 6.2% | 81ms / 71.4% | 94ms / 72.8% | 1.16x |
+| probe-8 | 12.5% | 86ms / 91.0% | 99ms / 89.6% | 1.15x |
+| probe-16 | 25% | 101ms / 75.0% | 116ms / 76.0% | 1.15x |
+| probe-32 | 50% | 108ms / 96.4% | 123ms / 96.4% | 1.14x |
+| probe-48 | 75% | 127ms / 99.2% | 141ms / 99.4% | 1.11x |
 
-**Recall methodology:** Recall is measured against brute-force cosine similarity ground truth over all 100K vectors, NOT self-match. The small variance between direct (36.5%) and threshold (40.5%) recall is random noise from different cluster selection due to HE precision differences — both modes are equivalent in expectation.
+**Sweet spot:** probe-32 (50%) gives 96.4% recall@10 at 108ms direct / 123ms threshold — 1.14x overhead.
 
-**Current probe configuration:** TopSuperBuckets=8 out of 64 clusters (12.5% probe). This is a conservative setting. Per SIFT1M results, recall can be pushed to 97%+ by increasing the probe ratio (e.g., strict-8 at 6.2% probe achieves 96.8% on SIFT1M with 128 clusters).
+**Recall methodology:** Recall is measured against brute-force cosine similarity ground truth over all 100K vectors. Recall is equivalent between direct and threshold modes across all probe configurations.
+
+**Threshold overhead:** Consistently 1.11-1.16x across all probe configs. Overhead decreases slightly as probe count increases (more time spent in HE compute, which is identical in both modes).
 
 **SIMD slot packing:** With 8192 usable CKKS slots and 128-dim vectors, 64 centroids are packed into a single ciphertext. All 64 centroids are scored in 1 HE multiply + 7 rotations (log2(128)). SearchBatch reduces what would be 64 separate HE operations to just 1.
 

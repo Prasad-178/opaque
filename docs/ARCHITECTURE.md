@@ -165,11 +165,11 @@ Micro-benchmarks (single operation):
 - Full cycle: 153ms threshold vs 141ms direct (1.1x overhead)
 - Committee setup: 851ms (2-of-3) to 1.66s (5-of-7), one-time cost
 
-100K vector benchmark (SearchBatch with SIMD packing, 128-dim, 3-of-5, 20 independent random queries, brute-force ground truth, 2ms simulated datacenter RTT):
-- 89ms avg query (threshold) vs 78ms (direct) — 1.14x total overhead, 1.22x HE overhead
-- HE encrypt: 6ms both modes; HE dot+decrypt: 65ms (threshold) vs 53ms (direct); AES+scoring: ~18-19ms both
-- Recall@10: 36.5% (direct), 40.5% (threshold) — measured against brute-force cosine similarity ground truth, NOT self-match
-- ~24.5K vectors scored both modes, TopSuperBuckets=8/64 (12.5% probe, conservative — pushable to 97%+ per SIFT1M results)
+SIFT 100K benchmark (SearchBatch with SIMD packing, 128-dim, 3-of-5, 50 real SIFT queries, brute-force cosine ground truth, 2ms simulated datacenter RTT):
+- probe-32: 108ms / 96.4% (direct), 123ms / 96.4% (threshold) — 1.14x overhead
+- Threshold overhead consistently 1.11-1.16x across probe configs (probe-4 through probe-48)
+- probe-48 (75%): 99.2% recall@10 direct, 99.4% threshold at 127ms/141ms
+- Recall equivalent between direct and threshold modes; uses first 100K vectors of SIFT1M (real image descriptors, not random Gaussian)
 
 ThresholdDecrypt is parallelized internally (Shamir share conversion + PCKS partial shares run in goroutines per participant). Each `thresholdEvalEngine` has its own decryptor/encoder — Lattigo's `rlwe.Decryptor` is NOT thread-safe (sharing it caused underflow panics from a data race in concurrent decryption). See `docs/THRESHOLD_CKKS.md` for the full architecture.
 
