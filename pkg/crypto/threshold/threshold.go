@@ -16,6 +16,7 @@ package threshold
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/tuneinsight/lattigo/v5/core/rlwe"
 	"github.com/tuneinsight/lattigo/v5/he/hefloat"
@@ -65,6 +66,9 @@ type Committee struct {
 
 	// crs is the common reference string shared by all participants.
 	crs mhe.CRS
+
+	// mu protects concurrent ThresholdDecrypt calls.
+	mu sync.Mutex
 }
 
 // ClientSession represents a querying client's ephemeral session.
@@ -217,9 +221,16 @@ func (c *Committee) EncryptVector(vector []float64) (*rlwe.Ciphertext, error) {
 // This uses PublicKeySwitchProtocol: each participant produces a partial share,
 // shares are aggregated, and the result is a ciphertext under clientPK.
 func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicKey) (*rlwe.Ciphertext, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// Noise flooding parameters for security.
-	// The sigma must be large enough to statistically mask key share information.
-	noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 30, Bound: 6 * (1 << 30)}
+	// Sigma must be large enough to statistically mask key share information
+	// but small enough to leave noise headroom after deep HE circuits
+	// (dot product = multiply + rescale + log2(N) rotations+additions).
+	// Sigma=2^20 provides ~20 bits of flooding, sufficient to mask key shares
+	// while preserving ~0.01 precision for similarity scores.
+	noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 20, Bound: 6 * (1 << 20)}
 
 	pcks, err := mhe.NewPublicKeySwitchProtocol(c.params, noiseFlood)
 	if err != nil {
