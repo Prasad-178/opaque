@@ -342,9 +342,13 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	// All computation is client-side, server sees nothing
 	// ==========================================
 
-	// Decrypt all vectors in parallel
+	// Filter to real clusters only — skip decoy blobs to avoid wasted decrypt/scoring.
+	// Privacy is preserved: the server already saw all bucket requests (real + decoy, shuffled).
+	realBlobs := filterRealBlobs(blobs, topSupers)
+
+	// Decrypt real vectors in parallel
 	startAES := time.Now()
-	decrypted, decryptStats := parallelDecryptBlobs(blobs, c.encryptor)
+	decrypted, decryptStats := parallelDecryptBlobs(realBlobs, c.encryptor)
 	result.Timing.AESDecrypt = time.Since(startAES)
 	result.Stats.DecryptSucceeded = decryptStats.Succeeded
 	result.Stats.DecryptFailed = decryptStats.Failed
@@ -447,37 +451,59 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 	result.Timing.HEEncryptQuery = time.Since(startEncrypt)
 
 	// Compute all centroid scores with batch operation(s)
+	// When dimension is large (e.g. 960), multiple packs are needed and processed in parallel.
 	startHE := time.Now()
 	numCentroids := c.batchCentroidCache.GetNumCentroids()
 	dimension := c.batchCentroidCache.GetDimension()
 	packedPlaintexts := c.batchCentroidCache.GetPackedPlaintexts()
+	centroidsPerPack := c.batchCentroidCache.GetCentroidsPerPack()
 
-	// Each packed plaintext can score up to centroidsPerPack centroids
-	allScores := make([]float64, 0, numCentroids)
+	// Each packed plaintext can score up to centroidsPerPack centroids.
+	// Process packs in parallel when there are multiple (common with high-dim vectors).
+	packScores := make([][]float64, len(packedPlaintexts))
+	packErrors := make([]error, len(packedPlaintexts))
 
-	for packIdx, packedCentroids := range packedPlaintexts {
-		// Compute batch dot products
+	if len(packedPlaintexts) == 1 {
+		// Single pack: no goroutine overhead
 		encResult, err := c.heProvider.HomomorphicBatchDotProduct(
-			encPackedQuery,
-			packedCentroids,
-			c.batchCentroidCache.GetCentroidsPerPack(),
-			dimension,
+			encPackedQuery, packedPlaintexts[0], centroidsPerPack, dimension,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed batch dot product (pack %d): %w", packIdx, err)
+			return nil, fmt.Errorf("failed batch dot product: %w", err)
 		}
-
-		// Decrypt batch results
-		batchScores, err := c.heProvider.DecryptBatchScalars(
-			encResult,
-			c.batchCentroidCache.GetCentroidsPerPack(),
-			dimension,
+		packScores[0], packErrors[0] = c.heProvider.DecryptBatchScalars(
+			encResult, centroidsPerPack, dimension,
 		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt batch (pack %d): %w", packIdx, err)
+	} else {
+		// Multiple packs: process in parallel using the HE engine pool.
+		// encPackedQuery is only read (not mutated) by MulNew, so sharing is safe.
+		var packWg sync.WaitGroup
+		for packIdx := range packedPlaintexts {
+			packWg.Add(1)
+			go func(idx int) {
+				defer packWg.Done()
+				encResult, err := c.heProvider.HomomorphicBatchDotProduct(
+					encPackedQuery, packedPlaintexts[idx], centroidsPerPack, dimension,
+				)
+				if err != nil {
+					packErrors[idx] = fmt.Errorf("failed batch dot product (pack %d): %w", idx, err)
+					return
+				}
+				packScores[idx], packErrors[idx] = c.heProvider.DecryptBatchScalars(
+					encResult, centroidsPerPack, dimension,
+				)
+			}(packIdx)
 		}
+		packWg.Wait()
+	}
 
-		allScores = append(allScores, batchScores...)
+	// Check for errors and collect scores
+	allScores := make([]float64, 0, numCentroids)
+	for i, err := range packErrors {
+		if err != nil {
+			return nil, fmt.Errorf("pack %d: %w", i, err)
+		}
+		allScores = append(allScores, packScores[i]...)
 	}
 
 	// Truncate to actual number of centroids
@@ -520,9 +546,12 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 	result.Timing.BucketFetch = time.Since(startFetch)
 	result.Stats.BlobsFetched = len(blobs)
 
+	// Filter to real clusters only — skip decoy blobs to save AES decrypt + scoring time.
+	realBlobs := filterRealBlobs(blobs, topSupers)
+
 	// Decrypt and score locally (same as Search)
 	startAES := time.Now()
-	decrypted, batchDecryptStats := parallelDecryptBlobs(blobs, c.encryptor)
+	decrypted, batchDecryptStats := parallelDecryptBlobs(realBlobs, c.encryptor)
 	result.Timing.AESDecrypt = time.Since(startAES)
 	result.Stats.DecryptSucceeded = batchDecryptStats.Succeeded
 	result.Stats.DecryptFailed = batchDecryptStats.Failed
@@ -575,6 +604,50 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 // generateDecoySupers delegates to the shared package-level function in hierarchical.go.
 func (c *EnterpriseHierarchicalClient) generateDecoySupers(selectedSupers []int, numDecoys int) []int {
 	return generateDecoySupers(selectedSupers, c.config.NumSuperBuckets, numDecoys)
+}
+
+// filterRealBlobs returns only blobs belonging to the specified real super-bucket IDs.
+// The server fetches blobs from both real and decoy clusters (it can't tell which is which).
+// The client knows which clusters are real, so it skips decoy blobs to avoid wasted
+// AES decryption and local scoring. This has no privacy impact — the server never sees
+// which blobs are actually processed.
+func filterRealBlobs(blobs []*blob.Blob, realSupers []int) []*blob.Blob {
+	realSet := make(map[int]bool, len(realSupers))
+	for _, id := range realSupers {
+		realSet[id] = true
+	}
+
+	filtered := make([]*blob.Blob, 0, len(blobs))
+	for _, b := range blobs {
+		superID := parseSuperBucketID(b.LSHBucket)
+		if superID >= 0 && realSet[superID] {
+			filtered = append(filtered, b)
+		}
+	}
+	return filtered
+}
+
+// parseSuperBucketID extracts the super-bucket ID from a bucket key.
+// Bucket keys are "XX" or "XX_YY" where XX is the super-bucket integer ID.
+func parseSuperBucketID(bucketKey string) int {
+	key := bucketKey
+	for i, c := range bucketKey {
+		if c == '_' {
+			key = bucketKey[:i]
+			break
+		}
+	}
+	id := 0
+	for _, c := range key {
+		if c < '0' || c > '9' {
+			return -1
+		}
+		id = id*10 + int(c-'0')
+	}
+	if key == "" {
+		return -1
+	}
+	return id
 }
 
 // decryptedVec holds a decrypted vector with its original and blob IDs.
