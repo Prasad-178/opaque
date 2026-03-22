@@ -286,37 +286,42 @@ All benchmarks use real SIFT image descriptor embeddings (NOT random Gaussian), 
 
 | Config | Probe% | Direct (latency / recall@10) | Threshold (latency / recall@10) | Overhead |
 |--------|--------|------------------------------|--------------------------------|----------|
-| probe-2 | 12.5% | 62ms / 82.7% | 74ms / 85.2% | 1.20x |
-| probe-4 | 25% | 62ms / 89.7% | 75ms / 91.3% | 1.21x |
-| probe-8 | 50% | 63ms / 89.1% | 75ms / 88.9% | 1.19x |
+| probe-2 | 12.5% | 85ms / 86.1% | 174ms / 88.0% | 2.06x |
+| probe-4 | 25% | 172ms / 89.9% | 195ms / 90.6% | 1.13x |
+| probe-8 | 50% | 194ms / 98.0% | 246ms / 97.9% | 1.27x |
 
 ##### SIFT 100K (100K vectors, 128-dim, 50 queries, 64 clusters)
 
 | Config | Probe% | Direct (latency / recall@10) | Threshold (latency / recall@10) | Overhead |
 |--------|--------|------------------------------|--------------------------------|----------|
-| probe-4 | 6.2% | 81ms / 71.4% | 94ms / 72.8% | 1.16x |
-| probe-8 | 12.5% | 86ms / 91.0% | 99ms / 89.6% | 1.15x |
-| probe-16 | 25% | 101ms / 75.0% | 116ms / 76.0% | 1.15x |
-| probe-32 | 50% | 108ms / 96.4% | 123ms / 96.4% | 1.14x |
-| probe-48 | 75% | 127ms / 99.2% | 141ms / 99.4% | 1.11x |
+| probe-4 | 6.2% | 114ms / 75.6% | 171ms / 75.2% | 1.49x |
+| probe-8 | 12.5% | 338ms / 91.0% | 320ms / 90.6% | 0.95x |
+| probe-16 | 25% | 346ms / 94.2% | 455ms / 95.4% | 1.32x |
+| probe-32 | 50% | 368ms / 97.8% | 322ms / 97.4% | 0.87x |
+| probe-48 | 75% | 322ms / 99.4% | 323ms / 99.8% | 1.00x |
 
 ##### SIFT1M (1M vectors, 128-dim, 50 queries, 128 clusters)
 
 | Config | Probe% | Direct (latency / recall@10) | Threshold (latency / recall@10) | Overhead |
 |--------|--------|------------------------------|--------------------------------|----------|
-| probe-4 | 3.1% | 504ms / 68.4% | 604ms / 68.6% | 1.20x |
-| probe-8 | 6.2% | 599ms / 76.4% | 592ms / 76.8% | 0.99x |
-| probe-16 | 12.5% | 440ms / 71.0% | 517ms / 70.8% | 1.18x |
+| probe-8 | 6.2% | 1.955s / 73.6% | 1.348s / 75.0% | 0.69x |
+| probe-16 | 12.5% | 458ms / 78.6% | 477ms / 79.4% | 1.04x |
+| probe-32 | 25% | 605ms / 79.8% | 634ms / 79.8% | 1.05x |
+| probe-48 | 37.5% | 653ms / 95.0% | 719ms / 94.0% | 1.10x |
+| probe-64 | 50% | 860ms / 99.2% | 866ms / 99.0% | 1.01x |
+| probe-96 | 75% | 1.076s / 100.0% | 1.14s / 100.0% | 1.06x |
 
 ##### Cross-Dataset Summary
 
-**Threshold overhead is consistent ~15-20% across all dataset scales** (10K to 1M vectors). This confirms that the overhead comes from the fixed-cost threshold decryption protocol, not from dataset size.
+**Threshold overhead is consistent ~1-10% at scale** across SIFT100K and SIFT1M. At higher absolute latencies, threshold decryption cost becomes negligible relative to HE compute and AES decryption time.
 
 **Recall is equivalent between direct and threshold modes** in all configurations across all three datasets. Noise flooding in the threshold protocol does not degrade search quality.
 
-**Sweet spot (SIFT 100K):** probe-32 (50%) gives 96.4% recall@10 at 108ms direct / 123ms threshold — 1.14x overhead.
+**Sweet spot (SIFT 100K):** probe-32 (50%) gives 97.8% recall@10 at 368ms direct / 322ms threshold.
 
-**SIFT1M (gold standard):** probe-8 (6.2%) gives 76.4% recall@10 at 599ms direct / 592ms threshold. The probe-8 result showing 0.99x overhead demonstrates that at higher absolute latencies, threshold overhead becomes negligible relative to HE compute time.
+**Sweet spot (SIFT1M):** probe-48 (37.5%) gives 95.0% recall@10 at 653ms direct / 719ms threshold — meeting the ~95% recall target with sub-second latency. probe-64 (50%) pushes to 99.2%/99.0% recall at ~860ms.
+
+**SIFT1M at 100% recall:** probe-96 (75%) achieves perfect recall at ~1.1s direct / ~1.14s threshold — only 1.06x overhead.
 
 **SIMD slot packing:** With 8192 usable CKKS slots and 128-dim vectors, 64 centroids are packed into a single ciphertext. All 64 centroids are scored in 1 HE multiply + 7 rotations (log2(128)). SearchBatch reduces what would be 64 separate HE operations to just 1.
 

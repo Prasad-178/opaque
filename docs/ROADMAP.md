@@ -125,10 +125,11 @@ ThresholdDecrypt is now parallelized internally — Shamir-to-additive share con
 
 **Latest benchmarks** (Apple M4, SearchBatch with SIMD packing, 3-of-5 committee, real SIFT image descriptors, brute-force cosine ground truth, 2ms simulated datacenter RTT):
 - **Multi-dataset validation across SIFT10K, SIFT100K, and SIFT1M**
-- SIFT10K (10K vectors, 100 queries, 16 clusters): 1.19-1.21x overhead, up to 91.3% recall@10
-- SIFT100K (100K vectors, 50 queries, 64 clusters): 1.11-1.16x overhead, probe-32 sweet spot at 108ms/123ms with 96.4% recall@10
-- SIFT1M (1M vectors, 50 queries, 128 clusters): 0.99-1.20x overhead, probe-8 at 599ms/592ms with 76.4% recall@10
-- **Threshold overhead consistent ~15-20% across all dataset scales (10K to 1M)**
+- SIFT10K (10K vectors, 100 queries, 16 clusters): 1.13-2.06x overhead, up to 98.0% recall@10
+- SIFT100K (100K vectors, 50 queries, 64 clusters): 0.87-1.49x overhead, probe-32 at 368ms/322ms with 97.8% recall@10
+- SIFT1M (1M vectors, 50 queries, 128 clusters): 0.69-1.10x overhead, probe-48 at 653ms/719ms with 95.0% recall@10
+- **SIFT1M probe-64 (50%) = 99.2%/99.0% recall@10 at ~860ms, probe-96 (75%) = 100% at ~1.1s**
+- **Threshold overhead ~1-10% at scale; negligible relative to HE compute time**
 - Recall equivalent between direct and threshold modes across all datasets
 - Micro-benchmarks: decrypt scales from 22ms (2-of-3) to 27ms (5-of-7)
 

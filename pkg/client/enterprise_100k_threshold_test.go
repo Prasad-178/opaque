@@ -305,9 +305,12 @@ func TestEnterpriseSIFT1MDirectVsThreshold(t *testing.T) {
 		name            string
 		topSuperBuckets int
 	}{
-		{"probe-4", 4},
-		{"probe-8", 8},
-		{"probe-16", 16},
+		{"probe-8", 8},   // 6.2%
+		{"probe-16", 16}, // 12.5%
+		{"probe-32", 32}, // 25%
+		{"probe-48", 48}, // 37.5%
+		{"probe-64", 64}, // 50%
+		{"probe-96", 96}, // 75%
 	}
 
 	runThresholdDatasetBenchmark(t, "SIFT 1M", dataset.Vectors, dataset.IDs,
