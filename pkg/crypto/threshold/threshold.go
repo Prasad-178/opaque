@@ -66,9 +66,6 @@ type Committee struct {
 
 	// crs is the common reference string shared by all participants.
 	crs mhe.CRS
-
-	// mu protects concurrent ThresholdDecrypt calls.
-	mu sync.Mutex
 }
 
 // ClientSession represents a querying client's ephemeral session.
@@ -221,26 +218,19 @@ func (c *Committee) EncryptVector(vector []float64) (*rlwe.Ciphertext, error) {
 // This uses PublicKeySwitchProtocol: each participant produces a partial share,
 // shares are aggregated, and the result is a ciphertext under clientPK.
 func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicKey) (*rlwe.Ciphertext, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	// No mutex needed: all state created per-call (pcks, shares, activeKeys).
+	// Participant fields (shamirShare, sk) are read-only after setup.
+	// Concurrent calls are safe and simulate real distributed deployment
+	// where multiple ciphertexts are decrypted in parallel.
 
-	// Noise flooding parameters for security.
-	// Sigma must be large enough to statistically mask key share information
-	// but small enough to leave noise headroom after deep HE circuits
-	// (dot product = multiply + rescale + log2(N) rotations+additions).
-	// Sigma=2^20 provides ~20 bits of flooding, sufficient to mask key shares
-	// while preserving ~0.01 precision for similarity scores.
+	// Noise flooding: sigma must mask key share info but leave headroom
+	// after deep HE circuits (multiply + rescale + up to log2(maxSlots) rotations).
+	// 2^20 provides ~20 bits of masking while preserving precision after full inner-sum.
 	noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 20, Bound: 6 * (1 << 20)}
 
-	pcks, err := mhe.NewPublicKeySwitchProtocol(c.params, noiseFlood)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create PCKS protocol: %w", err)
-	}
-
-	// Determine which participants will contribute (first Threshold participants).
 	activeParticipants := c.Participants[:c.Threshold]
 
-	// If using Shamir threshold, convert shares to additive form first.
+	// Convert Shamir shares to additive form (each participant independently).
 	activeKeys := make([]*rlwe.SecretKey, c.Threshold)
 	if c.Threshold < c.N {
 		activePoints := make([]mhe.ShamirPublicPoint, c.Threshold)
@@ -248,40 +238,75 @@ func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicK
 			activePoints[i] = p.ID
 		}
 
+		// In a real deployment, each node does this locally and in parallel.
+		var wg sync.WaitGroup
+		errs := make([]error, c.Threshold)
 		for i, p := range activeParticipants {
-			cmb := mhe.NewCombiner(*c.params.GetRLWEParameters(), p.ID, activePoints, c.Threshold)
-			additiveSK := rlwe.NewSecretKey(c.params)
-			if err := cmb.GenAdditiveShare(activePoints, p.ID, p.shamirShare, additiveSK); err != nil {
-				return nil, fmt.Errorf("failed to generate additive share for participant %d: %w", p.ID, err)
+			wg.Add(1)
+			go func(i int, p *Participant) {
+				defer wg.Done()
+				cmb := mhe.NewCombiner(*c.params.GetRLWEParameters(), p.ID, activePoints, c.Threshold)
+				additiveSK := rlwe.NewSecretKey(c.params)
+				errs[i] = cmb.GenAdditiveShare(activePoints, p.ID, p.shamirShare, additiveSK)
+				activeKeys[i] = additiveSK
+			}(i, p)
+		}
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate additive share for participant %d: %w", activeParticipants[i].ID, err)
 			}
-			activeKeys[i] = additiveSK
 		}
 	} else {
-		// N-of-N: use raw secret keys directly.
 		for i, p := range activeParticipants {
 			activeKeys[i] = p.sk
 		}
 	}
 
-	// Each participant generates their partial key-switch share.
+	// Each participant generates their partial key-switch share in parallel.
+	// In a real deployment, this is the network-parallel step: each node
+	// computes its share independently and sends it to the aggregator.
 	shares := make([]mhe.PublicKeySwitchShare, c.Threshold)
-	for i := range shares {
-		shares[i] = pcks.AllocateShare(ct.Level())
-		pcks.GenShare(activeKeys[i], clientPK, ct, &shares[i])
+	{
+		var wg sync.WaitGroup
+		shareErrs := make([]error, c.Threshold)
+		for i := range shares {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				// Each participant gets its own PCKS instance (internal PRNG state).
+				pcks, err := mhe.NewPublicKeySwitchProtocol(c.params, noiseFlood)
+				if err != nil {
+					shareErrs[i] = err
+					return
+				}
+				shares[i] = pcks.AllocateShare(ct.Level())
+				pcks.GenShare(activeKeys[i], clientPK, ct, &shares[i])
+			}(i)
+		}
+		wg.Wait()
+		for i, err := range shareErrs {
+			if err != nil {
+				return nil, fmt.Errorf("participant %d share gen failed: %w", i, err)
+			}
+		}
 	}
 
-	// Aggregate all shares.
-	aggregated := pcks.AllocateShare(ct.Level())
-	aggregated = shares[0]
+	// Aggregation is cheap and sequential (coordinator/DB server does this).
+	pcksAgg, err := mhe.NewPublicKeySwitchProtocol(c.params, noiseFlood)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create PCKS aggregator: %w", err)
+	}
+	aggregated := shares[0]
 	for i := 1; i < c.Threshold; i++ {
-		if err := pcks.AggregateShares(aggregated, shares[i], &aggregated); err != nil {
+		if err := pcksAgg.AggregateShares(aggregated, shares[i], &aggregated); err != nil {
 			return nil, fmt.Errorf("failed to aggregate shares: %w", err)
 		}
 	}
 
 	// Apply the key-switch: result is encrypted under clientPK.
 	ctOut := rlwe.NewCiphertext(c.params, 1, ct.Level())
-	pcks.KeySwitch(ct, aggregated, ctOut)
+	pcksAgg.KeySwitch(ct, aggregated, ctOut)
 
 	return ctOut, nil
 }

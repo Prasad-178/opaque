@@ -66,19 +66,15 @@ func (t *ThresholdHEProvider) EncryptVector(vector []float64) (*rlwe.Ciphertext,
 }
 
 func (t *ThresholdHEProvider) DecryptScalar(ct *rlwe.Ciphertext) (float64, error) {
-	ctClient, err := t.committee.ThresholdDecrypt(ct, t.session.PK)
-	if err != nil {
-		return 0, fmt.Errorf("threshold decrypt failed: %w", err)
-	}
-	return t.session.DecryptScalar(ctClient)
+	eng := <-t.free
+	defer func() { t.free <- eng }()
+	return eng.DecryptScalar(ct)
 }
 
 func (t *ThresholdHEProvider) DecryptBatchScalars(ct *rlwe.Ciphertext, numCentroids, dimension int) ([]float64, error) {
-	ctClient, err := t.committee.ThresholdDecrypt(ct, t.session.PK)
-	if err != nil {
-		return nil, fmt.Errorf("threshold decrypt failed: %w", err)
-	}
-	return t.session.DecryptBatchScalars(ctClient, numCentroids, dimension)
+	eng := <-t.free
+	defer func() { t.free <- eng }()
+	return eng.DecryptBatchScalars(ct, numCentroids, dimension)
 }
 
 func (t *ThresholdHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, packedCentroids *rlwe.Plaintext, numCentroids, dimension int) (*rlwe.Ciphertext, error) {
@@ -121,25 +117,31 @@ func (t *ThresholdHEProvider) Close() {
 }
 
 // thresholdEvalEngine provides HE evaluation using the committee's eval keys.
-// Decryption is delegated to the threshold protocol.
+// Decryption is delegated to the threshold protocol. Each engine has its own
+// encoder, evaluator, and decryptor to avoid data races in concurrent use.
 type thresholdEvalEngine struct {
 	params    hefloat.Parameters
 	encoder   *hefloat.Encoder
 	evaluator *hefloat.Evaluator
 	committee *threshold.Committee
 	session   *threshold.ClientSession
-	mu        sync.Mutex
+	// Per-engine decryptor and decoder for client-side decryption (not thread-safe).
+	clientDecryptor *rlwe.Decryptor
+	clientEncoder   *hefloat.Encoder
+	mu              sync.Mutex
 }
 
 var _ EvalEngine = (*thresholdEvalEngine)(nil)
 
 func newThresholdEvalEngine(params hefloat.Parameters, evkSet rlwe.EvaluationKeySet, committee *threshold.Committee, session *threshold.ClientSession) *thresholdEvalEngine {
 	return &thresholdEvalEngine{
-		params:    params,
-		encoder:   hefloat.NewEncoder(params),
-		evaluator: hefloat.NewEvaluator(params, evkSet),
-		committee: committee,
-		session:   session,
+		params:          params,
+		encoder:         hefloat.NewEncoder(params),
+		evaluator:       hefloat.NewEvaluator(params, evkSet),
+		committee:       committee,
+		session:         session,
+		clientDecryptor: rlwe.NewDecryptor(params, session.SK),
+		clientEncoder:   hefloat.NewEncoder(params),
 	}
 }
 
@@ -241,5 +243,32 @@ func (e *thresholdEvalEngine) DecryptScalar(ct *rlwe.Ciphertext) (float64, error
 	if err != nil {
 		return 0, fmt.Errorf("threshold decrypt failed: %w", err)
 	}
-	return e.session.DecryptScalar(ctClient)
+	// Use per-engine decryptor/encoder to avoid data races on shared session.
+	pt := e.clientDecryptor.DecryptNew(ctClient)
+	decoded := make([]float64, 1)
+	if err := e.clientEncoder.Decode(pt, decoded); err != nil {
+		return 0, fmt.Errorf("failed to decode: %w", err)
+	}
+	return decoded[0], nil
+}
+
+func (e *thresholdEvalEngine) DecryptBatchScalars(ct *rlwe.Ciphertext, numCentroids, dimension int) ([]float64, error) {
+	ctClient, err := e.committee.ThresholdDecrypt(ct, e.session.PK)
+	if err != nil {
+		return nil, fmt.Errorf("threshold decrypt failed: %w", err)
+	}
+	pt := e.clientDecryptor.DecryptNew(ctClient)
+	maxSlots := e.params.MaxSlots()
+	decoded := make([]float64, maxSlots)
+	if err := e.clientEncoder.Decode(pt, decoded); err != nil {
+		return nil, fmt.Errorf("failed to decode: %w", err)
+	}
+	results := make([]float64, numCentroids)
+	for i := 0; i < numCentroids; i++ {
+		pos := i * dimension
+		if pos < len(decoded) {
+			results[i] = decoded[pos]
+		}
+	}
+	return results, nil
 }
