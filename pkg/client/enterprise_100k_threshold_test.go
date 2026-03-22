@@ -20,7 +20,8 @@ import (
 )
 
 // TestEnterprise100KDirectVsThreshold runs 100K vector search in both direct and
-// threshold CKKS mode, reporting end-to-end query times and privacy overhead.
+// threshold CKKS mode, reporting end-to-end query times and recall@10 against
+// brute-force ground truth.
 func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping 100K threshold comparison in short mode")
@@ -30,7 +31,7 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 	dimension := 128
 	numVectors := 100000
 	numSuperBuckets := 64
-	numQueries := 5
+	numQueries := 20
 	topK := 10
 
 	fmt.Println("============================================================")
@@ -52,8 +53,39 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 	}
 	fmt.Printf("  Generated in %v\n", time.Since(startGen))
 
+	// Generate independent random query vectors (NOT from the dataset)
+	fmt.Printf("\n[2] Generating %d random query vectors...\n", numQueries)
+	queries := make([][]float64, numQueries)
+	for i := 0; i < numQueries; i++ {
+		queries[i] = make([]float64, dimension)
+		for j := 0; j < dimension; j++ {
+			queries[i][j] = rng.NormFloat64()
+		}
+	}
+
+	// Compute brute-force ground truth for each query
+	fmt.Println("\n[3] Computing brute-force ground truth...")
+	startGT := time.Now()
+	groundTruth := make([][]string, numQueries)
+	for q := 0; q < numQueries; q++ {
+		type scored struct {
+			id    string
+			score float64
+		}
+		scores := make([]scored, numVectors)
+		for i := 0; i < numVectors; i++ {
+			scores[i] = scored{ids[i], cosineSimThreshold(queries[q], vectors[i])}
+		}
+		sort.Slice(scores, func(i, j int) bool { return scores[i].score > scores[j].score })
+		groundTruth[q] = make([]string, topK)
+		for i := 0; i < topK; i++ {
+			groundTruth[q][i] = scores[i].id
+		}
+	}
+	fmt.Printf("  Ground truth computed in %v\n", time.Since(startGT))
+
 	// Build index (shared between both modes)
-	fmt.Println("\n[2] Building hierarchical index...")
+	fmt.Println("\n[4] Building hierarchical index...")
 	startBuild := time.Now()
 	enterpriseCfg, _ := enterprise.NewConfig("bench-threshold", dimension, numSuperBuckets)
 	store := blob.NewMemoryStore()
@@ -74,34 +106,8 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 	authService.RegisterUser(ctx, "user", "bench-threshold", []byte("pass"), []string{auth.ScopeSearch})
 	creds, _ := authService.Authenticate(ctx, "user", []byte("pass"))
 
-	// Select query vectors
-	queryIndices := make([]int, numQueries)
-	for i := range queryIndices {
-		queryIndices[i] = rng.Intn(numVectors)
-	}
-
-	// Brute force baseline
-	fmt.Println("\n[3] Brute force baseline...")
-	var bfTotal time.Duration
-	for q := 0; q < numQueries; q++ {
-		query := vectors[queryIndices[q]]
-		start := time.Now()
-		type scored struct {
-			id    string
-			score float64
-		}
-		scores := make([]scored, numVectors)
-		for i := 0; i < numVectors; i++ {
-			scores[i] = scored{ids[i], cosineSimThreshold(query, vectors[i])}
-		}
-		sort.Slice(scores, func(i, j int) bool { return scores[i].score > scores[j].score })
-		bfTotal += time.Since(start)
-	}
-	avgBF := bfTotal / time.Duration(numQueries)
-	fmt.Printf("  Brute force avg: %v\n", avgBF)
-
 	// --- Direct mode ---
-	fmt.Println("\n[4] DIRECT MODE (single-key)")
+	fmt.Println("\n[5] DIRECT MODE (single-key)")
 	directProvider, err := crypto.NewDirectHEProvider(4)
 	if err != nil {
 		t.Fatalf("NewDirectHEProvider: %v", err)
@@ -111,7 +117,7 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 		t.Fatalf("NewClient (direct): %v", err)
 	}
 
-	directResults := runSearchBenchmark(t, directClient, vectors, queryIndices, topK, ids)
+	directResults := runSearchBenchmark(t, directClient, queries, groundTruth, topK)
 
 	// --- Threshold mode (3-of-5) with simulated network latency ---
 	// In a real deployment, each committee node runs on a separate machine.
@@ -119,7 +125,7 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 	// (receive ct + send share back), but all nodes operate in parallel.
 	simulatedRTT := 2 * time.Millisecond
 
-	fmt.Printf("\n[5] THRESHOLD MODE (3-of-5 committee, simulated %v RTT)\n", simulatedRTT)
+	fmt.Printf("\n[6] THRESHOLD MODE (3-of-5 committee, simulated %v RTT)\n", simulatedRTT)
 	startCommittee := time.Now()
 	committee, err := threshold.NewCommittee(5, 3)
 	if err != nil {
@@ -138,7 +144,7 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 		t.Fatalf("NewClient (threshold): %v", err)
 	}
 
-	threshResults := runSearchBenchmark(t, threshClient, vectors, queryIndices, topK, ids)
+	threshResults := runSearchBenchmark(t, threshClient, queries, groundTruth, topK)
 
 	// Cleanup
 	directProvider.Close()
@@ -146,28 +152,29 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 
 	// --- Comparison table ---
 	fmt.Println("\n============================================================")
-	fmt.Printf("COMPARISON SUMMARY (100K vectors, 128-dim, %v simulated RTT)\n", simulatedRTT)
+	fmt.Printf("COMPARISON SUMMARY (100K vectors, 128-dim, %d queries, %v simulated RTT)\n", numQueries, simulatedRTT)
 	fmt.Println("============================================================")
 	fmt.Println()
-	fmt.Println("┌──────────────────┬──────────────┬──────────────┬──────────────┐")
-	fmt.Println("│                  │ BRUTE FORCE  │    DIRECT    │  THRESHOLD   │")
-	fmt.Println("├──────────────────┼──────────────┼──────────────┼──────────────┤")
-	fmt.Printf("│ Avg Query Time   │ %10v │ %10v │ %10v │\n", avgBF.Round(time.Millisecond), directResults.avgTotal.Round(time.Millisecond), threshResults.avgTotal.Round(time.Millisecond))
-	fmt.Printf("│  HE Encrypt      │          n/a │ %10v │ %10v │\n", directResults.avgHEEncrypt.Round(time.Millisecond), threshResults.avgHEEncrypt.Round(time.Millisecond))
-	fmt.Printf("│  HE Dot Products │          n/a │ %10v │ %10v │\n", directResults.avgHEDot.Round(time.Millisecond), threshResults.avgHEDot.Round(time.Millisecond))
-	fmt.Printf("│  HE Decrypt      │          n/a │ %10v │ %10v │\n", directResults.avgHEDecrypt.Round(time.Millisecond), threshResults.avgHEDecrypt.Round(time.Millisecond))
-	fmt.Printf("│  AES + Scoring   │          n/a │ %10v │ %10v │\n", directResults.avgOther.Round(time.Millisecond), threshResults.avgOther.Round(time.Millisecond))
-	fmt.Printf("│ Recall@%d        │          n/a │       %d/%d │       %d/%d │\n", topK, directResults.recall, numQueries, threshResults.recall, numQueries)
-	fmt.Printf("│ Vectors Scored   │ %10d │ %10d │ %10d │\n", numVectors, directResults.avgVectorsScored, threshResults.avgVectorsScored)
-	fmt.Println("├──────────────────┼──────────────┼──────────────┼──────────────┤")
-	fmt.Println("│ PRIVACY          │     NONE     │   PARTIAL    │     FULL     │")
-	fmt.Println("│ Key Ownership    │      n/a     │  single-key  │  3-of-5 t/N  │")
-	fmt.Println("│ Network Model    │      n/a     │      n/a     │  2ms RTT DC  │")
-	fmt.Println("└──────────────────┴──────────────┴──────────────┴──────────────┘")
+	fmt.Println("┌────────────────────┬──────────────┬──────────────┐")
+	fmt.Println("│                    │    DIRECT    │  THRESHOLD   │")
+	fmt.Println("├────────────────────┼──────────────┼──────────────┤")
+	fmt.Printf("│ Avg Query Time     │ %10v │ %10v │\n", directResults.avgTotal.Round(time.Millisecond), threshResults.avgTotal.Round(time.Millisecond))
+	fmt.Printf("│  HE Encrypt        │ %10v │ %10v │\n", directResults.avgHEEncrypt.Round(time.Millisecond), threshResults.avgHEEncrypt.Round(time.Millisecond))
+	fmt.Printf("│  HE Dot+Decrypt    │ %10v │ %10v │\n", directResults.avgHEDot.Round(time.Millisecond), threshResults.avgHEDot.Round(time.Millisecond))
+	fmt.Printf("│  AES + Scoring     │ %10v │ %10v │\n", directResults.avgOther.Round(time.Millisecond), threshResults.avgOther.Round(time.Millisecond))
+	fmt.Printf("│ Recall@%-2d (vs BF)  │     %5.1f%% │     %5.1f%% │\n", topK, directResults.avgRecall*100, threshResults.avgRecall*100)
+	fmt.Printf("│ Vectors Scored     │ %10d │ %10d │\n", directResults.avgVectorsScored, threshResults.avgVectorsScored)
+	fmt.Println("├────────────────────┼──────────────┼──────────────┤")
+	fmt.Println("│ PRIVACY            │   PARTIAL    │     FULL     │")
+	fmt.Println("│ Key Ownership      │  single-key  │  3-of-5 t/N  │")
+	fmt.Println("│ Network Model      │      n/a     │  2ms RTT DC  │")
+	fmt.Println("└────────────────────┴──────────────┴──────────────┘")
 	fmt.Println()
 	fmt.Printf("Threshold overhead vs direct: %.2fx total, %.2fx HE\n",
 		float64(threshResults.avgTotal)/float64(directResults.avgTotal),
 		float64(threshResults.avgHEDot)/float64(directResults.avgHEDot))
+	fmt.Printf("Recall difference: %.1f%% (direct) vs %.1f%% (threshold)\n",
+		directResults.avgRecall*100, threshResults.avgRecall*100)
 }
 
 type searchBenchResults struct {
@@ -177,22 +184,21 @@ type searchBenchResults struct {
 	avgHEDecrypt     time.Duration
 	avgOther         time.Duration
 	avgVectorsScored int
-	recall           int
+	avgRecall        float64
 }
 
-func runSearchBenchmark(t *testing.T, client *EnterpriseHierarchicalClient, vectors [][]float64, queryIndices []int, topK int, ids []string) searchBenchResults {
+func runSearchBenchmark(t *testing.T, client *EnterpriseHierarchicalClient, queries [][]float64, groundTruth [][]string, topK int) searchBenchResults {
 	t.Helper()
 	ctx := context.Background()
-	numQueries := len(queryIndices)
+	numQueries := len(queries)
 
 	var totalTime, heEncrypt, heDot, heDecrypt, otherTime time.Duration
-	var totalVectorsScored, recall int
+	var totalVectorsScored int
+	var totalRecall float64
 
 	for q := 0; q < numQueries; q++ {
-		query := vectors[queryIndices[q]]
-
 		start := time.Now()
-		result, err := client.SearchBatch(ctx, query, topK)
+		result, err := client.SearchBatch(ctx, queries[q], topK)
 		searchTime := time.Since(start)
 		if err != nil {
 			t.Fatalf("SearchBatch failed: %v", err)
@@ -205,20 +211,27 @@ func runSearchBenchmark(t *testing.T, client *EnterpriseHierarchicalClient, vect
 		otherTime += result.Timing.BucketSelection + result.Timing.BucketFetch + result.Timing.AESDecrypt + result.Timing.LocalScoring
 		totalVectorsScored += result.Stats.VectorsScored
 
-		targetID := ids[queryIndices[q]]
+		// Compute recall against brute-force ground truth
+		gtSet := make(map[string]bool)
+		for _, id := range groundTruth[q] {
+			gtSet[id] = true
+		}
+		matches := 0
 		for _, r := range result.Results {
-			if r.ID == targetID {
-				recall++
-				break
+			if gtSet[r.ID] {
+				matches++
 			}
 		}
+		recall := float64(matches) / float64(topK)
+		totalRecall += recall
 
-		fmt.Printf("  Query %d: %v (HE: enc=%v dot=%v dec=%v, scored=%d)\n",
+		fmt.Printf("  Query %d: %v (HE: enc=%v dot=%v dec=%v, scored=%d, recall=%.0f%%)\n",
 			q+1, searchTime.Round(time.Millisecond),
 			result.Timing.HEEncryptQuery.Round(time.Millisecond),
 			result.Timing.HECentroidScores.Round(time.Millisecond),
 			result.Timing.HEDecryptScores.Round(time.Millisecond),
-			result.Stats.VectorsScored)
+			result.Stats.VectorsScored,
+			recall*100)
 	}
 
 	n := time.Duration(numQueries)
@@ -229,7 +242,7 @@ func runSearchBenchmark(t *testing.T, client *EnterpriseHierarchicalClient, vect
 		avgHEDecrypt:     heDecrypt / n,
 		avgOther:         otherTime / n,
 		avgVectorsScored: totalVectorsScored / numQueries,
-		recall:           recall,
+		avgRecall:        totalRecall / float64(numQueries),
 	}
 }
 
