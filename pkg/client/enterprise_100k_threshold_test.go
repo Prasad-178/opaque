@@ -6,7 +6,8 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"math/rand"
+	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 	"time"
@@ -15,56 +16,71 @@ import (
 	"github.com/Prasad-178/opaque/pkg/blob"
 	"github.com/Prasad-178/opaque/pkg/crypto"
 	"github.com/Prasad-178/opaque/pkg/crypto/threshold"
+	"github.com/Prasad-178/opaque/pkg/embeddings"
 	"github.com/Prasad-178/opaque/pkg/enterprise"
 	"github.com/Prasad-178/opaque/pkg/hierarchical"
 )
 
-// TestEnterprise100KDirectVsThreshold runs 100K vector search in both direct and
-// threshold CKKS mode, reporting end-to-end query times and recall@10 against
-// brute-force ground truth.
+func getThresholdSIFTDataPath() string {
+	candidates := []string{
+		"../../data/sift",
+		"../data/sift",
+		"../../../data/sift",
+	}
+	for _, p := range candidates {
+		abs, _ := filepath.Abs(p)
+		if _, err := os.Stat(filepath.Join(abs, "sift_base.fvecs")); err == nil {
+			return abs
+		}
+	}
+	return ""
+}
+
+// TestEnterprise100KDirectVsThreshold benchmarks direct vs threshold CKKS on
+// the first 100K vectors of SIFT1M with real query vectors and brute-force
+// ground truth. Tests multiple probe configs to show the recall/latency tradeoff.
 func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping 100K threshold comparison in short mode")
 	}
+
+	dataPath := getThresholdSIFTDataPath()
+	if dataPath == "" {
+		t.Skip("SIFT1M dataset not found; run scripts/download_sift1m.sh first")
+	}
+
 	ctx := context.Background()
 
-	dimension := 128
+	// Load SIFT1M and take first 100K
+	fmt.Println("============================================================")
+	fmt.Println("SIFT 100K: DIRECT vs THRESHOLD CKKS")
+	fmt.Println("============================================================")
+
+	fmt.Println("\n[1] Loading SIFT1M dataset...")
+	dataset, err := embeddings.SIFT1M(dataPath)
+	if err != nil {
+		t.Fatalf("Failed to load SIFT1M: %v", err)
+	}
+
 	numVectors := 100000
-	numSuperBuckets := 64
-	numQueries := 20
+	if len(dataset.Vectors) < numVectors {
+		numVectors = len(dataset.Vectors)
+	}
+	vectors := dataset.Vectors[:numVectors]
+	ids := dataset.IDs[:numVectors]
+	dimension := dataset.Dimension
+
+	numQueries := 50
+	if numQueries > len(dataset.Queries) {
+		numQueries = len(dataset.Queries)
+	}
+	queries := dataset.Queries[:numQueries]
 	topK := 10
 
-	fmt.Println("============================================================")
-	fmt.Println("100K VECTORS: DIRECT vs THRESHOLD CKKS")
-	fmt.Println("============================================================")
+	fmt.Printf("  Vectors: %d (%d-dim), Queries: %d\n", numVectors, dimension, numQueries)
 
-	// Generate test data
-	fmt.Println("\n[1] Generating 100K vectors...")
-	startGen := time.Now()
-	rng := rand.New(rand.NewSource(42))
-	ids := make([]string, numVectors)
-	vectors := make([][]float64, numVectors)
-	for i := 0; i < numVectors; i++ {
-		ids[i] = fmt.Sprintf("doc_%d", i)
-		vectors[i] = make([]float64, dimension)
-		for j := 0; j < dimension; j++ {
-			vectors[i][j] = rng.NormFloat64()
-		}
-	}
-	fmt.Printf("  Generated in %v\n", time.Since(startGen))
-
-	// Generate independent random query vectors (NOT from the dataset)
-	fmt.Printf("\n[2] Generating %d random query vectors...\n", numQueries)
-	queries := make([][]float64, numQueries)
-	for i := 0; i < numQueries; i++ {
-		queries[i] = make([]float64, dimension)
-		for j := 0; j < dimension; j++ {
-			queries[i][j] = rng.NormFloat64()
-		}
-	}
-
-	// Compute brute-force ground truth for each query
-	fmt.Println("\n[3] Computing brute-force ground truth...")
+	// Compute brute-force ground truth (cosine similarity)
+	fmt.Println("\n[2] Computing brute-force ground truth...")
 	startGT := time.Now()
 	groundTruth := make([][]string, numQueries)
 	for q := 0; q < numQueries; q++ {
@@ -84,165 +100,179 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 	}
 	fmt.Printf("  Ground truth computed in %v\n", time.Since(startGT))
 
-	// Build index (shared between both modes)
-	fmt.Println("\n[4] Building hierarchical index...")
-	startBuild := time.Now()
-	enterpriseCfg, _ := enterprise.NewConfig("bench-threshold", dimension, numSuperBuckets)
-	store := blob.NewMemoryStore()
-	cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
-	cfg.TopSuperBuckets = 8
-	cfg.SubBucketsPerSuper = 4
-	cfg.NumDecoys = 8
-
-	builder, _ := hierarchical.NewEnterpriseBuilder(cfg, enterpriseCfg)
-	builder.Build(ctx, ids, vectors, store)
-	enterpriseCfg = builder.GetEnterpriseConfig()
-	fmt.Printf("  Index built in %v\n", time.Since(startBuild))
-
-	// Setup auth
-	enterpriseStore := enterprise.NewMemoryStore()
-	enterpriseStore.Put(ctx, enterpriseCfg)
-	authService := auth.NewService(auth.DefaultServiceConfig(), enterpriseStore)
-	authService.RegisterUser(ctx, "user", "bench-threshold", []byte("pass"), []string{auth.ScopeSearch})
-	creds, _ := authService.Authenticate(ctx, "user", []byte("pass"))
-
-	// --- Direct mode ---
-	fmt.Println("\n[5] DIRECT MODE (single-key)")
-	directProvider, err := crypto.NewDirectHEProvider(4)
-	if err != nil {
-		t.Fatalf("NewDirectHEProvider: %v", err)
-	}
-	directClient, err := NewEnterpriseHierarchicalClientWithProvider(cfg, creds, store, directProvider)
-	if err != nil {
-		t.Fatalf("NewClient (direct): %v", err)
+	// Probe configs: sweep from conservative to aggressive
+	numSuperBuckets := 64
+	probeConfigs := []struct {
+		name            string
+		topSuperBuckets int
+	}{
+		{"probe-4", 4},   // 6.2%
+		{"probe-8", 8},   // 12.5%
+		{"probe-16", 16}, // 25%
+		{"probe-32", 32}, // 50%
+		{"probe-48", 48}, // 75%
 	}
 
-	directResults := runSearchBenchmark(t, directClient, queries, groundTruth, topK)
-
-	// --- Threshold mode (3-of-5) with simulated network latency ---
-	// In a real deployment, each committee node runs on a separate machine.
-	// We simulate 2ms RTT (same data center) — each node needs 2 RTTs
-	// (receive ct + send share back), but all nodes operate in parallel.
+	// Simulated network latency for threshold mode
 	simulatedRTT := 2 * time.Millisecond
 
-	fmt.Printf("\n[6] THRESHOLD MODE (3-of-5 committee, simulated %v RTT)\n", simulatedRTT)
-	startCommittee := time.Now()
-	committee, err := threshold.NewCommittee(5, 3)
-	if err != nil {
-		t.Fatalf("NewCommittee: %v", err)
+	// Results storage
+	type benchResult struct {
+		name            string
+		topSuperBuckets int
+		directLatency   time.Duration
+		threshLatency   time.Duration
+		directRecall    float64
+		threshRecall    float64
+		directScored    int
+		threshScored    int
 	}
-	committee.SimulatedRTT = simulatedRTT
-	committeeSetup := time.Since(startCommittee)
-	fmt.Printf("  Committee setup: %v\n", committeeSetup)
+	var allResults []benchResult
 
-	threshProvider, err := crypto.NewThresholdHEProvider(committee, 4)
-	if err != nil {
-		t.Fatalf("NewThresholdHEProvider: %v", err)
+	for _, pc := range probeConfigs {
+		fmt.Printf("\n============================================================\n")
+		fmt.Printf("CONFIG: %s (TopSuperBuckets=%d/%d = %.1f%% probe)\n",
+			pc.name, pc.topSuperBuckets, numSuperBuckets,
+			float64(pc.topSuperBuckets)/float64(numSuperBuckets)*100)
+		fmt.Println("============================================================")
+
+		// Build index
+		fmt.Println("\n  Building index...")
+		startBuild := time.Now()
+		enterpriseCfg, _ := enterprise.NewConfig("bench-threshold", dimension, numSuperBuckets)
+		store := blob.NewMemoryStore()
+		cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
+		cfg.TopSuperBuckets = pc.topSuperBuckets
+		cfg.SubBucketsPerSuper = 4
+		cfg.NumDecoys = 8
+
+		builder, _ := hierarchical.NewEnterpriseBuilder(cfg, enterpriseCfg)
+		builder.Build(ctx, ids, vectors, store)
+		enterpriseCfg = builder.GetEnterpriseConfig()
+		fmt.Printf("  Index built in %v\n", time.Since(startBuild))
+
+		// Auth
+		enterpriseStore := enterprise.NewMemoryStore()
+		enterpriseStore.Put(ctx, enterpriseCfg)
+		authService := auth.NewService(auth.DefaultServiceConfig(), enterpriseStore)
+		authService.RegisterUser(ctx, "user", "bench-threshold", []byte("pass"), []string{auth.ScopeSearch})
+		creds, _ := authService.Authenticate(ctx, "user", []byte("pass"))
+
+		// --- Direct mode ---
+		fmt.Println("\n  DIRECT MODE:")
+		directProvider, err := crypto.NewDirectHEProvider(4)
+		if err != nil {
+			t.Fatalf("NewDirectHEProvider: %v", err)
+		}
+		directClient, err := NewEnterpriseHierarchicalClientWithProvider(cfg, creds, store, directProvider)
+		if err != nil {
+			t.Fatalf("NewClient (direct): %v", err)
+		}
+		dRes := runSIFTBenchmark(t, directClient, queries, groundTruth, topK)
+		fmt.Printf("    Avg: %v, Recall@%d: %.1f%%, Scored: %d\n",
+			dRes.avgLatency.Round(time.Millisecond), topK, dRes.avgRecall*100, dRes.avgScored)
+
+		// --- Threshold mode ---
+		fmt.Printf("\n  THRESHOLD MODE (3-of-5, %v RTT):\n", simulatedRTT)
+		committee, err := threshold.NewCommittee(5, 3)
+		if err != nil {
+			t.Fatalf("NewCommittee: %v", err)
+		}
+		committee.SimulatedRTT = simulatedRTT
+		threshProvider, err := crypto.NewThresholdHEProvider(committee, 4)
+		if err != nil {
+			t.Fatalf("NewThresholdHEProvider: %v", err)
+		}
+		threshClient, err := NewEnterpriseHierarchicalClientWithProvider(cfg, creds, store, threshProvider)
+		if err != nil {
+			t.Fatalf("NewClient (threshold): %v", err)
+		}
+		tRes := runSIFTBenchmark(t, threshClient, queries, groundTruth, topK)
+		fmt.Printf("    Avg: %v, Recall@%d: %.1f%%, Scored: %d\n",
+			tRes.avgLatency.Round(time.Millisecond), topK, tRes.avgRecall*100, tRes.avgScored)
+
+		directProvider.Close()
+		threshProvider.Close()
+
+		allResults = append(allResults, benchResult{
+			name:            pc.name,
+			topSuperBuckets: pc.topSuperBuckets,
+			directLatency:   dRes.avgLatency,
+			threshLatency:   tRes.avgLatency,
+			directRecall:    dRes.avgRecall,
+			threshRecall:    tRes.avgRecall,
+			directScored:    dRes.avgScored,
+			threshScored:    tRes.avgScored,
+		})
 	}
-	threshClient, err := NewEnterpriseHierarchicalClientWithProvider(cfg, creds, store, threshProvider)
-	if err != nil {
-		t.Fatalf("NewClient (threshold): %v", err)
-	}
 
-	threshResults := runSearchBenchmark(t, threshClient, queries, groundTruth, topK)
-
-	// Cleanup
-	directProvider.Close()
-	threshProvider.Close()
-
-	// --- Comparison table ---
+	// --- Summary table ---
 	fmt.Println("\n============================================================")
-	fmt.Printf("COMPARISON SUMMARY (100K vectors, 128-dim, %d queries, %v simulated RTT)\n", numQueries, simulatedRTT)
+	fmt.Printf("SUMMARY: SIFT 100K, %d-dim, 50 queries, 3-of-5 committee, %v RTT\n", dimension, simulatedRTT)
 	fmt.Println("============================================================")
 	fmt.Println()
-	fmt.Println("┌────────────────────┬──────────────┬──────────────┐")
-	fmt.Println("│                    │    DIRECT    │  THRESHOLD   │")
-	fmt.Println("├────────────────────┼──────────────┼──────────────┤")
-	fmt.Printf("│ Avg Query Time     │ %10v │ %10v │\n", directResults.avgTotal.Round(time.Millisecond), threshResults.avgTotal.Round(time.Millisecond))
-	fmt.Printf("│  HE Encrypt        │ %10v │ %10v │\n", directResults.avgHEEncrypt.Round(time.Millisecond), threshResults.avgHEEncrypt.Round(time.Millisecond))
-	fmt.Printf("│  HE Dot+Decrypt    │ %10v │ %10v │\n", directResults.avgHEDot.Round(time.Millisecond), threshResults.avgHEDot.Round(time.Millisecond))
-	fmt.Printf("│  AES + Scoring     │ %10v │ %10v │\n", directResults.avgOther.Round(time.Millisecond), threshResults.avgOther.Round(time.Millisecond))
-	fmt.Printf("│ Recall@%-2d (vs BF)  │     %5.1f%% │     %5.1f%% │\n", topK, directResults.avgRecall*100, threshResults.avgRecall*100)
-	fmt.Printf("│ Vectors Scored     │ %10d │ %10d │\n", directResults.avgVectorsScored, threshResults.avgVectorsScored)
-	fmt.Println("├────────────────────┼──────────────┼──────────────┤")
-	fmt.Println("│ PRIVACY            │   PARTIAL    │     FULL     │")
-	fmt.Println("│ Key Ownership      │  single-key  │  3-of-5 t/N  │")
-	fmt.Println("│ Network Model      │      n/a     │  2ms RTT DC  │")
-	fmt.Println("└────────────────────┴──────────────┴──────────────┘")
+	fmt.Println("┌────────────┬────────┬──────────────────────┬──────────────────────┬──────────┐")
+	fmt.Println("│ Config     │ Probe% │ DIRECT (lat / rec)   │ THRESHOLD (lat / rec)│ Overhead │")
+	fmt.Println("├────────────┼────────┼──────────────────────┼──────────────────────┼──────────┤")
+	for _, r := range allResults {
+		probe := float64(r.topSuperBuckets) / float64(numSuperBuckets) * 100
+		overhead := float64(r.threshLatency) / float64(r.directLatency)
+		fmt.Printf("│ %-10s │ %4.1f%% │ %7v / %5.1f%%      │ %7v / %5.1f%%      │  %.2fx   │\n",
+			r.name, probe,
+			r.directLatency.Round(time.Millisecond), r.directRecall*100,
+			r.threshLatency.Round(time.Millisecond), r.threshRecall*100,
+			overhead)
+	}
+	fmt.Println("└────────────┴────────┴──────────────────────┴──────────────────────┴──────────┘")
 	fmt.Println()
-	fmt.Printf("Threshold overhead vs direct: %.2fx total, %.2fx HE\n",
-		float64(threshResults.avgTotal)/float64(directResults.avgTotal),
-		float64(threshResults.avgHEDot)/float64(directResults.avgHEDot))
-	fmt.Printf("Recall difference: %.1f%% (direct) vs %.1f%% (threshold)\n",
-		directResults.avgRecall*100, threshResults.avgRecall*100)
+	fmt.Println("PRIVACY:  Direct = single-key (partial), Threshold = 3-of-5 (full key distribution)")
+	fmt.Println("NETWORK:  Threshold adds simulated 2ms datacenter RTT (2 round trips, all nodes parallel)")
 }
 
-type searchBenchResults struct {
-	avgTotal         time.Duration
-	avgHEEncrypt     time.Duration
-	avgHEDot         time.Duration
-	avgHEDecrypt     time.Duration
-	avgOther         time.Duration
-	avgVectorsScored int
-	avgRecall        float64
+type siftBenchResult struct {
+	avgLatency time.Duration
+	avgRecall  float64
+	avgScored  int
 }
 
-func runSearchBenchmark(t *testing.T, client *EnterpriseHierarchicalClient, queries [][]float64, groundTruth [][]string, topK int) searchBenchResults {
+func runSIFTBenchmark(t *testing.T, client *EnterpriseHierarchicalClient, queries [][]float64, groundTruth [][]string, topK int) siftBenchResult {
 	t.Helper()
 	ctx := context.Background()
 	numQueries := len(queries)
 
-	var totalTime, heEncrypt, heDot, heDecrypt, otherTime time.Duration
-	var totalVectorsScored int
+	var totalLatency time.Duration
 	var totalRecall float64
+	var totalScored int
 
 	for q := 0; q < numQueries; q++ {
 		start := time.Now()
 		result, err := client.SearchBatch(ctx, queries[q], topK)
-		searchTime := time.Since(start)
+		latency := time.Since(start)
 		if err != nil {
-			t.Fatalf("SearchBatch failed: %v", err)
+			t.Fatalf("SearchBatch query %d failed: %v", q, err)
 		}
 
-		totalTime += searchTime
-		heEncrypt += result.Timing.HEEncryptQuery
-		heDot += result.Timing.HECentroidScores
-		heDecrypt += result.Timing.HEDecryptScores
-		otherTime += result.Timing.BucketSelection + result.Timing.BucketFetch + result.Timing.AESDecrypt + result.Timing.LocalScoring
-		totalVectorsScored += result.Stats.VectorsScored
+		totalLatency += latency
+		totalScored += result.Stats.VectorsScored
 
-		// Compute recall against brute-force ground truth
-		gtSet := make(map[string]bool)
-		for _, id := range groundTruth[q] {
-			gtSet[id] = true
-		}
-		matches := 0
+		// Compute recall against ground truth
+		resultIDs := make(map[string]bool)
 		for _, r := range result.Results {
-			if gtSet[r.ID] {
-				matches++
+			resultIDs[r.ID] = true
+		}
+		hits := 0
+		for _, gtID := range groundTruth[q] {
+			if resultIDs[gtID] {
+				hits++
 			}
 		}
-		recall := float64(matches) / float64(topK)
-		totalRecall += recall
-
-		fmt.Printf("  Query %d: %v (HE: enc=%v dot=%v dec=%v, scored=%d, recall=%.0f%%)\n",
-			q+1, searchTime.Round(time.Millisecond),
-			result.Timing.HEEncryptQuery.Round(time.Millisecond),
-			result.Timing.HECentroidScores.Round(time.Millisecond),
-			result.Timing.HEDecryptScores.Round(time.Millisecond),
-			result.Stats.VectorsScored,
-			recall*100)
+		totalRecall += float64(hits) / float64(topK)
 	}
 
-	n := time.Duration(numQueries)
-	return searchBenchResults{
-		avgTotal:         totalTime / n,
-		avgHEEncrypt:     heEncrypt / n,
-		avgHEDot:         heDot / n,
-		avgHEDecrypt:     heDecrypt / n,
-		avgOther:         otherTime / n,
-		avgVectorsScored: totalVectorsScored / numQueries,
-		avgRecall:        totalRecall / float64(numQueries),
+	return siftBenchResult{
+		avgLatency: totalLatency / time.Duration(numQueries),
+		avgRecall:  totalRecall / float64(numQueries),
+		avgScored:  totalScored / numQueries,
 	}
 }
 
