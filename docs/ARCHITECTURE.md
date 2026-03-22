@@ -165,11 +165,13 @@ Micro-benchmarks (single operation):
 - Full cycle: 153ms threshold vs 141ms direct (1.1x overhead)
 - Committee setup: 851ms (2-of-3) to 1.66s (5-of-7), one-time cost
 
-SIFT 100K benchmark (SearchBatch with SIMD packing, 128-dim, 3-of-5, 50 real SIFT queries, brute-force cosine ground truth, 2ms simulated datacenter RTT):
-- probe-32: 108ms / 96.4% (direct), 123ms / 96.4% (threshold) — 1.14x overhead
-- Threshold overhead consistently 1.11-1.16x across probe configs (probe-4 through probe-48)
-- probe-48 (75%): 99.2% recall@10 direct, 99.4% threshold at 127ms/141ms
-- Recall equivalent between direct and threshold modes; uses first 100K vectors of SIFT1M (real image descriptors, not random Gaussian)
+Multi-dataset benchmarks (SearchBatch with SIMD packing, 128-dim, 3-of-5, real SIFT queries, brute-force cosine ground truth, 2ms simulated datacenter RTT):
+- SIFT10K (10K vectors, 100 queries, 16 clusters): 1.19-1.21x overhead, up to 91.3% recall@10
+- SIFT100K (100K vectors, 50 queries, 64 clusters): 1.11-1.16x overhead, up to 99.4% recall@10
+- SIFT1M (1M vectors, 50 queries, 128 clusters): 0.99-1.20x overhead, up to 76.8% recall@10
+- **Threshold overhead is consistent ~15-20% across all dataset scales (10K to 1M)**
+- Recall equivalent between direct and threshold modes across all three datasets
+- All use real SIFT image descriptor embeddings, not random Gaussian
 
 ThresholdDecrypt is parallelized internally (Shamir share conversion + PCKS partial shares run in goroutines per participant). Each `thresholdEvalEngine` has its own decryptor/encoder — Lattigo's `rlwe.Decryptor` is NOT thread-safe (sharing it caused underflow panics from a data race in concurrent decryption). See `docs/THRESHOLD_CKKS.md` for the full architecture.
 

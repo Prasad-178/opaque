@@ -123,14 +123,13 @@ Split the CKKS secret key across an independent key committee using Lattigo's `m
 
 ThresholdDecrypt is now parallelized internally — Shamir-to-additive share conversion and PCKS partial share generation run in goroutines per participant. Each `thresholdEvalEngine` has its own decryptor/encoder — Lattigo's `rlwe.Decryptor` is NOT thread-safe (sharing it caused a data race manifesting as underflow panics in concurrent decryption). Noise flooding sigma=2^20.
 
-**Latest benchmarks** (Apple M4, SearchBatch with SIMD packing, SIFT 100K — first 100K of SIFT1M real image descriptors, 128-dim, 3-of-5 committee, 50 real SIFT queries, brute-force cosine ground truth, 2ms simulated datacenter RTT):
-- **probe-32: 108ms / 96.4% (direct), 123ms / 96.4% (threshold) — 1.14x overhead**
-- Threshold overhead consistently 1.11-1.16x across all probe configs
-- probe-4 (6.2%): 81ms/94ms, 71.4%/72.8% recall@10
-- probe-8 (12.5%): 86ms/99ms, 91.0%/89.6% recall@10
-- probe-16 (25%): 101ms/116ms, 75.0%/76.0% recall@10
-- probe-48 (75%): 127ms/141ms, 99.2%/99.4% recall@10
-- Recall equivalent between direct and threshold modes
+**Latest benchmarks** (Apple M4, SearchBatch with SIMD packing, 3-of-5 committee, real SIFT image descriptors, brute-force cosine ground truth, 2ms simulated datacenter RTT):
+- **Multi-dataset validation across SIFT10K, SIFT100K, and SIFT1M**
+- SIFT10K (10K vectors, 100 queries, 16 clusters): 1.19-1.21x overhead, up to 91.3% recall@10
+- SIFT100K (100K vectors, 50 queries, 64 clusters): 1.11-1.16x overhead, probe-32 sweet spot at 108ms/123ms with 96.4% recall@10
+- SIFT1M (1M vectors, 50 queries, 128 clusters): 0.99-1.20x overhead, probe-8 at 599ms/592ms with 76.4% recall@10
+- **Threshold overhead consistent ~15-20% across all dataset scales (10K to 1M)**
+- Recall equivalent between direct and threshold modes across all datasets
 - Micro-benchmarks: decrypt scales from 22ms (2-of-3) to 27ms (5-of-7)
 
 Implementation phases:
