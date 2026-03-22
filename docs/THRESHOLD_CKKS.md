@@ -311,9 +311,21 @@ All benchmarks use real SIFT image descriptor embeddings (NOT random Gaussian), 
 | probe-64 | 50% | 860ms / 99.2% | 866ms / 99.0% | 1.01x |
 | probe-96 | 75% | 1.076s / 100.0% | 1.14s / 100.0% | 1.06x |
 
+##### GIST 100K (100K vectors, 960-dim, 50 queries, 32 clusters)
+
+High-dimensional benchmark using GIST image descriptors (960-dim vs SIFT's 128-dim). With 960-dim vectors, only 8 centroids fit per CKKS slot pack (vs 64 for SIFT), requiring 8x more HE operations.
+
+| Config | Probe% | Direct (latency / recall@10) | Threshold (latency / recall@10) | Overhead |
+|--------|--------|------------------------------|--------------------------------|----------|
+| probe-8 | 25% | 8.6s / 84.0% | 8.6s / 87.4% | 0.99x |
+| probe-16 | 50% | 12.4s / 100.0% | 12.2s / 100.0% | 0.98x |
+| probe-24 | 75% | 14.3s / 100.0% | 12.2s / 100.0% | 0.86x |
+
+Latency is ~20-40x higher than SIFT 100K due to 7.5x larger vectors requiring more HE ops and AES decryption. Threshold overhead is effectively zero — HE compute dominates completely.
+
 ##### Cross-Dataset Summary
 
-**Threshold overhead is consistent ~1-10% at scale** across SIFT100K and SIFT1M. At higher absolute latencies, threshold decryption cost becomes negligible relative to HE compute and AES decryption time.
+**Threshold overhead is ~0-10% at scale** across SIFT100K, SIFT1M, and GIST100K. At higher absolute latencies (especially high-dimensional GIST at 960-dim), threshold decryption cost becomes completely invisible.
 
 **Recall is equivalent between direct and threshold modes** in all configurations across all three datasets. Noise flooding in the threshold protocol does not degrade search quality.
 

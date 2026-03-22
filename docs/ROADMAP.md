@@ -129,7 +129,8 @@ ThresholdDecrypt is now parallelized internally — Shamir-to-additive share con
 - SIFT100K (100K vectors, 50 queries, 64 clusters): 0.87-1.49x overhead, probe-32 at 368ms/322ms with 97.8% recall@10
 - SIFT1M (1M vectors, 50 queries, 128 clusters): 0.69-1.10x overhead, probe-48 at 653ms/719ms with 95.0% recall@10
 - **SIFT1M probe-64 (50%) = 99.2%/99.0% recall@10 at ~860ms, probe-96 (75%) = 100% at ~1.1s**
-- **Threshold overhead ~1-10% at scale; negligible relative to HE compute time**
+- GIST100K (100K vectors, 960-dim, 32 clusters): ~0% overhead, 100% recall@10 at 50% probe
+- **Threshold overhead ~0-10% at scale; negligible relative to HE compute time**
 - Recall equivalent between direct and threshold modes across all datasets
 - Micro-benchmarks: decrypt scales from 22ms (2-of-3) to 27ms (5-of-7)
 

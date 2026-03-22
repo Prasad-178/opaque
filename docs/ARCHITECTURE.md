@@ -171,8 +171,9 @@ Multi-dataset benchmarks (SearchBatch with SIMD packing, 128-dim, 3-of-5, real S
 - SIFT1M (1M vectors, 50 queries, 128 clusters): 0.69-1.10x overhead, up to 100% recall@10
 - **SIFT1M sweet spot: probe-48 (37.5%) = 95.0% recall@10 at 653ms direct / 719ms threshold**
 - **SIFT1M probe-64 (50%) = 99.2% / 99.0% recall@10 at ~860ms, probe-96 (75%) = 100% at ~1.1s**
-- Threshold overhead ~1-10% at scale; recall equivalent between modes across all datasets
-- All use real SIFT image descriptor embeddings, not random Gaussian
+- GIST100K (100K vectors, 960-dim, 32 clusters): ~0% overhead, 100% recall@10 at probe-16
+- Threshold overhead ~0-10% at scale; recall equivalent between modes across all datasets
+- All use real image descriptor embeddings (SIFT 128-dim, GIST 960-dim), not random Gaussian
 
 ThresholdDecrypt is parallelized internally (Shamir share conversion + PCKS partial shares run in goroutines per participant). Each `thresholdEvalEngine` has its own decryptor/encoder — Lattigo's `rlwe.Decryptor` is NOT thread-safe (sharing it caused underflow panics from a data race in concurrent decryption). See `docs/THRESHOLD_CKKS.md` for the full architecture.
 
