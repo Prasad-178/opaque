@@ -118,17 +118,17 @@ Optional PCA via SVD in `go/pkg/pca/`. Enabled with `Config.PCADimension`. Appli
 
 ## Long Term
 
-### Threshold CKKS (Key Ownership)
+### Threshold CKKS (Key Ownership) — Phases 1–2 Complete
 Split the CKKS secret key across an independent key committee using Lattigo's `mhe` package. The DB server holds only evaluation keys and cannot decrypt. Decryption is a single-round protocol where t-of-N committee nodes produce partial key-switches, re-encrypting results directly under the querying client's ephemeral public key.
 
 Implementation phases:
-1. **Engine refactor** — split `crypto.Engine` into `EvaluatorEngine` (server) and `ThresholdParticipantEngine` (committee node)
-2. **Threshold POC** — local proof-of-concept with simulated committee nodes using Lattigo's `mhe` package
+1. ~~**Engine refactor**~~ ✅ — `HEProvider` interface with `DirectHEProvider` and `ThresholdHEProvider`
+2. ~~**Threshold POC**~~ ✅ — local implementation with `Committee`, `Participant`, `ClientSession` using Lattigo `mhe`
 3. **Committee gRPC service** — lightweight service for committee nodes (PartialKeySwitch RPC)
-4. **Integration** — wire threshold decryption into the main search pipeline
+4. **Distributed integration** — replace local Committee with network-distributed committee
 5. **Hardening** — redundancy-based bad node detection, metrics, stress testing
 
-See `docs/THRESHOLD_CKKS.md` for the full architecture.
+See `docs/THRESHOLD_CKKS.md` for the full architecture and benchmarks.
 
 ### Private Information Retrieval (PIR)
 Replace decoy-based bucket fetching with cryptographic PIR for stronger access pattern privacy. The current decoy approach provides k-anonymity; PIR would provide cryptographic guarantees. This is a significant performance tradeoff that needs careful benchmarking.

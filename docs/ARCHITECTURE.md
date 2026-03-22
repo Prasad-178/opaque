@@ -140,15 +140,29 @@ Each vector is assigned to its top-K nearest centroids (default K=2). This creat
 - **Decoys are not PIR**: Decoy-based hiding provides k-anonymity but not cryptographic access pattern privacy. A future PIR integration is planned for stronger guarantees.
 - **Cluster count leaks structure**: The number of clusters and their sizes are visible to the server. This reveals the coarse distribution of the dataset but not individual vectors.
 
-### Key Ownership (Planned: Threshold CKKS)
+### Key Ownership: Threshold CKKS (Implemented)
 
-The current architecture requires a single party to hold the CKKS secret key. This means whoever runs the client process can decrypt all HE computation results. In a multi-tenant or client-server deployment, this is a fundamental trust limitation.
+The system supports two HE modes via the pluggable `HEProvider` interface:
 
-The planned solution is threshold CKKS: the decryption key is split into shares held by an independent key committee of N nodes, with any t-of-N required to jointly decrypt. The DB server performs all HE computation with evaluation keys only (no decryption capability). Decryption is a single-round protocol where committee nodes produce partial key-switches that re-encrypt results directly under the querying client's public key.
+1. **Direct mode** (default): A single party holds the full CKKS secret key. Simple, fast, suitable for single-tenant deployments or development.
 
-This adds approximately 10-20ms of latency for same-datacenter deployments and does not affect recall or precision.
+2. **Threshold mode** (optional): The decryption key is split into shares held by an independent key committee of N nodes, with any t-of-N required to jointly decrypt. The DB server performs all HE computation with evaluation keys only (no decryption capability). Decryption uses Lattigo's `PublicKeySwitchProtocol` — each committee node produces a noise-flooded partial key-switch share, and shares are aggregated into a ciphertext under the querying client's ephemeral public key.
 
-See `docs/THRESHOLD_CKKS.md` for the full architecture.
+To use threshold mode, create a committee and pass the provider to the client:
+
+```go
+committee, _ := threshold.NewCommittee(5, 3)  // 3-of-5 threshold
+provider, _ := crypto.NewThresholdHEProvider(committee, 4)
+client, _ := NewEnterpriseHierarchicalClientWithProvider(cfg, creds, store, provider)
+```
+
+**Performance impact** (Apple M4 benchmarks):
+- Encryption: identical (~7ms, both use collective public key)
+- HE dot product: identical (~82ms, evaluator-only)
+- Decryption: ~29ms threshold vs ~9ms direct (3.3x overhead from protocol)
+- Committee setup: 591–844ms (one-time cost)
+
+The threshold overhead does not affect recall or precision. See `docs/THRESHOLD_CKKS.md` for the full architecture.
 
 ## Incremental Indexing
 

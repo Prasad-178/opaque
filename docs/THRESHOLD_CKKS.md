@@ -227,33 +227,48 @@ Regardless of which detection approach is used, a simple operational policy hand
 
 This doesn't require consensus or voting, just consistent observation by the coordinator (DB server) or the client.
 
-## Impact on Opaque's Existing Code
+## Implementation Status
 
-### What Changes
+Threshold CKKS is fully implemented and integrated as an **optional** backend.
 
-**crypto.Engine** must be split into two types:
-- EvaluatorEngine: holds evaluation keys (pk, rlk, galois keys) only. Used by the DB server. Can encrypt and compute but cannot decrypt.
-- ThresholdParticipantEngine: holds a key share. Can compute partial key-switches. Cannot decrypt alone.
+### Packages
 
-**crypto.EnginePool** no longer clones the full secret key across pool members. Instead, it creates a pool of EvaluatorEngines that share evaluation keys.
+- **`pkg/crypto/threshold/`** — Core threshold CKKS: `Committee`, `Participant`, `ClientSession`. Wraps Lattigo's `mhe` package for collective key generation, Shamir threshold distribution, and `PublicKeySwitchProtocol`.
 
-**Collective key generation** replaces the current single-party keygen in NewClientEngine(). A new setup protocol coordinates with N remote nodes to produce collective keys.
+- **`pkg/crypto/provider.go`** — `HEProvider` interface that abstracts the HE backend. Two implementations:
+  - `DirectHEProvider` (default): wraps `EnginePool`, single-key mode.
+  - `ThresholdHEProvider`: wraps `Committee` + `ClientSession`, t-of-N threshold mode.
 
-**Decryption path** in enterprise_hierarchical.go changes from a local DecryptScalar() call to: fan out to committee, collect partials, aggregate, return ciphertext under client key.
+- **`pkg/client/enterprise_hierarchical.go`** — Uses `HEProvider` interface. Existing constructors default to direct mode. `NewEnterpriseHierarchicalClientWithProvider()` accepts any `HEProvider`.
 
-**gRPC layer** needs new RPCs: PartialKeySwitch (committee nodes expose this), and the setup protocol RPCs for key generation rounds.
+### What Changed
 
-### What Doesn't Change
+The `HEProvider` interface replaces direct `EnginePool` usage in the client. This is a clean abstraction — the client calls `provider.EncryptVector()`, `provider.Acquire()`, `engine.DecryptScalar()` etc. without knowing whether decryption is local or goes through a t-of-N protocol.
 
-- The HE dot product computation (the core of search)
-- The AES blob encryption/decryption (client-side, unchanged)
-- The decoy mechanism (client-side, unchanged)
-- K-means clustering and index building
-- The batch CKKS slot packing optimization
-- Incremental indexing
-- The overall search pipeline structure
+For threshold mode, `ThresholdHEProvider` creates:
+1. A pool of evaluator-only engines using the committee's collective eval keys (relin + Galois).
+2. An internal `ClientSession` with an ephemeral keypair for receiving threshold-decrypted results.
+3. Decryption calls delegate to `committee.ThresholdDecrypt(ct, session.PK)` then `session.DecryptScalar(ctClient)`.
 
-The threshold decryption is inserted as a single new step between "server computes encrypted scores" and "client decrypts scores." Everything before and after is untouched.
+### What Didn't Change
+
+- The HE dot product computation (the core of search) — identical code path.
+- AES blob encryption/decryption (client-side, unchanged).
+- The decoy mechanism (client-side, unchanged).
+- K-means clustering and index building.
+- The batch CKKS slot packing optimization.
+- Incremental indexing.
+- All existing tests — `NewClientEngine()` and `EnginePool` still exist and work.
+
+### Benchmark Results (Apple M4)
+
+| Operation | Direct | Threshold (3-of-5) | Overhead |
+|-----------|--------|---------------------|----------|
+| Encrypt 128D | 6.8ms | 7.0ms | ~1% (both use collective PK) |
+| Decrypt scalar | 8.7ms | 29.2ms | 3.3x (protocol rounds) |
+| HE dot product | 82.3ms | 82.3ms | 0% (evaluator only) |
+| Full cycle (dot+decrypt) | 90.0ms | 108.1ms | 1.2x |
+| Committee setup | — | 591–844ms | One-time cost |
 
 ## Noise and Recall Impact
 
@@ -297,21 +312,21 @@ For a research contribution, the interesting direction is formally comparing the
 
 ## Implementation Roadmap
 
-### Phase 1: Engine Refactor
+### Phase 1: Engine Refactor — DONE
 
-Split crypto.Engine into EvaluatorEngine and ThresholdParticipantEngine. Ensure the DB server can perform all HE computation with only evaluation keys. This is a refactor with no new cryptography, testable against existing benchmarks.
+Created `HEProvider` interface with `DirectHEProvider` and `ThresholdHEProvider` implementations. The client uses the interface, making the HE backend pluggable. Evaluator-only engines use committee eval keys without any secret key material.
 
-### Phase 2: Threshold Decryption POC
+### Phase 2: Threshold Decryption POC — DONE
 
-Using Lattigo's mhe package, implement a local proof-of-concept where N goroutines simulate committee nodes. Validate: collective key generation works, partial key-switch produces correct results, noise does not affect recall, latency overhead is within expectations.
+Implemented full threshold CKKS using Lattigo's `mhe` package. Local POC where `Committee` simulates N participants in-process. Validated: collective key generation, Shamir threshold distribution, partial key-switch with noise flooding, correct results within expected tolerance, latency overhead benchmarked.
 
 ### Phase 3: Committee gRPC Service
 
 Implement a lightweight gRPC service for committee nodes. RPCs: PartialKeySwitch (per query), SetupRound (during collective key generation). The committee node binary should be minimal: load a key share, serve partial key-switch requests.
 
-### Phase 4: Integration
+### Phase 4: Distributed Integration
 
-Wire the threshold decryption into the main search pipeline. The DB server coordinates between the client and the committee. Add configuration for committee endpoints, threshold t, and node discovery.
+Replace the local `Committee` with a network-distributed committee. The DB server coordinates between the client and remote committee nodes. Add configuration for committee endpoints, threshold t, and node discovery.
 
 ### Phase 5: Hardening
 
