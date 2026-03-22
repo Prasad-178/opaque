@@ -158,9 +158,9 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 	fmt.Println("│ Key Ownership    │      n/a     │  single-key  │  3-of-5 t/N  │")
 	fmt.Println("└──────────────────┴──────────────┴──────────────┴──────────────┘")
 	fmt.Println()
-	fmt.Printf("Threshold overhead vs direct: %.1fx total, %.1fx decrypt\n",
+	fmt.Printf("Threshold overhead vs direct: %.2fx total, %.2fx HE\n",
 		float64(threshResults.avgTotal)/float64(directResults.avgTotal),
-		float64(threshResults.avgHEDecrypt)/float64(directResults.avgHEDecrypt))
+		float64(threshResults.avgHEDot)/float64(directResults.avgHEDot))
 }
 
 type searchBenchResults struct {
@@ -185,10 +185,10 @@ func runSearchBenchmark(t *testing.T, client *EnterpriseHierarchicalClient, vect
 		query := vectors[queryIndices[q]]
 
 		start := time.Now()
-		result, err := client.Search(ctx, query, topK)
+		result, err := client.SearchBatch(ctx, query, topK)
 		searchTime := time.Since(start)
 		if err != nil {
-			t.Fatalf("Search failed: %v", err)
+			t.Fatalf("SearchBatch failed: %v", err)
 		}
 
 		totalTime += searchTime
