@@ -156,13 +156,21 @@ provider, _ := crypto.NewThresholdHEProvider(committee, 4)
 client, _ := NewEnterpriseHierarchicalClientWithProvider(cfg, creds, store, provider)
 ```
 
-**Performance impact** (Apple M4 benchmarks):
-- Encryption: identical (~7ms, both use collective public key)
-- HE dot product: identical (~82ms, evaluator-only)
-- Decryption: ~29ms threshold vs ~9ms direct (3.3x overhead from protocol)
-- Committee setup: 591–844ms (one-time cost)
+**Performance impact** (Apple M4 benchmarks, parallelized threshold decryption):
 
-The threshold overhead does not affect recall or precision. See `docs/THRESHOLD_CKKS.md` for the full architecture.
+Micro-benchmarks (single operation):
+- Encryption: ~10ms (both modes use collective public key)
+- HE dot product: ~119ms (evaluator-only, identical both modes)
+- Decryption: 24ms threshold (3-of-5) vs 10.7ms direct (2.2x overhead)
+- Full cycle: 153ms threshold vs 141ms direct (1.1x overhead)
+- Committee setup: 851ms (2-of-3) to 1.66s (5-of-7), one-time cost
+
+100K vector benchmark (128-dim, 3-of-5, 5 queries):
+- 3.63s avg query (threshold) vs 3.13s (direct) — 1.2x total overhead
+- Decrypt: 713ms vs 264ms (2.7x), but dot products dominate at ~2.8s
+- Recall@10: 5/5 both modes
+
+ThresholdDecrypt is parallelized internally (Shamir share conversion + PCKS partial shares run in goroutines per participant). Each `thresholdEvalEngine` has its own decryptor/encoder for thread safety. See `docs/THRESHOLD_CKKS.md` for the full architecture.
 
 ## Incremental Indexing
 

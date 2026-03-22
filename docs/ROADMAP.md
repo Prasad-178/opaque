@@ -118,12 +118,20 @@ Optional PCA via SVD in `go/pkg/pca/`. Enabled with `Config.PCADimension`. Appli
 
 ## Long Term
 
-### Threshold CKKS (Key Ownership) — Phases 1–2 Complete
+### Threshold CKKS (Key Ownership) — Phases 1–2 Complete, Parallelized
 Split the CKKS secret key across an independent key committee using Lattigo's `mhe` package. The DB server holds only evaluation keys and cannot decrypt. Decryption is a single-round protocol where t-of-N committee nodes produce partial key-switches, re-encrypting results directly under the querying client's ephemeral public key.
+
+ThresholdDecrypt is now parallelized internally — Shamir-to-additive share conversion and PCKS partial share generation run in goroutines per participant. Each `thresholdEvalEngine` has its own decryptor/encoder (Lattigo decryptor not thread-safe). Noise flooding sigma=2^20.
+
+**Latest benchmarks** (Apple M4, 100K vectors, 128-dim, 3-of-5 committee):
+- 3.63s avg query (threshold) vs 3.13s (direct) — **1.2x total overhead**
+- Decrypt: 713ms vs 264ms (2.7x), but dot products dominate at ~2.8s
+- Recall@10: 5/5 both modes
+- Micro-benchmarks: decrypt scales from 22ms (2-of-3) to 27ms (5-of-7)
 
 Implementation phases:
 1. ~~**Engine refactor**~~ ✅ — `HEProvider` interface with `DirectHEProvider` and `ThresholdHEProvider`
-2. ~~**Threshold POC**~~ ✅ — local implementation with `Committee`, `Participant`, `ClientSession` using Lattigo `mhe`
+2. ~~**Threshold POC**~~ ✅ — local implementation with parallelized `Committee`, `Participant`, `ClientSession` using Lattigo `mhe`
 3. **Committee gRPC service** — lightweight service for committee nodes (PartialKeySwitch RPC)
 4. **Distributed integration** — replace local Committee with network-distributed committee
 5. **Hardening** — redundancy-based bad node detection, metrics, stress testing

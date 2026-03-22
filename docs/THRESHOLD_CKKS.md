@@ -260,15 +260,39 @@ For threshold mode, `ThresholdHEProvider` creates:
 - Incremental indexing.
 - All existing tests — `NewClientEngine()` and `EnginePool` still exist and work.
 
+### Parallelized Threshold Decryption
+
+`ThresholdDecrypt` is now parallelized internally: Shamir share conversion (Shamir-to-additive) and PCKS partial share generation run in goroutines per participant, simulating a real distributed deployment where each committee node computes independently. This required giving each `thresholdEvalEngine` its own decryptor and encoder, since Lattigo's decryptor is not thread-safe. The unnecessary mutex on the `Committee` struct was also removed.
+
 ### Benchmark Results (Apple M4)
 
-| Operation | Direct | Threshold (3-of-5) | Overhead |
-|-----------|--------|---------------------|----------|
-| Encrypt 128D | 6.8ms | 7.0ms | ~1% (both use collective PK) |
-| Decrypt scalar | 8.7ms | 29.2ms | 3.3x (protocol rounds) |
-| HE dot product | 82.3ms | 82.3ms | 0% (evaluator only) |
-| Full cycle (dot+decrypt) | 90.0ms | 108.1ms | 1.2x |
-| Committee setup | — | 591–844ms | One-time cost |
+#### Micro-Benchmarks (Single Operation, Per-Op)
+
+| Operation | Direct | 2-of-3 | 3-of-5 | 5-of-7 |
+|-----------|--------|--------|--------|--------|
+| Encrypt 128D | 9.8ms | 10.4ms | 10.6ms | 10.7ms |
+| HE dot product | 119ms | 119ms | 118ms | 119ms |
+| Decrypt scalar | 10.7ms | 22ms | 24ms | 27ms |
+| Full cycle | 141ms | 151ms | 153ms | 157ms |
+| Committee setup | — | 851ms | 1.22s | 1.66s |
+
+Decrypt overhead scales modestly with committee size: 2.1x at 2-of-3, 2.2x at 3-of-5, 2.5x at 5-of-7. Full cycle overhead stays at 1.1x because dot product dominates.
+
+#### 100K Vector Benchmark (128-dim, 3-of-5 committee, 5 queries)
+
+| Metric | Direct | Threshold (3-of-5) |
+|--------|--------|---------------------|
+| Avg query latency | 3.13s | 3.63s |
+| Encrypt | 12ms | 14ms |
+| Dot products | 2.82s | 2.87s |
+| Decrypt | 264ms | 713ms |
+| AES + scoring | 35ms | 34ms |
+| Total overhead | — | 1.2x |
+| Decrypt overhead | — | 2.7x |
+| Recall@10 | 5/5 | 5/5 |
+| Vectors scored | ~26K | ~25K |
+
+At scale (100K vectors), the threshold overhead is 1.2x total because HE dot products dominate query time. Decrypt overhead is 2.7x but represents only ~20% of total query latency.
 
 ## Noise and Recall Impact
 
@@ -318,7 +342,7 @@ Created `HEProvider` interface with `DirectHEProvider` and `ThresholdHEProvider`
 
 ### Phase 2: Threshold Decryption POC — DONE
 
-Implemented full threshold CKKS using Lattigo's `mhe` package. Local POC where `Committee` simulates N participants in-process. Validated: collective key generation, Shamir threshold distribution, partial key-switch with noise flooding, correct results within expected tolerance, latency overhead benchmarked.
+Implemented full threshold CKKS using Lattigo's `mhe` package. Local POC where `Committee` simulates N participants in-process. Validated: collective key generation, Shamir threshold distribution, partial key-switch with noise flooding, correct results within expected tolerance, latency overhead benchmarked. ThresholdDecrypt is parallelized internally — Shamir-to-additive conversion and PCKS partial share generation run concurrently per participant. Each `thresholdEvalEngine` has its own decryptor/encoder for thread safety (Lattigo's decryptor is not safe for concurrent use). Noise flooding sigma=2^20 balances security vs precision.
 
 ### Phase 3: Committee gRPC Service
 
