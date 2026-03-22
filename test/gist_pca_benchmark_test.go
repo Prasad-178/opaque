@@ -15,6 +15,7 @@ import (
 
 	"github.com/Prasad-178/opaque"
 	"github.com/Prasad-178/opaque/pkg/embeddings"
+	"github.com/Prasad-178/opaque/pkg/pca"
 )
 
 func getGISTDataPath() string {
@@ -86,7 +87,22 @@ func TestGIST100K_PCA_Benchmark(t *testing.T) {
 	groundTruth := gistBruteForceTopK(queries, vectors, dataset.Dimension, topK)
 	t.Logf("Ground truth computed in %v", time.Since(gtStart))
 
-	// Test configs: baseline (no PCA), PCA→256, PCA→128
+	// Measure PCA variance explained at different target dimensions.
+	// This tells us how much information PCA retains for GIST vectors.
+	t.Log("Measuring PCA variance explained...")
+	pcaSample := vectors // Use all 100K vectors for PCA fitting
+	for _, targetDim := range []int{128, 256, 384, 512, 768} {
+		model, err := pca.Fit(pcaSample, targetDim)
+		if err != nil {
+			t.Logf("  PCA %d→%d: fit failed: %v", dataset.Dimension, targetDim, err)
+			continue
+		}
+		t.Logf("  PCA %d→%d: variance explained = %.2f%%",
+			dataset.Dimension, targetDim, model.TotalVarianceExplained()*100)
+	}
+	t.Log("")
+
+	// Test configs: baseline (no PCA), PCA at multiple dimensions
 	type pcaConfig struct {
 		name        string
 		pcaDim      int // 0 = no PCA
@@ -98,6 +114,10 @@ func TestGIST100K_PCA_Benchmark(t *testing.T) {
 		// Baseline: full 960-dim
 		{"960d-probe-8", 0, 8, 0.95},
 		{"960d-probe-16", 0, 16, 0.95},
+
+		// PCA 960→512
+		{"pca512-probe-8", 512, 8, 0.95},
+		{"pca512-probe-16", 512, 16, 0.95},
 
 		// PCA 960→256
 		{"pca256-probe-8", 256, 8, 0.95},
