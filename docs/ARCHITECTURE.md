@@ -165,10 +165,10 @@ Micro-benchmarks (single operation):
 - Full cycle: 153ms threshold vs 141ms direct (1.1x overhead)
 - Committee setup: 851ms (2-of-3) to 1.66s (5-of-7), one-time cost
 
-100K vector benchmark (128-dim, 3-of-5, 5 queries):
-- 3.63s avg query (threshold) vs 3.13s (direct) — 1.2x total overhead
-- Decrypt: 713ms vs 264ms (2.7x), but dot products dominate at ~2.8s
-- Recall@10: 5/5 both modes
+100K vector benchmark (SearchBatch with SIMD packing, 128-dim, 3-of-5, 5 queries):
+- 83ms avg query (threshold) vs 79ms (direct) — 1.05x total overhead
+- HE decrypt shows 0s (batch decrypt folded into dot product timing)
+- Recall@10: 5/5 both modes, ~26K vectors scored
 
 ThresholdDecrypt is parallelized internally (Shamir share conversion + PCKS partial shares run in goroutines per participant). Each `thresholdEvalEngine` has its own decryptor/encoder for thread safety. See `docs/THRESHOLD_CKKS.md` for the full architecture.
 

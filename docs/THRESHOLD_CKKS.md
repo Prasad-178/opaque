@@ -278,21 +278,20 @@ For threshold mode, `ThresholdHEProvider` creates:
 
 Decrypt overhead scales modestly with committee size: 2.1x at 2-of-3, 2.2x at 3-of-5, 2.5x at 5-of-7. Full cycle overhead stays at 1.1x because dot product dominates.
 
-#### 100K Vector Benchmark (128-dim, 3-of-5 committee, 5 queries)
+#### 100K Vector Benchmark (SearchBatch with SIMD Packing, 128-dim, 3-of-5 committee, 5 queries)
 
 | Metric | Direct | Threshold (3-of-5) |
 |--------|--------|---------------------|
-| Avg query latency | 3.13s | 3.63s |
-| Encrypt | 12ms | 14ms |
-| Dot products | 2.82s | 2.87s |
-| Decrypt | 264ms | 713ms |
-| AES + scoring | 35ms | 34ms |
-| Total overhead | — | 1.2x |
-| Decrypt overhead | — | 2.7x |
+| Avg query latency | 79ms | 83ms |
+| Encrypt | 6ms | 6ms |
+| Dot products | 53ms | 59ms |
+| HE decrypt | 0s | 0s |
+| AES + scoring | 20ms | 18ms |
+| Total overhead | — | 1.05x |
 | Recall@10 | 5/5 | 5/5 |
-| Vectors scored | ~26K | ~25K |
+| Vectors scored | ~26K | ~26K |
 
-At scale (100K vectors), the threshold overhead is 1.2x total because HE dot products dominate query time. Decrypt overhead is 2.7x but represents only ~20% of total query latency.
+With SIMD slot packing (64 centroids packed into 1 HE operation via SearchBatch), threshold CKKS adds essentially zero overhead to query latency — 1.05x total. HE decrypt shows 0s because batch decrypt is folded into the dot product timing. The per-op micro-benchmarks above (encrypt=10ms, dot=119ms, decrypt=24ms for 3-of-5) remain valid for individual operations.
 
 ## Noise and Recall Impact
 
