@@ -214,6 +214,171 @@ func TestThresholdProviderBatchDotProduct(t *testing.T) {
 	testProviderBatchDotProduct(t, provider)
 }
 
+// TestThresholdProviderNofN tests N-of-N threshold mode via the provider.
+func TestThresholdProviderNofN(t *testing.T) {
+	committee, err := threshold.NewCommittee(3, 3)
+	if err != nil {
+		t.Fatalf("NewCommittee failed: %v", err)
+	}
+	provider, err := crypto.NewThresholdHEProvider(committee, 2)
+	if err != nil {
+		t.Fatalf("NewThresholdHEProvider failed: %v", err)
+	}
+	defer provider.Close()
+	testProviderDotProduct(t, provider)
+}
+
+// --- Benchmarks ---
+
+// benchEncryptVector benchmarks encryption for a given provider.
+func benchEncryptVector(b *testing.B, provider crypto.HEProvider) {
+	b.Helper()
+	vec := make([]float64, 128)
+	for i := range vec {
+		vec[i] = float64(i+1) / 128.0
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = provider.EncryptVector(vec)
+	}
+}
+
+// benchDecryptScalar benchmarks scalar decryption for a given provider.
+func benchDecryptScalar(b *testing.B, provider crypto.HEProvider) {
+	b.Helper()
+	vec := make([]float64, 128)
+	vec[0] = 0.42
+	ct, err := provider.EncryptVector(vec)
+	if err != nil {
+		b.Fatalf("EncryptVector failed: %v", err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = provider.DecryptScalar(ct)
+	}
+}
+
+// benchDotProduct benchmarks HE dot product for a given provider.
+func benchDotProduct(b *testing.B, provider crypto.HEProvider) {
+	b.Helper()
+	query := make([]float64, 128)
+	centroid := make([]float64, provider.GetParams().MaxSlots())
+	for i := range query {
+		query[i] = float64(i+1) / 128.0
+	}
+	for i := range centroid {
+		centroid[i] = float64(i+1) / float64(len(centroid))
+	}
+
+	ct, err := provider.EncryptVector(query)
+	if err != nil {
+		b.Fatalf("EncryptVector failed: %v", err)
+	}
+	engine := provider.Acquire()
+	defer provider.Release(engine)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = engine.HomomorphicDotProduct(ct, centroid)
+	}
+}
+
+// benchDotProductAndDecrypt benchmarks the full HE dot product + decrypt cycle.
+func benchDotProductAndDecrypt(b *testing.B, provider crypto.HEProvider) {
+	b.Helper()
+	query := make([]float64, 128)
+	centroid := make([]float64, provider.GetParams().MaxSlots())
+	for i := range query {
+		query[i] = float64(i+1) / 128.0
+	}
+	for i := range centroid {
+		centroid[i] = float64(i+1) / float64(len(centroid))
+	}
+
+	ct, err := provider.EncryptVector(query)
+	if err != nil {
+		b.Fatalf("EncryptVector failed: %v", err)
+	}
+	engine := provider.Acquire()
+	defer provider.Release(engine)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, _ := engine.HomomorphicDotProduct(ct, centroid)
+		_, _ = engine.DecryptScalar(result)
+	}
+}
+
+// Direct mode benchmarks
+
+func BenchmarkDirectEncrypt128D(b *testing.B) {
+	p, _ := crypto.NewDirectHEProvider(1)
+	defer p.Close()
+	benchEncryptVector(b, p)
+}
+
+func BenchmarkDirectDecryptScalar(b *testing.B) {
+	p, _ := crypto.NewDirectHEProvider(1)
+	defer p.Close()
+	benchDecryptScalar(b, p)
+}
+
+func BenchmarkDirectDotProduct128D(b *testing.B) {
+	p, _ := crypto.NewDirectHEProvider(1)
+	defer p.Close()
+	benchDotProduct(b, p)
+}
+
+func BenchmarkDirectDotProductAndDecrypt(b *testing.B) {
+	p, _ := crypto.NewDirectHEProvider(1)
+	defer p.Close()
+	benchDotProductAndDecrypt(b, p)
+}
+
+// Threshold mode benchmarks (3-of-5 committee)
+
+func BenchmarkThresholdEncrypt128D(b *testing.B) {
+	c, _ := threshold.NewCommittee(5, 3)
+	p, _ := crypto.NewThresholdHEProvider(c, 1)
+	defer p.Close()
+	benchEncryptVector(b, p)
+}
+
+func BenchmarkThresholdDecryptScalar(b *testing.B) {
+	c, _ := threshold.NewCommittee(5, 3)
+	p, _ := crypto.NewThresholdHEProvider(c, 1)
+	defer p.Close()
+	benchDecryptScalar(b, p)
+}
+
+func BenchmarkThresholdDotProduct128D(b *testing.B) {
+	c, _ := threshold.NewCommittee(5, 3)
+	p, _ := crypto.NewThresholdHEProvider(c, 1)
+	defer p.Close()
+	benchDotProduct(b, p)
+}
+
+func BenchmarkThresholdDotProductAndDecrypt(b *testing.B) {
+	c, _ := threshold.NewCommittee(5, 3)
+	p, _ := crypto.NewThresholdHEProvider(c, 1)
+	defer p.Close()
+	benchDotProductAndDecrypt(b, p)
+}
+
+// Committee setup benchmark
+
+func BenchmarkCommitteeSetup3of5(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, _ = threshold.NewCommittee(5, 3)
+	}
+}
+
+func BenchmarkCommitteeSetup2of3(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, _ = threshold.NewCommittee(3, 2)
+	}
+}
+
 // TestProviderPoolSize verifies pool size is reported correctly.
 func TestProviderPoolSize(t *testing.T) {
 	direct, err := crypto.NewDirectHEProvider(3)
