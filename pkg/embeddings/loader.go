@@ -125,6 +125,63 @@ func SIFT10K(dir string) (*Dataset, error) {
 	}, nil
 }
 
+// GIST1M loads the GIST1M dataset from the given directory.
+// Expected files:
+//   - gist_base.fvecs: 1M base vectors (960-dim)
+//   - gist_query.fvecs: 1K query vectors
+//   - gist_groundtruth.ivecs: Ground truth nearest neighbors
+//
+// Download from: http://corpus-texmex.irisa.fr/
+func GIST1M(dir string) (*Dataset, error) {
+	basePath := filepath.Join(dir, "gist_base.fvecs")
+	queryPath := filepath.Join(dir, "gist_query.fvecs")
+	gtPath := filepath.Join(dir, "gist_groundtruth.ivecs")
+
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("base vectors not found: %s\nDownload with: scripts/download_gist1m.sh", basePath)
+	}
+
+	vectors, err := LoadFvecs(basePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load base vectors: %w", err)
+	}
+
+	var queries [][]float64
+	if _, err := os.Stat(queryPath); err == nil {
+		queries, err = LoadFvecs(queryPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load queries: %w", err)
+		}
+	}
+
+	var groundTruth [][]int
+	if _, err := os.Stat(gtPath); err == nil {
+		groundTruth, err = LoadIvecs(gtPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load ground truth: %w", err)
+		}
+	}
+
+	ids := make([]string, len(vectors))
+	for i := range ids {
+		ids[i] = fmt.Sprintf("gist_%d", i)
+	}
+
+	dim := 0
+	if len(vectors) > 0 {
+		dim = len(vectors[0])
+	}
+
+	return &Dataset{
+		Name:        "gist1m",
+		Dimension:   dim,
+		Vectors:     vectors,
+		IDs:         ids,
+		Queries:     queries,
+		GroundTruth: groundTruth,
+	}, nil
+}
+
 // GloVe loads GloVe word vectors from a text file.
 // Format: word dim1 dim2 dim3 ... dimN
 //

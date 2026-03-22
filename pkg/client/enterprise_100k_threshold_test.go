@@ -317,6 +317,60 @@ func TestEnterpriseSIFT1MDirectVsThreshold(t *testing.T) {
 		dataset.Queries[:numQueries], dataset.Dimension, 128, probeConfigs)
 }
 
+func getThresholdGISTDataPath() string {
+	candidates := []string{
+		"../../data/gist",
+		"../data/gist",
+		"../../../data/gist",
+	}
+	for _, p := range candidates {
+		abs, _ := filepath.Abs(p)
+		if _, err := os.Stat(filepath.Join(abs, "gist_base.fvecs")); err == nil {
+			return abs
+		}
+	}
+	return ""
+}
+
+// TestEnterpriseGIST1MDirectVsThreshold benchmarks on GIST1M (1M vectors, 960-dim).
+// This tests high-dimensional performance: with 960-dim vectors, CKKS slot packing
+// fits only 8 centroids per ciphertext (vs 64 for 128-dim SIFT).
+func TestEnterpriseGIST1MDirectVsThreshold(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping GIST1M threshold comparison in short mode")
+	}
+
+	dataPath := getThresholdGISTDataPath()
+	if dataPath == "" {
+		t.Skip("GIST1M dataset not found; run scripts/download_gist1m.sh first")
+	}
+
+	dataset, err := embeddings.GIST1M(dataPath)
+	if err != nil {
+		t.Fatalf("Failed to load GIST1M: %v", err)
+	}
+
+	numQueries := 50
+	if numQueries > len(dataset.Queries) {
+		numQueries = len(dataset.Queries)
+	}
+
+	// 960-dim: 8192/960 = 8 centroids per CKKS slot pack.
+	// Use 64 clusters (8 HE ops via SIMD packing).
+	probeConfigs := []struct {
+		name            string
+		topSuperBuckets int
+	}{
+		{"probe-8", 8},   // 12.5%
+		{"probe-16", 16}, // 25%
+		{"probe-32", 32}, // 50%
+		{"probe-48", 48}, // 75%
+	}
+
+	runThresholdDatasetBenchmark(t, "GIST 1M", dataset.Vectors, dataset.IDs,
+		dataset.Queries[:numQueries], dataset.Dimension, 64, probeConfigs)
+}
+
 // runThresholdDatasetBenchmark is the shared benchmark runner for any dataset.
 func runThresholdDatasetBenchmark(t *testing.T, datasetName string,
 	vectors [][]float64, ids []string, queries [][]float64,
