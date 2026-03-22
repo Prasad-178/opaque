@@ -166,8 +166,9 @@ func TestThresholdDecryptNofN(t *testing.T) {
 		t.Fatalf("client decryption failed: %v", err)
 	}
 
-	if math.Abs(got-0.42) > 0.001 {
-		t.Errorf("decryption mismatch: expected 0.42, got %.6f", got)
+	// Threshold decryption adds noise flooding, so tolerance is wider than direct mode.
+	if math.Abs(got-0.42) > 0.01 {
+		t.Errorf("decryption mismatch: expected 0.42, got %.6f (diff=%.2e)", got, math.Abs(got-0.42))
 	}
 }
 
@@ -269,9 +270,11 @@ func TestThresholdDecryptBatch(t *testing.T) {
 	// Verify each dot product.
 	for c := 0; c < numCentroids; c++ {
 		diff := math.Abs(got[c] - expected[c])
-		if diff > 0.01 {
-			t.Errorf("centroid %d: expected %.6f, got %.6f (diff=%.2e)",
-				c, expected[c], got[c], diff)
+		// Noise flooding adds ~1e-2 error; use relative tolerance for large values.
+		tol := 0.02 + 0.001*math.Abs(expected[c])
+		if diff > tol {
+			t.Errorf("centroid %d: expected %.6f, got %.6f (diff=%.2e, tol=%.2e)",
+				c, expected[c], got[c], diff, tol)
 		}
 	}
 

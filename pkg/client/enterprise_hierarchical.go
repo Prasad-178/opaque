@@ -33,13 +33,17 @@ import (
 //   - Uses enterprise-specific AES key for decryption
 //   - HE scoring on centroids (server never sees query or selection)
 //   - Decoy buckets hide real bucket access patterns
+//
+// The HE backend is pluggable via [crypto.HEProvider]:
+//   - DirectHEProvider: single-key mode (default)
+//   - ThresholdHEProvider: t-of-N threshold CKKS mode
 type EnterpriseHierarchicalClient struct {
 	config      hierarchical.Config
 	credentials *auth.ClientCredentials
 
 	// Derived from credentials
 	encryptor *encrypt.AESGCM
-	hePool    *crypto.EnginePool // Pool of HE engines for parallel ops
+	heProvider crypto.HEProvider // Pluggable HE backend (direct or threshold)
 
 	// Centroid cache for faster HE operations
 	// Pre-encodes centroids as HE plaintexts
@@ -60,13 +64,13 @@ type EnterpriseHierarchicalClient struct {
 const DefaultPoolSize = 4
 
 // NewEnterpriseHierarchicalClient creates a client from authenticated credentials
-// using the default HE engine pool size of 4.
+// using the default HE engine pool size of 4 and single-key (direct) HE mode.
 //
 // The credentials contain:
 //   - AES key for vector decryption
 //   - Centroids for HE scoring
 //
-// For control over the pool size, use [NewEnterpriseHierarchicalClientWithPoolSize].
+// For threshold CKKS or custom pool size, use [NewEnterpriseHierarchicalClientWithProvider].
 func NewEnterpriseHierarchicalClient(
 	cfg hierarchical.Config,
 	credentials *auth.ClientCredentials,
@@ -75,12 +79,11 @@ func NewEnterpriseHierarchicalClient(
 	return NewEnterpriseHierarchicalClientWithPoolSize(cfg, credentials, store, DefaultPoolSize)
 }
 
-// NewEnterpriseHierarchicalClientWithPoolSize creates a client with a configurable
-// number of HE engines in the worker pool.
+// NewEnterpriseHierarchicalClientWithPoolSize creates a client with single-key HE mode
+// and a configurable number of HE engines in the worker pool.
 //
 // Each HE engine consumes significant memory (~50MB for CKKS parameters with LogN=14)
 // but enables parallel homomorphic dot product computations during search.
-// A higher pool size improves search latency when many centroids need scoring.
 //
 // Recommended: poolSize = runtime.NumCPU(), capped at 8.
 // Minimum: 1. Values < 1 are clamped to 1.
@@ -90,26 +93,44 @@ func NewEnterpriseHierarchicalClientWithPoolSize(
 	store blob.Store,
 	poolSize int,
 ) (*EnterpriseHierarchicalClient, error) {
+	if poolSize < 1 {
+		poolSize = 1
+	}
+	provider, err := crypto.NewDirectHEProvider(poolSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HE provider: %w", err)
+	}
+	return NewEnterpriseHierarchicalClientWithProvider(cfg, credentials, store, provider)
+}
+
+// NewEnterpriseHierarchicalClientWithProvider creates a client with a custom HE provider.
+// Use this to enable threshold CKKS mode or any other HEProvider implementation.
+//
+// Example (threshold mode):
+//
+//	committee, _ := threshold.NewCommittee(5, 3)
+//	provider, _ := crypto.NewThresholdHEProvider(committee, 4)
+//	client, _ := NewEnterpriseHierarchicalClientWithProvider(cfg, creds, store, provider)
+func NewEnterpriseHierarchicalClientWithProvider(
+	cfg hierarchical.Config,
+	credentials *auth.ClientCredentials,
+	store blob.Store,
+	provider crypto.HEProvider,
+) (*EnterpriseHierarchicalClient, error) {
 	if credentials == nil {
 		return nil, fmt.Errorf("credentials are required")
 	}
 	if store == nil {
 		return nil, fmt.Errorf("store is required")
 	}
-	if poolSize < 1 {
-		poolSize = 1
+	if provider == nil {
+		return nil, fmt.Errorf("HE provider is required")
 	}
 
 	// Create encryptor from credentials
 	encryptor, err := encrypt.NewAESGCM(credentials.AESKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create encryptor: %w", err)
-	}
-
-	// Create HE engine pool for parallel operations
-	hePool, err := crypto.NewEnginePool(poolSize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create HE engine pool: %w", err)
 	}
 
 	// Override config from credentials if not set
@@ -121,19 +142,17 @@ func NewEnterpriseHierarchicalClientWithPoolSize(
 	}
 
 	// Create centroid cache and pre-load centroids
-	centroidCache := cache.NewCentroidCache(hePool.GetParams(), hePool.GetEncoder())
+	centroidCache := cache.NewCentroidCache(provider.GetParams(), provider.GetEncoder())
 	if len(credentials.Centroids) > 0 {
-		// Pre-encode all centroids (expensive but done once)
-		if err := centroidCache.LoadCentroids(credentials.Centroids, hePool.GetParams().MaxLevel()); err != nil {
+		if err := centroidCache.LoadCentroids(credentials.Centroids, provider.GetParams().MaxLevel()); err != nil {
 			return nil, fmt.Errorf("failed to load centroids into cache: %w", err)
 		}
 	}
 
 	// Create batch centroid cache for SIMD operations
-	batchCentroidCache := cache.NewBatchCentroidCache(hePool.GetParams(), hePool.GetEncoder(), cfg.Dimension)
+	batchCentroidCache := cache.NewBatchCentroidCache(provider.GetParams(), provider.GetEncoder(), cfg.Dimension)
 	if len(credentials.Centroids) > 0 {
-		// Pack all centroids into batch plaintexts
-		if err := batchCentroidCache.LoadCentroids(credentials.Centroids, hePool.GetParams().MaxLevel()); err != nil {
+		if err := batchCentroidCache.LoadCentroids(credentials.Centroids, provider.GetParams().MaxLevel()); err != nil {
 			return nil, fmt.Errorf("failed to load batch centroids: %w", err)
 		}
 	}
@@ -142,7 +161,7 @@ func NewEnterpriseHierarchicalClientWithPoolSize(
 		config:             cfg,
 		credentials:        credentials,
 		encryptor:          encryptor,
-		hePool:             hePool,
+		heProvider:         provider,
 		centroidCache:      centroidCache,
 		batchCentroidCache: batchCentroidCache,
 		store:              store,
@@ -179,7 +198,7 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 
 	// Step 1a: Encrypt query with HE
 	startEncrypt := time.Now()
-	encQuery, err := c.hePool.EncryptVector(normalizedQuery)
+	encQuery, err := c.heProvider.EncryptVector(normalizedQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt query: %w", err)
 	}
@@ -198,7 +217,7 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 
 	var wg sync.WaitGroup
 	// Use pool size as the number of workers (each has its own engine)
-	numWorkers := c.hePool.Size()
+	numWorkers := c.heProvider.Size()
 	if numWorkers > len(centroids) {
 		numWorkers = len(centroids)
 	}
@@ -209,8 +228,8 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 		go func() {
 			defer wg.Done()
 			// Acquire an engine from the pool for this worker
-			engine := c.hePool.Acquire()
-			defer c.hePool.Release(engine)
+			engine := c.heProvider.Acquire()
+			defer c.heProvider.Release(engine)
 
 			for i := range workChan {
 				if useCached {
@@ -253,8 +272,8 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 		decryptWg.Add(1)
 		go func() {
 			defer decryptWg.Done()
-			engine := c.hePool.Acquire()
-			defer c.hePool.Release(engine)
+			engine := c.heProvider.Acquire()
+			defer c.heProvider.Release(engine)
 
 			for i := range decryptChan {
 				scores[i], decryptErrs[i] = engine.DecryptScalar(encScores[i])
@@ -421,7 +440,7 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 	// Pack query for batch operation (replicate across slots)
 	startEncrypt := time.Now()
 	packedQuery := c.batchCentroidCache.PackQuery(normalizedQuery)
-	encPackedQuery, err := c.hePool.EncryptVector(packedQuery)
+	encPackedQuery, err := c.heProvider.EncryptVector(packedQuery)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt packed query: %w", err)
 	}
@@ -438,7 +457,7 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 
 	for packIdx, packedCentroids := range packedPlaintexts {
 		// Compute batch dot products
-		encResult, err := c.hePool.HomomorphicBatchDotProduct(
+		encResult, err := c.heProvider.HomomorphicBatchDotProduct(
 			encPackedQuery,
 			packedCentroids,
 			c.batchCentroidCache.GetCentroidsPerPack(),
@@ -449,7 +468,7 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 		}
 
 		// Decrypt batch results
-		batchScores, err := c.hePool.DecryptBatchScalars(
+		batchScores, err := c.heProvider.DecryptBatchScalars(
 			encResult,
 			c.batchCentroidCache.GetCentroidsPerPack(),
 			dimension,
@@ -666,7 +685,7 @@ func (c *EnterpriseHierarchicalClient) UpdateCredentials(creds *auth.ClientCrede
 
 	// Reload centroid caches if centroids changed.
 	if len(creds.Centroids) > 0 {
-		level := c.hePool.GetParams().MaxLevel()
+		level := c.heProvider.GetParams().MaxLevel()
 		if c.centroidCache != nil && c.centroidCache.NeedsRefresh(creds.Centroids) {
 			if err := c.centroidCache.LoadCentroids(creds.Centroids, level); err != nil {
 				return fmt.Errorf("failed to reload centroid cache: %w", err)
