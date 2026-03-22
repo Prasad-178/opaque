@@ -136,8 +136,10 @@ func testProviderBatchDotProduct(t *testing.T, provider crypto.HEProvider) {
 
 	for c := 0; c < numCentroids; c++ {
 		diff := math.Abs(got[c] - expected[c])
-		if diff > 0.01 {
-			t.Errorf("centroid %d: expected %.6f, got %.6f (diff=%.2e)", c, expected[c], got[c], diff)
+		// Use relative tolerance for large values; threshold mode adds noise flooding.
+		tol := 0.02 + 0.001*math.Abs(expected[c])
+		if diff > tol {
+			t.Errorf("centroid %d: expected %.6f, got %.6f (diff=%.2e, tol=%.2e)", c, expected[c], got[c], diff, tol)
 		}
 	}
 }
