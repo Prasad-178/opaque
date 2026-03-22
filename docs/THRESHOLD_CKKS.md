@@ -262,7 +262,7 @@ For threshold mode, `ThresholdHEProvider` creates:
 
 ### Parallelized Threshold Decryption
 
-`ThresholdDecrypt` is now parallelized internally: Shamir share conversion (Shamir-to-additive) and PCKS partial share generation run in goroutines per participant, simulating a real distributed deployment where each committee node computes independently. This required giving each `thresholdEvalEngine` its own decryptor and encoder, since Lattigo's decryptor is not thread-safe. The unnecessary mutex on the `Committee` struct was also removed.
+`ThresholdDecrypt` is now parallelized internally: Shamir share conversion (Shamir-to-additive) and PCKS partial share generation run in goroutines per participant, simulating a real distributed deployment where each committee node computes independently. This required giving each `thresholdEvalEngine` its own decryptor and encoder — Lattigo's `rlwe.Decryptor` is NOT thread-safe, and sharing one across goroutines caused a data race that manifested as underflow panics during concurrent decryption. The unnecessary mutex on the `Committee` struct was also removed.
 
 ### Benchmark Results (Apple M4)
 
@@ -278,20 +278,28 @@ For threshold mode, `ThresholdHEProvider` creates:
 
 Decrypt overhead scales modestly with committee size: 2.1x at 2-of-3, 2.2x at 3-of-5, 2.5x at 5-of-7. Full cycle overhead stays at 1.1x because dot product dominates.
 
-#### 100K Vector Benchmark (SearchBatch with SIMD Packing, 128-dim, 3-of-5 committee, 5 queries)
+#### 100K Vector Benchmark (SearchBatch with SIMD Packing, 128-dim, 3-of-5 committee)
+
+20 independent random query vectors (not from the dataset), recall measured against brute-force cosine similarity ground truth. Network latency simulated with 2ms RTT (same datacenter), 2 round trips per committee node, all nodes queried in parallel. RTT is configurable via `Committee.SimulatedRTT`.
 
 | Metric | Direct | Threshold (3-of-5) |
 |--------|--------|---------------------|
-| Avg query latency | 79ms | 83ms |
-| Encrypt | 6ms | 6ms |
-| Dot products | 53ms | 59ms |
-| HE decrypt | 0s | 0s |
-| AES + scoring | 20ms | 18ms |
-| Total overhead | — | 1.05x |
-| Recall@10 | 5/5 | 5/5 |
-| Vectors scored | ~26K | ~26K |
+| Avg query latency | 78ms | 89ms |
+| HE encrypt | 6ms | 6ms |
+| HE dot+decrypt | 53ms | 65ms |
+| AES + scoring | 19ms | 18ms |
+| Total overhead | — | 1.14x |
+| HE overhead | — | 1.22x |
+| Recall@10 | 36.5% | 40.5% |
+| Vectors scored | ~24.5K | ~24.5K |
 
-With SIMD slot packing (64 centroids packed into 1 HE operation via SearchBatch), threshold CKKS adds essentially zero overhead to query latency — 1.05x total. HE decrypt shows 0s because batch decrypt is folded into the dot product timing. The per-op micro-benchmarks above (encrypt=10ms, dot=119ms, decrypt=24ms for 3-of-5) remain valid for individual operations.
+**Recall methodology:** Recall is measured against brute-force cosine similarity ground truth over all 100K vectors, NOT self-match. The small variance between direct (36.5%) and threshold (40.5%) recall is random noise from different cluster selection due to HE precision differences — both modes are equivalent in expectation.
+
+**Current probe configuration:** TopSuperBuckets=8 out of 64 clusters (12.5% probe). This is a conservative setting. Per SIFT1M results, recall can be pushed to 97%+ by increasing the probe ratio (e.g., strict-8 at 6.2% probe achieves 96.8% on SIFT1M with 128 clusters).
+
+**SIMD slot packing:** With 8192 usable CKKS slots and 128-dim vectors, 64 centroids are packed into a single ciphertext. All 64 centroids are scored in 1 HE multiply + 7 rotations (log2(128)). SearchBatch reduces what would be 64 separate HE operations to just 1.
+
+The per-op micro-benchmarks above (encrypt=10ms, dot=119ms, decrypt=24ms for 3-of-5) remain valid for individual operations.
 
 ## Noise and Recall Impact
 
@@ -341,7 +349,7 @@ Created `HEProvider` interface with `DirectHEProvider` and `ThresholdHEProvider`
 
 ### Phase 2: Threshold Decryption POC — DONE
 
-Implemented full threshold CKKS using Lattigo's `mhe` package. Local POC where `Committee` simulates N participants in-process. Validated: collective key generation, Shamir threshold distribution, partial key-switch with noise flooding, correct results within expected tolerance, latency overhead benchmarked. ThresholdDecrypt is parallelized internally — Shamir-to-additive conversion and PCKS partial share generation run concurrently per participant. Each `thresholdEvalEngine` has its own decryptor/encoder for thread safety (Lattigo's decryptor is not safe for concurrent use). Noise flooding sigma=2^20 balances security vs precision.
+Implemented full threshold CKKS using Lattigo's `mhe` package. Local POC where `Committee` simulates N participants in-process. Validated: collective key generation, Shamir threshold distribution, partial key-switch with noise flooding, correct results within expected tolerance, latency overhead benchmarked. ThresholdDecrypt is parallelized internally — Shamir-to-additive conversion and PCKS partial share generation run concurrently per participant. Each `thresholdEvalEngine` has its own decryptor/encoder for thread safety — Lattigo's `rlwe.Decryptor` is NOT thread-safe, and sharing a decryptor across goroutines caused underflow panics in concurrent decryption (data race). Noise flooding sigma=2^20 balances security vs precision.
 
 ### Phase 3: Committee gRPC Service
 

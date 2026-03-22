@@ -77,7 +77,7 @@ Result: an encrypted scalar (the dot product) that only the client can decrypt.
 
 ### Batch Mode (CKKS Slot Packing)
 
-With 16,384 slots and 128-dimensional vectors, we can pack `16384 / 128 = 128` centroids per plaintext. For 64 centroids, this means **a single HE operation** replaces 64 separate ones.
+With 8,192 usable CKKS slots and 128-dimensional vectors, we can pack `8192 / 128 = 64` centroids per ciphertext. For 64 centroids, this means **a single HE operation** replaces 64 separate ones: 1 HE multiply + 7 rotations (log2(128)) scores all 64 centroids simultaneously.
 
 The query is replicated across all centroid positions in the packed plaintext. After multiplication and partial summation (rotating only within each 128-slot segment), each segment's first slot contains one dot product result.
 
@@ -165,12 +165,13 @@ Micro-benchmarks (single operation):
 - Full cycle: 153ms threshold vs 141ms direct (1.1x overhead)
 - Committee setup: 851ms (2-of-3) to 1.66s (5-of-7), one-time cost
 
-100K vector benchmark (SearchBatch with SIMD packing, 128-dim, 3-of-5, 5 queries):
-- 83ms avg query (threshold) vs 79ms (direct) — 1.05x total overhead
-- HE decrypt shows 0s (batch decrypt folded into dot product timing)
-- Recall@10: 5/5 both modes, ~26K vectors scored
+100K vector benchmark (SearchBatch with SIMD packing, 128-dim, 3-of-5, 20 independent random queries, brute-force ground truth, 2ms simulated datacenter RTT):
+- 89ms avg query (threshold) vs 78ms (direct) — 1.14x total overhead, 1.22x HE overhead
+- HE encrypt: 6ms both modes; HE dot+decrypt: 65ms (threshold) vs 53ms (direct); AES+scoring: ~18-19ms both
+- Recall@10: 36.5% (direct), 40.5% (threshold) — measured against brute-force cosine similarity ground truth, NOT self-match
+- ~24.5K vectors scored both modes, TopSuperBuckets=8/64 (12.5% probe, conservative — pushable to 97%+ per SIFT1M results)
 
-ThresholdDecrypt is parallelized internally (Shamir share conversion + PCKS partial shares run in goroutines per participant). Each `thresholdEvalEngine` has its own decryptor/encoder for thread safety. See `docs/THRESHOLD_CKKS.md` for the full architecture.
+ThresholdDecrypt is parallelized internally (Shamir share conversion + PCKS partial shares run in goroutines per participant). Each `thresholdEvalEngine` has its own decryptor/encoder — Lattigo's `rlwe.Decryptor` is NOT thread-safe (sharing it caused underflow panics from a data race in concurrent decryption). See `docs/THRESHOLD_CKKS.md` for the full architecture.
 
 ## Incremental Indexing
 

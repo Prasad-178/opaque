@@ -121,12 +121,13 @@ Optional PCA via SVD in `go/pkg/pca/`. Enabled with `Config.PCADimension`. Appli
 ### Threshold CKKS (Key Ownership) — Phases 1–2 Complete, Parallelized
 Split the CKKS secret key across an independent key committee using Lattigo's `mhe` package. The DB server holds only evaluation keys and cannot decrypt. Decryption is a single-round protocol where t-of-N committee nodes produce partial key-switches, re-encrypting results directly under the querying client's ephemeral public key.
 
-ThresholdDecrypt is now parallelized internally — Shamir-to-additive share conversion and PCKS partial share generation run in goroutines per participant. Each `thresholdEvalEngine` has its own decryptor/encoder (Lattigo decryptor not thread-safe). Noise flooding sigma=2^20.
+ThresholdDecrypt is now parallelized internally — Shamir-to-additive share conversion and PCKS partial share generation run in goroutines per participant. Each `thresholdEvalEngine` has its own decryptor/encoder — Lattigo's `rlwe.Decryptor` is NOT thread-safe (sharing it caused a data race manifesting as underflow panics in concurrent decryption). Noise flooding sigma=2^20.
 
-**Latest benchmarks** (Apple M4, SearchBatch with SIMD packing, 100K vectors, 128-dim, 3-of-5 committee):
-- 83ms avg query (threshold) vs 79ms (direct) — **1.05x total overhead**
-- HE decrypt shows 0s (batch decrypt folded into dot product timing)
-- Recall@10: 5/5 both modes, ~26K vectors scored
+**Latest benchmarks** (Apple M4, SearchBatch with SIMD packing, 100K vectors, 128-dim, 3-of-5 committee, 20 independent random queries, brute-force ground truth, 2ms simulated datacenter RTT):
+- 89ms avg query (threshold) vs 78ms (direct) — **1.14x total overhead**, 1.22x HE overhead
+- HE encrypt: 6ms both; HE dot+decrypt: 65ms (threshold) vs 53ms (direct); AES+scoring: ~18-19ms both
+- Recall@10: 36.5% (direct), 40.5% (threshold) — against brute-force cosine similarity ground truth (NOT self-match). Small variance is random noise from cluster selection.
+- ~24.5K vectors scored, TopSuperBuckets=8/64 (12.5% probe, conservative — pushable to 97%+ per SIFT1M results)
 - Micro-benchmarks: decrypt scales from 22ms (2-of-3) to 27ms (5-of-7)
 
 Implementation phases:
