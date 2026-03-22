@@ -36,6 +36,21 @@ func getThresholdSIFTDataPath() string {
 	return ""
 }
 
+func getThresholdSIFTSmallDataPath() string {
+	candidates := []string{
+		"../../data/siftsmall",
+		"../data/siftsmall",
+		"../../../data/siftsmall",
+	}
+	for _, p := range candidates {
+		abs, _ := filepath.Abs(p)
+		if _, err := os.Stat(filepath.Join(abs, "siftsmall_base.fvecs")); err == nil {
+			return abs
+		}
+	}
+	return ""
+}
+
 // TestEnterprise100KDirectVsThreshold benchmarks direct vs threshold CKKS on
 // the first 100K vectors of SIFT1M with real query vectors and brute-force
 // ground truth. Tests multiple probe configs to show the recall/latency tradeoff.
@@ -227,6 +242,196 @@ func TestEnterprise100KDirectVsThreshold(t *testing.T) {
 	fmt.Println()
 	fmt.Println("PRIVACY:  Direct = single-key (partial), Threshold = 3-of-5 (full key distribution)")
 	fmt.Println("NETWORK:  Threshold adds simulated 2ms datacenter RTT (2 round trips, all nodes parallel)")
+}
+
+// TestEnterpriseSIFT10KDirectVsThreshold runs the same benchmark on the smaller
+// SIFT10K dataset (10K vectors, 100 queries). Faster to run, useful for CI.
+func TestEnterpriseSIFT10KDirectVsThreshold(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT10K threshold comparison in short mode")
+	}
+
+	dataPath := getThresholdSIFTSmallDataPath()
+	if dataPath == "" {
+		t.Skip("SIFT10K dataset not found")
+	}
+
+	dataset, err := embeddings.SIFT10K(dataPath)
+	if err != nil {
+		t.Fatalf("Failed to load SIFT10K: %v", err)
+	}
+
+	numQueries := 100
+	if numQueries > len(dataset.Queries) {
+		numQueries = len(dataset.Queries)
+	}
+
+	probeConfigs := []struct {
+		name            string
+		topSuperBuckets int
+	}{
+		{"probe-2", 2},
+		{"probe-4", 4},
+		{"probe-8", 8},
+	}
+
+	runThresholdDatasetBenchmark(t, "SIFT 10K", dataset.Vectors, dataset.IDs,
+		dataset.Queries[:numQueries], dataset.Dimension, 16, probeConfigs)
+}
+
+// TestEnterpriseSIFT1MDirectVsThreshold runs on the full SIFT1M dataset (1M vectors).
+// This is the gold standard benchmark. Takes a few minutes to run.
+func TestEnterpriseSIFT1MDirectVsThreshold(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping SIFT1M threshold comparison in short mode")
+	}
+
+	dataPath := getThresholdSIFTDataPath()
+	if dataPath == "" {
+		t.Skip("SIFT1M dataset not found; run scripts/download_sift1m.sh first")
+	}
+
+	dataset, err := embeddings.SIFT1M(dataPath)
+	if err != nil {
+		t.Fatalf("Failed to load SIFT1M: %v", err)
+	}
+
+	numQueries := 50
+	if numQueries > len(dataset.Queries) {
+		numQueries = len(dataset.Queries)
+	}
+
+	probeConfigs := []struct {
+		name            string
+		topSuperBuckets int
+	}{
+		{"probe-4", 4},
+		{"probe-8", 8},
+		{"probe-16", 16},
+	}
+
+	runThresholdDatasetBenchmark(t, "SIFT 1M", dataset.Vectors, dataset.IDs,
+		dataset.Queries[:numQueries], dataset.Dimension, 128, probeConfigs)
+}
+
+// runThresholdDatasetBenchmark is the shared benchmark runner for any dataset.
+func runThresholdDatasetBenchmark(t *testing.T, datasetName string,
+	vectors [][]float64, ids []string, queries [][]float64,
+	dimension, numSuperBuckets int,
+	probeConfigs []struct {
+		name            string
+		topSuperBuckets int
+	},
+) {
+	t.Helper()
+	ctx := context.Background()
+
+	numVectors := len(vectors)
+	numQueries := len(queries)
+	topK := 10
+	simulatedRTT := 2 * time.Millisecond
+
+	fmt.Println("============================================================")
+	fmt.Printf("%s: DIRECT vs THRESHOLD CKKS\n", datasetName)
+	fmt.Println("============================================================")
+	fmt.Printf("  Vectors: %d (%d-dim), Queries: %d, Clusters: %d\n",
+		numVectors, dimension, numQueries, numSuperBuckets)
+
+	// Brute-force ground truth
+	fmt.Println("\n  Computing brute-force ground truth...")
+	startGT := time.Now()
+	groundTruth := make([][]string, numQueries)
+	for q := 0; q < numQueries; q++ {
+		type scored struct {
+			id    string
+			score float64
+		}
+		scores := make([]scored, numVectors)
+		for i := 0; i < numVectors; i++ {
+			scores[i] = scored{ids[i], cosineSimThreshold(queries[q], vectors[i])}
+		}
+		sort.Slice(scores, func(i, j int) bool { return scores[i].score > scores[j].score })
+		groundTruth[q] = make([]string, topK)
+		for i := 0; i < topK; i++ {
+			groundTruth[q][i] = scores[i].id
+		}
+	}
+	fmt.Printf("  Ground truth computed in %v\n", time.Since(startGT))
+
+	type benchResult struct {
+		name            string
+		topSuperBuckets int
+		directLatency   time.Duration
+		threshLatency   time.Duration
+		directRecall    float64
+		threshRecall    float64
+	}
+	var allResults []benchResult
+
+	for _, pc := range probeConfigs {
+		fmt.Printf("\n  --- %s (TopSuperBuckets=%d/%d = %.1f%%) ---\n",
+			pc.name, pc.topSuperBuckets, numSuperBuckets,
+			float64(pc.topSuperBuckets)/float64(numSuperBuckets)*100)
+
+		enterpriseCfg, _ := enterprise.NewConfig("bench-threshold", dimension, numSuperBuckets)
+		store := blob.NewMemoryStore()
+		cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
+		cfg.TopSuperBuckets = pc.topSuperBuckets
+		cfg.SubBucketsPerSuper = 4
+		cfg.NumDecoys = 8
+
+		builder, _ := hierarchical.NewEnterpriseBuilder(cfg, enterpriseCfg)
+		builder.Build(ctx, ids, vectors, store)
+		enterpriseCfg = builder.GetEnterpriseConfig()
+
+		enterpriseStore := enterprise.NewMemoryStore()
+		enterpriseStore.Put(ctx, enterpriseCfg)
+		authService := auth.NewService(auth.DefaultServiceConfig(), enterpriseStore)
+		authService.RegisterUser(ctx, "user", "bench-threshold", []byte("pass"), []string{auth.ScopeSearch})
+		creds, _ := authService.Authenticate(ctx, "user", []byte("pass"))
+
+		// Direct
+		directProvider, _ := crypto.NewDirectHEProvider(4)
+		directClient, _ := NewEnterpriseHierarchicalClientWithProvider(cfg, creds, store, directProvider)
+		dRes := runSIFTBenchmark(t, directClient, queries, groundTruth, topK)
+		fmt.Printf("    Direct:    %v, Recall@%d: %.1f%%\n", dRes.avgLatency.Round(time.Millisecond), topK, dRes.avgRecall*100)
+
+		// Threshold
+		committee, _ := threshold.NewCommittee(5, 3)
+		committee.SimulatedRTT = simulatedRTT
+		threshProvider, _ := crypto.NewThresholdHEProvider(committee, 4)
+		threshClient, _ := NewEnterpriseHierarchicalClientWithProvider(cfg, creds, store, threshProvider)
+		tRes := runSIFTBenchmark(t, threshClient, queries, groundTruth, topK)
+		fmt.Printf("    Threshold: %v, Recall@%d: %.1f%%\n", tRes.avgLatency.Round(time.Millisecond), topK, tRes.avgRecall*100)
+
+		directProvider.Close()
+		threshProvider.Close()
+
+		allResults = append(allResults, benchResult{
+			name:            pc.name,
+			topSuperBuckets: pc.topSuperBuckets,
+			directLatency:   dRes.avgLatency,
+			threshLatency:   tRes.avgLatency,
+			directRecall:    dRes.avgRecall,
+			threshRecall:    tRes.avgRecall,
+		})
+	}
+
+	// Summary
+	fmt.Printf("\n  SUMMARY (%s, %d-dim, %d queries, 3-of-5, %v RTT):\n", datasetName, dimension, numQueries, simulatedRTT)
+	fmt.Println("  ┌────────────┬────────┬──────────────────────┬──────────────────────┬──────────┐")
+	fmt.Println("  │ Config     │ Probe% │ DIRECT (lat / rec)   │ THRESHOLD (lat / rec)│ Overhead │")
+	fmt.Println("  ├────────────┼────────┼──────────────────────┼──────────────────────┼──────────┤")
+	for _, r := range allResults {
+		probe := float64(r.topSuperBuckets) / float64(numSuperBuckets) * 100
+		overhead := float64(r.threshLatency) / float64(r.directLatency)
+		fmt.Printf("  │ %-10s │ %4.1f%% │ %7v / %5.1f%%      │ %7v / %5.1f%%      │  %.2fx   │\n",
+			r.name, probe,
+			r.directLatency.Round(time.Millisecond), r.directRecall*100,
+			r.threshLatency.Round(time.Millisecond), r.threshRecall*100,
+			overhead)
+	}
+	fmt.Println("  └────────────┴────────┴──────────────────────┴──────────────────────┴──────────┘")
 }
 
 type siftBenchResult struct {
