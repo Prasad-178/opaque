@@ -2,10 +2,10 @@
 
 ## Test Environment
 
-- **Machine**: Apple M4 Pro
+- **Machine**: Apple M4 Pro (10 CPUs)
 - **Go Version**: 1.25
 - **HE Library**: Lattigo v5 (CKKS scheme, 128-bit security)
-- **Dataset**: SIFT10K (10K), SIFT1M (1M), and synthetic 100K real 128-dim embeddings
+- **Datasets**: SIFT10K (10K, 128-dim), SIFT1M (1M, 128-dim), GIST1M (1M, 960-dim), synthetic 100K
 
 ## Core Operations
 
@@ -124,6 +124,49 @@ The SIFT1M dataset contains 1,000,000 128-dimensional real embeddings. All recal
 
 Latency scales sub-linearly with dataset size due to clustering — doubling vectors doesn't double query time.
 
+### GIST 100K (960-dim Real Embeddings)
+
+Measured with `go test -tags gist -v -run TestGIST100K_PCA_Benchmark ./test/ -timeout 60m`.
+
+The GIST dataset contains 960-dimensional real image descriptors — 7.5x larger than SIFT's 128-dim. With 960-dim vectors, CKKS slot packing fits only 8 centroids per ciphertext (vs 64 for SIFT 128-dim), requiring 4x more HE operations per query. All recall numbers are against brute-force cosine similarity on the original 960-dim vectors.
+
+**Configuration:** 100K vectors, 32 clusters (~3,125 vectors each), 8 decoys, multi-probe threshold=0.95.
+
+| Config | Recall@1 | Recall@10 | Avg Query | P50 Query |
+|--------|----------|-----------|-----------|-----------|
+| probe-8 (25%) | 100% | **98.8%** | **2.6s** | 2.3s |
+| probe-16 (50%) | 100% | **99.2%** | 6.2s | 6.0s |
+
+#### PCA Dimensionality Reduction on GIST
+
+PCA is applied client-side before CKKS encryption — zero privacy impact. Recall is measured against the original 960-dim ground truth.
+
+**PCA Variance Explained (fitted on 100K GIST vectors):**
+
+| Target Dim | Variance Retained | Centroids/Pack | HE Ops (32 clusters) |
+|-----------|-------------------|----------------|---------------------|
+| 960 (none) | 100% | 8 | 4 |
+| 512 | 98.4% | 16 | 2 |
+| 256 | 93.7% | 32 | 1 |
+| 128 | 86.6% | 64 | 1 |
+
+**PCA Search Results:**
+
+| Config | Recall@1 | Recall@10 | Avg Query | Speedup |
+|--------|----------|-----------|-----------|---------|
+| **960d probe-8 (baseline)** | **100%** | **98.8%** | **2.6s** | **1x** |
+| PCA→256 probe-8 | 38% | 19.0% | 695ms | 3.7x |
+| PCA→256 probe-16 | 36% | 19.2% | 213ms | — |
+| PCA→128 probe-8 | 24% | 14.0% | 296ms | 8.8x |
+| PCA→128 probe-16 | 26% | 14.2% | 270ms | — |
+
+**Finding:** GIST image descriptors have variance spread uniformly across all 960 dimensions. Even at 93.7% variance retained (256-dim), recall@10 drops to ~19%. PCA is effective for embeddings with concentrated variance (e.g., language model embeddings where top components dominate), but not for holistic image descriptors like GIST.
+
+> **TODO:** Run PCA→512 benchmark (98.4% variance, 2 HE ops). Expected latency ~1-1.5s — could be the sweet spot balancing recall and speed for GIST. Run with:
+> ```bash
+> go test -tags gist -v -run TestGIST100K_PCA_Benchmark ./test/ -timeout 60m
+> ```
+
 ## Pipeline Optimizations
 
 The following optimizations have been applied to the k-means + HE search pipeline:
@@ -133,11 +176,30 @@ The following optimizations have been applied to the k-means + HE search pipelin
 | Parallel vector encryption | Build | ~4-5x faster build (multi-core AES-GCM) |
 | K-means multi-initialization | Build | +0.5-1% Recall (better centroids via lowest-inertia selection) |
 | Empty cluster recovery | Build | More balanced cluster sizes, fewer wasted partitions |
+| SIMD batch HE (slot packing) | Search | 13.5x speedup (64 ops → 1 op + 7 rotations) |
+| Parallel batch pack processing | Search | Up to ~3x for high-dim (960d: 4 packs run concurrently) |
+| Lazy decoy skip | Search | ~50% less AES decrypt + scoring (skip decoy cluster blobs) |
 | Adaptive score-gap probing | Search | 5-10% fewer vectors fetched at same recall |
 | Pre-normalized storage | Search | 10-15% faster local scoring (skip per-vector normalization) |
 | Parallel AES decryption | Search | Multi-core blob decryption in search pipeline |
+| Dimension-bounded rotations | Search | Fewer HE rotations for non-power-of-2 dims (960d: 10 vs 14) |
+| PCA dimensionality reduction | Both | Reduces HE ops, AES size, local scoring (client-side, zero privacy impact) |
 
-All optimizations preserve privacy guarantees: same HE encryption, same AES-GCM, same decoy patterns.
+All optimizations preserve privacy guarantees: same HE encryption, same AES-GCM, same decoy patterns. PCA is applied client-side before encryption — the server never sees original or reduced vectors.
+
+### High-Dimensional Optimization Impact (GIST 100K, 960-dim)
+
+The parallel batch pack + lazy decoy optimizations have the most impact on high-dimensional vectors where HE packing efficiency is poor:
+
+| Config | Before Optimization | After Optimization | Speedup |
+|--------|--------------------|--------------------|---------|
+| GIST 100K probe-8 (25%) | ~8.6s | **~2.6s** | **3.3x** |
+| GIST 100K probe-16 (50%) | ~12.4s | **~6.2s** | **2.0x** |
+
+The improvement comes from:
+- **Parallel batch pack processing**: 4 CKKS packs run concurrently instead of sequentially (up to 4x on HE scoring phase).
+- **Lazy decoy skip**: client filters fetched blobs to only decrypt/score real clusters, skipping ~50% of AES + scoring work.
+- **Dimension-bounded rotations**: 10 rotations for 960-dim instead of 14 (saves ~40ms per sequential HE op).
 
 ### Build Speed (strict-8 config, 1M vectors)
 
@@ -170,8 +232,6 @@ The privacy guarantees add overhead compared to plaintext search:
 ## Reproducing
 
 ```bash
-cd go
-
 # Core crypto benchmarks
 go test -bench=. -benchmem ./pkg/crypto/... ./pkg/lsh/...
 
@@ -193,4 +253,8 @@ go test -tags sift1m -v -run TestSIFT1MAccuracy ./test/ -timeout 45m
 
 # SIFT1M scaling benchmark (~10 min)
 go test -tags sift1m -v -run TestSIFT1MScaling ./test/ -timeout 45m
+
+# GIST 100K PCA benchmark (960-dim, requires dataset download, ~20 min)
+../scripts/download_gist1m.sh
+go test -tags gist -v -run TestGIST100K_PCA_Benchmark ./test/ -timeout 60m
 ```
