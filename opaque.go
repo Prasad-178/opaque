@@ -57,10 +57,14 @@ import (
 	"github.com/Prasad-178/opaque/pkg/enterprise"
 	"github.com/Prasad-178/opaque/pkg/hierarchical"
 	"github.com/Prasad-178/opaque/pkg/pca"
+	"github.com/Prasad-178/opaque/pkg/pq"
 )
 
 // StorageBackend selects where encrypted vector blobs are stored.
 type StorageBackend int
+
+// DefaultPQSeed is the random seed used for PQ codebook training.
+const DefaultPQSeed int64 = 73
 
 const (
 	// Memory stores all data in RAM. Fast but not persistent across restarts.
@@ -133,6 +137,21 @@ type Config struct {
 	// Must be less than Dimension. Set to 0 to disable (default).
 	// Default: 0 (disabled).
 	PCADimension int
+
+	// PQSubspaces enables product quantization for faster local scoring.
+	// When set to a positive value, vectors are additionally PQ-encoded
+	// into compact codes (PQSubspaces bytes per vector). During search,
+	// PQ codes are used for fast approximate scoring via ADC lookup tables,
+	// with exact re-ranking of top candidates using full vectors.
+	//
+	// The effective vector dimension (after PCA if enabled) must be divisible
+	// by PQSubspaces. Common values: 8, 16, 32.
+	//
+	// PQ is applied client-side before AES encryption — zero privacy impact.
+	// The server never sees PQ codes, codebooks, or scoring results.
+	//
+	// Default: 0 (disabled).
+	PQSubspaces int
 
 	// NumKMeansInit is the number of k-means clustering initializations to run.
 	// Multiple runs with different seeds are executed in parallel, and the result
@@ -251,6 +270,7 @@ type DB struct {
 	blobStore     blob.Store
 	searchClient  *client.EnterpriseHierarchicalClient
 	pcaModel      *pca.PCA // nil when PCA is disabled
+	pqModel       *pq.PQ   // nil when PQ is disabled
 	clusterStats  hierarchical.ClusterStats
 	enterpriseCfg *enterprise.Config
 	clusterCounts []int // per-cluster vector counts for incremental centroid updates
@@ -649,6 +669,17 @@ func (db *DB) addToIndexLocked(ctx context.Context, id string, vector []float64)
 		storeVec = normalized
 	}
 
+	// PQ-encode if enabled.
+	var pqCiphertext []byte
+	if db.pqModel != nil {
+		codes := db.pqModel.Encode(normalized)
+		ct, pqErr := enc.EncryptWithAAD(codes, []byte(id))
+		if pqErr != nil {
+			return fmt.Errorf("encrypt PQ codes %q: %w", id, pqErr)
+		}
+		pqCiphertext = ct
+	}
+
 	for assignIdx, superID := range assignments {
 		bucketKey := hierarchical.FormatBucketKey(superID)
 
@@ -663,7 +694,11 @@ func (db *DB) addToIndexLocked(ctx context.Context, id string, vector []float64)
 		}
 
 		dim := len(storeVec)
-		if err := db.blobStore.Put(ctx, blob.NewBlob(blobID, bucketKey, ciphertext, dim)); err != nil {
+		newBlob := blob.NewBlob(blobID, bucketKey, ciphertext, dim)
+		if pqCiphertext != nil {
+			newBlob.PQCiphertext = pqCiphertext
+		}
+		if err := db.blobStore.Put(ctx, newBlob); err != nil {
 			return fmt.Errorf("store vector %q: %w", id, err)
 		}
 	}
@@ -860,6 +895,38 @@ func (db *DB) buildLocked(ctx context.Context) error {
 		store.Close()
 		return fmt.Errorf("opaque: builder init: %w", err)
 	}
+
+	// Train PQ if configured. PQ is trained on normalized vectors for cosine ADC.
+	if db.cfg.PQSubspaces > 0 {
+		if indexDim%db.cfg.PQSubspaces != 0 {
+			store.Close()
+			return fmt.Errorf("opaque: dimension %d not divisible by PQSubspaces %d", indexDim, db.cfg.PQSubspaces)
+		}
+		if progress != nil {
+			progress("pq_training", 0)
+		}
+		// Normalize vectors for PQ training (cosine similarity = dot product on unit vectors).
+		normVecs := make([][]float64, len(indexVectors))
+		for i, v := range indexVectors {
+			normVecs[i] = cluster.NormalizeVector(v)
+		}
+		pqModel, err := pq.Train(normVecs, indexDim, pq.Config{
+			M:    db.cfg.PQSubspaces,
+			Seed: DefaultPQSeed,
+		})
+		if err != nil {
+			store.Close()
+			return fmt.Errorf("opaque: PQ training failed: %w", err)
+		}
+		db.pqModel = pqModel
+		builder.SetPQ(pqModel)
+		if progress != nil {
+			progress("pq_training", 1)
+		}
+	} else {
+		db.pqModel = nil
+	}
+
 	if progress != nil {
 		progress("clustering", 0.5)
 	}
@@ -1040,6 +1107,15 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.PCADimension != 0 && cfg.PCADimension >= cfg.Dimension {
 		return fmt.Errorf("opaque: PCADimension (%d) must be less than Dimension (%d)", cfg.PCADimension, cfg.Dimension)
+	}
+	if cfg.PQSubspaces != 0 {
+		effectiveDim := cfg.Dimension
+		if cfg.PCADimension > 0 {
+			effectiveDim = cfg.PCADimension
+		}
+		if effectiveDim%cfg.PQSubspaces != 0 {
+			return fmt.Errorf("opaque: effective dimension %d not divisible by PQSubspaces %d", effectiveDim, cfg.PQSubspaces)
+		}
 	}
 	if cfg.AutoIndexInterval < 0 {
 		return fmt.Errorf("opaque: AutoIndexInterval must be >= 0, got %s", cfg.AutoIndexInterval)

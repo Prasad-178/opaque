@@ -21,6 +21,12 @@ type Blob struct {
 	// Format: nonce (12 bytes) || ciphertext || tag (16 bytes)
 	Ciphertext []byte `json:"ciphertext"`
 
+	// PQCiphertext is the encrypted PQ codes for this vector.
+	// When product quantization is enabled, this contains AES-encrypted
+	// compact codes (M bytes) that allow fast approximate scoring via ADC
+	// without decrypting the full vector. Empty when PQ is disabled.
+	PQCiphertext []byte `json:"pq_ciphertext,omitempty"`
+
 	// MetadataCiphertext is optional encrypted metadata.
 	// Can store additional info like document title, source, etc.
 	MetadataCiphertext []byte `json:"metadata_ciphertext,omitempty"`

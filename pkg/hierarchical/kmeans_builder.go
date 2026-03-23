@@ -12,6 +12,7 @@ import (
 	"github.com/Prasad-178/opaque/pkg/cluster"
 	"github.com/Prasad-178/opaque/pkg/encrypt"
 	"github.com/Prasad-178/opaque/pkg/enterprise"
+	"github.com/Prasad-178/opaque/pkg/pq"
 )
 
 // KMeansBuilder constructs an index using k-means clustering for bucket assignment.
@@ -32,10 +33,17 @@ type KMeansBuilder struct {
 	enterpriseCfg *enterprise.Config
 	kmeans        *cluster.KMeans
 	encryptor     *encrypt.AESGCM
+	pqModel       *pq.PQ // Optional PQ model for compact code storage
 
 	// Building state
 	superBuckets []*SuperBucket
 	vectorLocs   map[string]*VectorLocation
+}
+
+// SetPQ sets the product quantizer for PQ code generation during Build.
+// When set, each blob will include encrypted PQ codes alongside the full vector.
+func (b *KMeansBuilder) SetPQ(model *pq.PQ) {
+	b.pqModel = model
 }
 
 // NewKMeansBuilder creates a new builder using k-means clustering.
@@ -185,6 +193,18 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 					vec = normalizedVecs[i]
 				}
 
+				// PQ-encode once per vector (codes are the same for all assignments).
+				var pqCiphertext []byte
+				if b.pqModel != nil {
+					codes := b.pqModel.Encode(normalizedVecs[i])
+					ct, err := b.encryptor.EncryptWithAAD(codes, []byte(id))
+					if err != nil {
+						results[w] = workerResult{err: fmt.Errorf("failed to encrypt PQ codes for %s: %w", id, err)}
+						return
+					}
+					pqCiphertext = ct
+				}
+
 				for assignIdx, superID := range allAssignments[i].assignments {
 					bucketKey := formatSuperBucketKey(superID)
 
@@ -200,7 +220,11 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 						return
 					}
 
-					localBlobs = append(localBlobs, blob.NewBlob(blobID, bucketKey, ciphertext, b.config.Dimension))
+					newBlob := blob.NewBlob(blobID, bucketKey, ciphertext, b.config.Dimension)
+					if pqCiphertext != nil {
+						newBlob.PQCiphertext = pqCiphertext
+					}
+					localBlobs = append(localBlobs, newBlob)
 				}
 			}
 			results[w] = workerResult{blobs: localBlobs}
