@@ -5,7 +5,7 @@
 - **Machine**: Apple M4 Pro (10 CPUs)
 - **Go Version**: 1.25
 - **HE Library**: Lattigo v5 (CKKS scheme, 128-bit security)
-- **Datasets**: SIFT10K (10K, 128-dim), SIFT1M (1M, 128-dim), GIST1M (1M, 960-dim), synthetic 100K
+- **Datasets**: SIFT10K (10K, 128-dim), SIFT1M (1M, 128-dim), GIST1M (1M, 960-dim), GloVe 6B (400K, 300-dim), synthetic 100K
 
 ## Core Operations
 
@@ -167,6 +167,48 @@ PCA is applied client-side before CKKS encryption — zero privacy impact. Recal
 > go test -tags gist -v -run TestGIST100K_PCA_Benchmark ./test/ -timeout 60m
 > ```
 
+### GloVe 100K (300-dim Word Embeddings)
+
+Measured with `go test -tags glove -v -run TestGloVe_PCA_Benchmark ./test/ -timeout 30m`.
+
+GloVe 6B 300-dim word vectors — real NLP embeddings from Stanford. At 300-dim, CKKS packing fits ~27 centroids per ciphertext, requiring only 2 HE ops for 32 clusters. All recall numbers are against brute-force cosine similarity on the original 300-dim vectors.
+
+**Configuration:** 100K vectors (from GloVe 6B 400K), 32 clusters (~3,125 vectors each), 8 decoys, multi-probe threshold=0.95.
+
+| Config | Recall@1 | Recall@10 | Avg Query | P50 Query |
+|--------|----------|-----------|-----------|-----------|
+| probe-8 (25%) | 82.0% | **81.0%** | **162ms** | 165ms |
+| probe-16 (50%) | **98.0%** | **91.2%** | 207ms | 188ms |
+
+#### PCA Dimensionality Reduction on GloVe
+
+**PCA Variance Explained (fitted on 100K GloVe vectors):**
+
+| Target Dim | Variance Retained | Centroids/Pack | HE Ops (32 clusters) |
+|-----------|-------------------|----------------|---------------------|
+| 300 (none) | 100% | 27 | 2 |
+| 256 | 99.5% | 32 | 1 |
+| 192 | 89.1% | 42 | 1 |
+| 128 | 67.0% | 64 | 1 |
+| 96 | 54.3% | 85 | 1 |
+| 64 | 40.6% | 128 | 1 |
+
+**PCA Search Results:**
+
+| Config | Recall@1 | Recall@10 | Avg Query | Speedup |
+|--------|----------|-----------|-----------|---------|
+| **300d probe-8 (baseline)** | **82.0%** | **81.0%** | **162ms** | **1x** |
+| PCA→128 probe-8 | 68.0% | 33.8% | 80ms | 2.0x |
+| PCA→128 probe-16 | 72.0% | 36.2% | 100ms | — |
+| PCA→96 probe-8 | 52.0% | 22.6% | 83ms | 2.0x |
+| PCA→96 probe-16 | 68.0% | 26.8% | 90ms | — |
+| PCA→64 probe-8 | 38.0% | 15.2% | 71ms | 2.3x |
+| PCA→64 probe-16 | 42.0% | 15.8% | 78ms | — |
+
+**Finding:** Despite "concentrated" variance (67% at 128-dim vs GIST's 87% at 128-dim), PCA still severely degrades Recall@10 for GloVe. The cosine similarity neighborhoods change significantly under PCA even when bulk variance is preserved. The latency gain (2x) does not justify the recall loss (81% → 34%).
+
+**PCA Conclusion:** PCA dimensionality reduction is **not effective** for preserving cosine-similarity search quality on either image descriptors (GIST) or word embeddings (GloVe). The technique may work for embeddings with extreme variance concentration (>95% in top-K components), but standard embedding types don't exhibit this. For latency reduction, CKKS slot packing (SIMD batch HE) and parallel processing are the effective approaches.
+
 ## Pipeline Optimizations
 
 The following optimizations have been applied to the k-means + HE search pipeline:
@@ -183,6 +225,8 @@ The following optimizations have been applied to the k-means + HE search pipelin
 | Pre-normalized storage | Search | 10-15% faster local scoring (skip per-vector normalization) |
 | Parallel AES decryption | Search | Multi-core blob decryption in search pipeline |
 | Dimension-bounded rotations | Search | Fewer HE rotations for non-power-of-2 dims (960d: 10 vs 14) |
+| Heap-based top-K selection | Search | O(n log K) vs O(n log n) for scoring results (min-heap, K=10) |
+| Pre-sized score map | Search | Reduced map growth allocations during local scoring |
 | PCA dimensionality reduction | Both | Reduces HE ops, AES size, local scoring (client-side, zero privacy impact) |
 
 All optimizations preserve privacy guarantees: same HE encryption, same AES-GCM, same decoy patterns. PCA is applied client-side before encryption — the server never sees original or reduced vectors.
@@ -257,4 +301,8 @@ go test -tags sift1m -v -run TestSIFT1MScaling ./test/ -timeout 45m
 # GIST 100K PCA benchmark (960-dim, requires dataset download, ~20 min)
 ../scripts/download_gist1m.sh
 go test -tags gist -v -run TestGIST100K_PCA_Benchmark ./test/ -timeout 60m
+
+# GloVe 100K PCA benchmark (300-dim word embeddings, ~4 min)
+# Download GloVe 6B from https://nlp.stanford.edu/projects/glove/ and extract glove.6B.300d.txt to data/glove/
+go test -tags glove -v -run TestGloVe_PCA_Benchmark ./test/ -timeout 30m
 ```
