@@ -65,8 +65,10 @@ type EnterpriseHierarchicalClient struct {
 }
 
 // DefaultPQRerankMult is the default re-rank multiplier for PQ search.
-// We score 10x more candidates with PQ, then exact re-rank to get top-K.
-const DefaultPQRerankMult = 10
+// We score rerankMult×topK more candidates with PQ, then exact re-rank to get top-K.
+// Higher values improve recall at the cost of more full vector decryptions.
+// 20x provides a good balance: for topK=10, re-ranks 200 candidates.
+const DefaultPQRerankMult = 20
 
 // SetPQ configures product quantization for fast approximate local scoring.
 // When set, SearchBatch uses PQ ADC for bulk scoring and only decrypts
@@ -681,7 +683,15 @@ func (c *EnterpriseHierarchicalClient) pqAcceleratedScoring(
 	stats.DecryptFailed = totalFailed
 
 	// Phase 2: Select top re-rank candidates via PQ scores.
+	// Use at least 200 candidates or 10% of all scored vectors, whichever is larger.
 	rerankK := topK * c.pqRerankMult
+	minRerank := len(bestMap) / 10
+	if minRerank < 200 {
+		minRerank = 200
+	}
+	if rerankK < minRerank {
+		rerankK = minRerank
+	}
 	if rerankK > len(bestMap) {
 		rerankK = len(bestMap)
 	}
