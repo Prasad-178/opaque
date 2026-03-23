@@ -258,7 +258,23 @@ ADC scoring is **13.5x faster** than exact dot product per vector (3.7ns vs 49.7
 | Standard (no PQ) | 252ms | 100.0% | 1.0x |
 | **PQ M=8** | **122ms** | **99.5%** | **2.1x** |
 
-**Recommended PQ config: M=8 for 128-dim vectors** — 2x+ speedup with <1% recall loss. The speedup scales with dataset size: as local scoring (AES decrypt + dot products) dominates more of total latency at scale, PQ's impact grows.
+**SIFT 100K (Real Image Descriptors, 128-dim, 64 clusters, 8 decoys):**
+
+Measured with `go test -tags sift1m -v -run TestPQ_SIFT100K ./test/ -timeout 30m`.
+
+Real SIFT vectors from the ANN-benchmarks dataset — 100K 128-dimensional image descriptors. Ground truth computed via brute-force cosine similarity over all 100K vectors.
+
+| Config | Clusters Probed | Recall@1 | Recall@10 | Avg Query | P50 Query |
+|--------|----------------|----------|-----------|-----------|-----------|
+| standard | 8 (12.5%) | 96.0% | 98.4% | 93ms | 88ms |
+| PQ-M8 | 8 (12.5%) | 96.0% | 94.4% | 102ms | 102ms |
+| PQ-M16 | 8 (12.5%) | 100.0% | 98.2% | 151ms | 137ms |
+| standard-probe16 | 16 (25%) | 100.0% | 100.0% | 160ms | 154ms |
+| **PQ-M8-probe16** | **16 (25%)** | **100.0%** | **99.4%** | **127ms** | **130ms** |
+
+**Key finding:** PQ benefit scales with the number of vectors scanned. At 8 clusters probed (~12K vectors), HE overhead dominates and PQ re-ranking overhead offsets the local scoring gains. At 16 clusters probed (~25K vectors), **PQ-M8 is 1.26x faster** (127ms vs 160ms) at 99.4% recall — the sweet spot where local scoring is the bottleneck.
+
+**Recommended PQ config: M=8 for 128-dim vectors.** Use PQ with higher probe counts (probe-16+) where PQ provides meaningful speedup. For strict-8 configs where HE dominates, PQ adds minimal benefit.
 
 **How PQ preserves recall:** The system uses two-phase scoring:
 1. Decrypt tiny PQ codes (8 bytes vs 1024 bytes per vector), score via ADC lookup tables
@@ -266,12 +282,20 @@ ADC scoring is **13.5x faster** than exact dot product per vector (3.7ns vs 49.7
 3. Decrypt full vectors only for these candidates, exact re-score
 4. Return exact top-K from the re-ranked candidates
 
-This bounds recall loss to the probability that a true top-K result falls outside the PQ top-200 approximation — empirically <1% on structured embeddings.
+This bounds recall loss to the probability that a true top-K result falls outside the PQ top-200 approximation — empirically <1% on real SIFT embeddings at probe-16.
 
 **When PQ helps most:**
-- Datasets with 10K+ vectors where local scoring is a significant fraction of query time
+- Higher probe counts (16+ clusters) where local scoring dominates query time
+- Larger datasets (100K+) with more vectors per cluster to score
 - 128-dim or higher vectors (more savings from compression)
 - Workloads prioritizing query latency over build time
+
+**Privacy guarantees with PQ — identical to standard:**
+- CKKS HE centroid scoring: server never sees query or scores
+- AES-256-GCM vector encryption: vectors encrypted at rest
+- Decoy clusters: access patterns hidden (8 decoys per query)
+- PQ codes AES-encrypted: server never sees codes or codebooks
+- PQ is entirely client-side: zero additional information leakage
 
 ## Pipeline Optimizations
 
@@ -379,4 +403,7 @@ go test -v -run TestPQBenchmark ./test/ -timeout 15m
 
 # PQ 100K benchmark (standard vs PQ M=8, ~1 min)
 go test -v -run TestPQ100KBenchmark ./test/ -timeout 30m
+
+# PQ SIFT 100K benchmark (real image descriptors, requires SIFT1M download, ~2 min)
+go test -tags sift1m -v -run TestPQ_SIFT100K ./test/ -timeout 30m
 ```

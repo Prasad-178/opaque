@@ -45,11 +45,12 @@ Level 2: Decoy-Based Fetch
   - Server returns encrypted blobs for all requested buckets
   - Server CANNOT distinguish real from decoy
 
-Level 3: Local Scoring
-  - Client AES-decrypts all fetched vectors
-  - Computes cosine similarity locally
+Level 3: Local Scoring (PQ-accelerated when enabled)
+  - If PQ enabled: decrypt tiny PQ codes (M bytes), ADC score all vectors,
+    then decrypt full vectors only for top re-rank candidates
+  - If PQ disabled: AES-decrypt all fetched vectors, exact dot product scoring
   - Returns top-K results
-  - Server sees NOTHING from this step
+  - Server sees NOTHING from this step (PQ is entirely client-side)
 ```
 
 ## Homomorphic Encryption Details

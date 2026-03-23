@@ -129,6 +129,7 @@ Benchmarked on Apple M4 Pro, 128-dimensional vectors, 64 clusters.
 | **Incremental add** | ~300µs/vector |
 | **Recall@10** (SIFT10K) | 96% at 14.9% data scanned |
 | **Recall@10** (SIFT1M) | 96.8% at 6.2% data scanned |
+| **PQ speedup** (SIFT 100K) | 1.26x at 99.4% recall (probe-16) |
 
 Run the benchmark yourself:
 

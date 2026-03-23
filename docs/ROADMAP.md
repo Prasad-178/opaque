@@ -114,7 +114,7 @@ Lattigo supports GPU acceleration for HE operations. Investigate and benchmark C
 ### ~~Product Quantization (PQ)~~ (Done)
 Optional PQ via `Config.PQSubspaces`. Compresses vectors into compact M-byte codes and uses ADC lookup tables for fast approximate scoring. Two-phase search: PQ ADC for bulk scoring, exact re-ranking of top candidates with full vectors. Applied client-side before AES encryption — zero privacy impact.
 
-**Results (100K vectors, 128-dim, M=8):** 2.1x search speedup (122ms vs 252ms) with 99.5% Recall@10. ADC scoring is 13.5x faster than exact dot product (3.7ns vs 49.7ns per vector). See `docs/BENCHMARKS.md` for full results.
+**Results:** On real SIFT 100K (128-dim image descriptors), PQ-M8 with probe-16 achieves 99.4% Recall@10 at 127ms vs 160ms standard (1.26x speedup). On synthetic 100K, 2.1x speedup at 99.5% recall. ADC scoring is 13.5x faster than exact dot product (3.7ns vs 49.7ns per vector). Privacy guarantees identical — PQ is entirely client-side. See `docs/BENCHMARKS.md` for full results.
 
 ### ~~PCA Dimensionality Reduction~~ (Done)
 Optional PCA via SVD in `go/pkg/pca/`. Enabled with `Config.PCADimension`. Applied client-side before encryption — no privacy impact. 128D→64D achieves 77% variance retention with perfect self-match recall.
