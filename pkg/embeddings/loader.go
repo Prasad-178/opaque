@@ -1,9 +1,12 @@
 package embeddings
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 // SIFT1M loads the SIFT1M dataset from the given directory.
@@ -183,12 +186,79 @@ func GIST1M(dir string) (*Dataset, error) {
 }
 
 // GloVe loads GloVe word vectors from a text file.
-// Format: word dim1 dim2 dim3 ... dimN
+// Format: word dim1 dim2 dim3 ... dimN (space-separated, one vector per line)
 //
 // Download from: https://nlp.stanford.edu/projects/glove/
 func GloVe(path string) (*Dataset, error) {
-	// TODO: Implement GloVe loader
-	return nil, fmt.Errorf("GloVe loader not yet implemented")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, fmt.Errorf("GloVe file not found: %s\nDownload from https://nlp.stanford.edu/projects/glove/", path)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open GloVe file: %w", err)
+	}
+	defer f.Close()
+
+	var vectors [][]float64
+	var ids []string
+	dim := 0
+
+	scanner := bufio.NewScanner(f)
+	// GloVe lines can be long; increase buffer to 1 MB.
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		// First space separates the word from the vector components.
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			return nil, fmt.Errorf("line %d: expected at least word + 1 dimension, got %d fields", lineNum, len(fields))
+		}
+
+		word := fields[0]
+		vecLen := len(fields) - 1
+
+		// Set expected dimension from first vector.
+		if dim == 0 {
+			dim = vecLen
+		} else if vecLen != dim {
+			return nil, fmt.Errorf("line %d (%q): expected %d dimensions, got %d", lineNum, word, dim, vecLen)
+		}
+
+		vec := make([]float64, vecLen)
+		for i := 0; i < vecLen; i++ {
+			v, err := strconv.ParseFloat(fields[i+1], 64)
+			if err != nil {
+				return nil, fmt.Errorf("line %d (%q): failed to parse dimension %d: %w", lineNum, word, i, err)
+			}
+			vec[i] = v
+		}
+
+		ids = append(ids, word)
+		vectors = append(vectors, vec)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading GloVe file: %w", err)
+	}
+
+	if len(vectors) == 0 {
+		return nil, fmt.Errorf("no vectors found in %s", path)
+	}
+
+	return &Dataset{
+		Name:      "glove",
+		Dimension: dim,
+		Vectors:   vectors,
+		IDs:       ids,
+	}, nil
 }
 
 // FromFvecs loads a dataset from a single .fvecs file.

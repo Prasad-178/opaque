@@ -7,7 +7,7 @@ import (
 	"math"
 	"math/big"
 	"runtime"
-	"sort"
+	"container/heap"
 	"strings"
 	"sync"
 	"time"
@@ -358,7 +358,7 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	startScore := time.Now()
 
 	// Map to track best score per original ID
-	scoreMap := make(map[string]float64)
+	scoreMap := make(map[string]float64, len(decrypted))
 
 	for _, d := range decrypted {
 		vec := d.vector
@@ -373,36 +373,11 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 		}
 	}
 
-	// Convert map to sorted slice
-	type scored struct {
-		id    string
-		score float64
-	}
-	scoredResults := make([]scored, 0, len(scoreMap))
-	for id, score := range scoreMap {
-		scoredResults = append(scoredResults, scored{id: id, score: score})
-	}
-
-	// Sort by score descending
-	sort.Slice(scoredResults, func(i, j int) bool {
-		return scoredResults[i].score > scoredResults[j].score
-	})
+	// Select top-K using min-heap: O(n log K) instead of O(n log n) full sort.
+	result.Results = topKFromMap(scoreMap, topK)
 
 	result.Timing.LocalScoring = time.Since(startScore)
 	result.Stats.VectorsScored = len(scoreMap) // Unique vectors scored
-
-	// Return top-K
-	n := topK
-	if n > len(scoredResults) {
-		n = len(scoredResults)
-	}
-	result.Results = make([]hierarchical.Result, n)
-	for i := 0; i < n; i++ {
-		result.Results[i] = hierarchical.Result{
-			ID:    scoredResults[i].id,
-			Score: scoredResults[i].score,
-		}
-	}
 
 	result.Timing.Total = time.Since(startTotal)
 	return result, nil
@@ -557,7 +532,7 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 	result.Stats.DecryptFailed = batchDecryptStats.Failed
 
 	startScore := time.Now()
-	scoreMap := make(map[string]float64)
+	scoreMap := make(map[string]float64, len(decrypted))
 	for _, d := range decrypted {
 		vec := d.vector
 		if !c.config.NormalizedStorage {
@@ -569,33 +544,11 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 		}
 	}
 
-	type scored struct {
-		id    string
-		score float64
-	}
-	scoredResults := make([]scored, 0, len(scoreMap))
-	for id, score := range scoreMap {
-		scoredResults = append(scoredResults, scored{id: id, score: score})
-	}
-
-	sort.Slice(scoredResults, func(i, j int) bool {
-		return scoredResults[i].score > scoredResults[j].score
-	})
+	// Select top-K using min-heap: O(n log K) instead of O(n log n) full sort.
+	result.Results = topKFromMap(scoreMap, topK)
 
 	result.Timing.LocalScoring = time.Since(startScore)
 	result.Stats.VectorsScored = len(scoreMap)
-
-	n := topK
-	if n > len(scoredResults) {
-		n = len(scoredResults)
-	}
-	result.Results = make([]hierarchical.Result, n)
-	for i := 0; i < n; i++ {
-		result.Results[i] = hierarchical.Result{
-			ID:    scoredResults[i].id,
-			Score: scoredResults[i].score,
-		}
-	}
 
 	result.Timing.Total = time.Since(startTotal)
 	return result, nil
@@ -648,6 +601,61 @@ func parseSuperBucketID(bucketKey string) int {
 		return -1
 	}
 	return id
+}
+
+// scoredItem is an (id, score) pair used for heap-based top-K selection.
+type scoredItem struct {
+	id    string
+	score float64
+}
+
+// minScoreHeap implements a min-heap on score. We keep the K highest-scored
+// items by maintaining a min-heap of size K: if a new score exceeds the heap
+// minimum we pop the min and push the new item. After processing all items
+// the heap contains the top-K, extracted in descending order.
+type minScoreHeap []scoredItem
+
+func (h minScoreHeap) Len() int            { return len(h) }
+func (h minScoreHeap) Less(i, j int) bool   { return h[i].score < h[j].score } // min-heap
+func (h minScoreHeap) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
+func (h *minScoreHeap) Push(x interface{})  { *h = append(*h, x.(scoredItem)) }
+func (h *minScoreHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+// topKFromMap selects the top-K items from a score map using a min-heap.
+// Returns results in descending score order. O(n log K) instead of O(n log n).
+func topKFromMap(scoreMap map[string]float64, k int) []hierarchical.Result {
+	if k > len(scoreMap) {
+		k = len(scoreMap)
+	}
+	if k == 0 {
+		return nil
+	}
+
+	h := make(minScoreHeap, 0, k+1)
+	heap.Init(&h)
+
+	for id, score := range scoreMap {
+		if h.Len() < k {
+			heap.Push(&h, scoredItem{id: id, score: score})
+		} else if score > h[0].score {
+			h[0] = scoredItem{id: id, score: score}
+			heap.Fix(&h, 0)
+		}
+	}
+
+	// Extract in descending order
+	results := make([]hierarchical.Result, h.Len())
+	for i := len(results) - 1; i >= 0; i-- {
+		item := heap.Pop(&h).(scoredItem)
+		results[i] = hierarchical.Result{ID: item.id, Score: item.score}
+	}
+	return results
 }
 
 // decryptedVec holds a decrypted vector with its original and blob IDs.
