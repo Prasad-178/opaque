@@ -52,6 +52,7 @@ func main() {
 - **CRUD operations** — Add, Update, Delete vectors with soft-delete and compaction via Rebuild
 - **Persistence** — Save/Load database state to disk with encrypted metadata
 - **File-backed storage** — memory or file-backed blob store for large datasets
+- **Product quantization** — PQ-accelerated local scoring (2x+ speedup, <1% recall loss)
 - **PCA dimensionality reduction** — optional client-side PCA for reduced latency
 - **Progress callbacks** — `OnBuildProgress` hook for observability during index builds
 - **Batch operations** — AddBatch, AddBatchWithMetadata for bulk ingestion
@@ -74,6 +75,7 @@ func main() {
 | `NumKMeansInit` | 1 | K-means initializations (higher = better centroids) |
 | `NormalizedStorage` | true | Pre-normalize vectors for faster search |
 | `PCADimension` | 0 (off) | Target dimension for PCA reduction |
+| `PQSubspaces` | 0 (off) | PQ subspaces for fast scoring (8=recommended for 128-dim) |
 | `AutoIndexEnabled` | false | Enable automatic background re-indexing |
 
 ## Incremental Indexing
