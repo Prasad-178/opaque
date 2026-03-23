@@ -18,6 +18,7 @@ import (
 	"github.com/Prasad-178/opaque/pkg/crypto"
 	"github.com/Prasad-178/opaque/pkg/encrypt"
 	"github.com/Prasad-178/opaque/pkg/hierarchical"
+	"github.com/Prasad-178/opaque/pkg/pq"
 	"github.com/tuneinsight/lattigo/v5/core/rlwe"
 )
 
@@ -56,7 +57,27 @@ type EnterpriseHierarchicalClient struct {
 	// Storage backend
 	store blob.Store
 
+	// Product quantization for fast approximate scoring
+	pqModel      *pq.PQ // nil when PQ is disabled
+	pqRerankMult int    // Re-rank multiplier: fetch top (rerankMult * topK) via PQ, then exact re-rank
+
 	mu sync.RWMutex
+}
+
+// DefaultPQRerankMult is the default re-rank multiplier for PQ search.
+// We score 10x more candidates with PQ, then exact re-rank to get top-K.
+const DefaultPQRerankMult = 10
+
+// SetPQ configures product quantization for fast approximate local scoring.
+// When set, SearchBatch uses PQ ADC for bulk scoring and only decrypts
+// full vectors for the top re-rank candidates.
+func (c *EnterpriseHierarchicalClient) SetPQ(model *pq.PQ) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pqModel = model
+	if model != nil && c.pqRerankMult == 0 {
+		c.pqRerankMult = DefaultPQRerankMult
+	}
 }
 
 // DefaultPoolSize is the default number of HE engines in the worker pool.
@@ -338,7 +359,7 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	result.Stats.BlobsFetched = len(blobs)
 
 	// ==========================================
-	// LEVEL 3: Local AES Decrypt + Scoring
+	// LEVEL 3: Local AES Decrypt + Scoring (PQ-accelerated or standard)
 	// All computation is client-side, server sees nothing
 	// ==========================================
 
@@ -346,38 +367,36 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 	// Privacy is preserved: the server already saw all bucket requests (real + decoy, shuffled).
 	realBlobs := filterRealBlobs(blobs, topSupers)
 
-	// Decrypt real vectors in parallel
 	startAES := time.Now()
-	decrypted, decryptStats := parallelDecryptBlobs(realBlobs, c.encryptor)
-	result.Timing.AESDecrypt = time.Since(startAES)
-	result.Stats.DecryptSucceeded = decryptStats.Succeeded
-	result.Stats.DecryptFailed = decryptStats.Failed
 
-	// Score locally with deduplication for redundant assignment
-	// Keep only the highest score for each unique original ID
-	startScore := time.Now()
+	if c.pqModel != nil {
+		result.Results, result.Stats, result.Timing = c.pqAcceleratedScoring(
+			realBlobs, normalizedQuery, topK, result.Stats, result.Timing, startAES,
+		)
+	} else {
+		// Decrypt real vectors in parallel
+		decrypted, decryptStats := parallelDecryptBlobs(realBlobs, c.encryptor)
+		result.Timing.AESDecrypt = time.Since(startAES)
+		result.Stats.DecryptSucceeded = decryptStats.Succeeded
+		result.Stats.DecryptFailed = decryptStats.Failed
 
-	// Map to track best score per original ID
-	scoreMap := make(map[string]float64, len(decrypted))
-
-	for _, d := range decrypted {
-		vec := d.vector
-		if !c.config.NormalizedStorage {
-			vec = normalizeVectorCopy(d.vector)
+		startScore := time.Now()
+		scoreMap := make(map[string]float64, len(decrypted))
+		for _, d := range decrypted {
+			vec := d.vector
+			if !c.config.NormalizedStorage {
+				vec = normalizeVectorCopy(d.vector)
+			}
+			score := dotProductVec(normalizedQuery, vec)
+			if existing, ok := scoreMap[d.id]; !ok || score > existing {
+				scoreMap[d.id] = score
+			}
 		}
-		score := dotProductVec(normalizedQuery, vec)
 
-		// Keep highest score for each original ID
-		if existing, ok := scoreMap[d.id]; !ok || score > existing {
-			scoreMap[d.id] = score
-		}
+		result.Results = topKFromMap(scoreMap, topK)
+		result.Timing.LocalScoring = time.Since(startScore)
+		result.Stats.VectorsScored = len(scoreMap)
 	}
-
-	// Select top-K using min-heap: O(n log K) instead of O(n log n) full sort.
-	result.Results = topKFromMap(scoreMap, topK)
-
-	result.Timing.LocalScoring = time.Since(startScore)
-	result.Stats.VectorsScored = len(scoreMap) // Unique vectors scored
 
 	result.Timing.Total = time.Since(startTotal)
 	return result, nil
@@ -524,14 +543,179 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 	// Filter to real clusters only — skip decoy blobs to save AES decrypt + scoring time.
 	realBlobs := filterRealBlobs(blobs, topSupers)
 
-	// Decrypt and score locally (same as Search)
-	startAES := time.Now()
-	decrypted, batchDecryptStats := parallelDecryptBlobs(realBlobs, c.encryptor)
-	result.Timing.AESDecrypt = time.Since(startAES)
-	result.Stats.DecryptSucceeded = batchDecryptStats.Succeeded
-	result.Stats.DecryptFailed = batchDecryptStats.Failed
+	// ==========================================
+	// LEVEL 3: Local Scoring (PQ-accelerated or standard)
+	// ==========================================
 
+	startAES := time.Now()
+
+	if c.pqModel != nil {
+		// PQ-accelerated path: decrypt tiny PQ codes, ADC score, re-rank top candidates.
+		result.Results, result.Stats, result.Timing = c.pqAcceleratedScoring(
+			realBlobs, normalizedQuery, topK, result.Stats, result.Timing, startAES,
+		)
+	} else {
+		// Standard path: decrypt all full vectors, exact scoring.
+		decrypted, batchDecryptStats := parallelDecryptBlobs(realBlobs, c.encryptor)
+		result.Timing.AESDecrypt = time.Since(startAES)
+		result.Stats.DecryptSucceeded = batchDecryptStats.Succeeded
+		result.Stats.DecryptFailed = batchDecryptStats.Failed
+
+		startScore := time.Now()
+		scoreMap := make(map[string]float64, len(decrypted))
+		for _, d := range decrypted {
+			vec := d.vector
+			if !c.config.NormalizedStorage {
+				vec = normalizeVectorCopy(d.vector)
+			}
+			score := dotProductVec(normalizedQuery, vec)
+			if existing, ok := scoreMap[d.id]; !ok || score > existing {
+				scoreMap[d.id] = score
+			}
+		}
+
+		// Select top-K using min-heap: O(n log K) instead of O(n log n) full sort.
+		result.Results = topKFromMap(scoreMap, topK)
+		result.Timing.LocalScoring = time.Since(startScore)
+		result.Stats.VectorsScored = len(scoreMap)
+	}
+
+	result.Timing.Total = time.Since(startTotal)
+	return result, nil
+}
+
+// pqAcceleratedScoring performs two-phase PQ-accelerated local scoring:
+//  1. Decrypt tiny PQ codes (M bytes each), score via ADC lookup tables
+//  2. Decrypt full vectors only for top re-rank candidates, exact re-score
+//
+// This reduces AES decryption from N×D×8 bytes to N×M bytes + rerankK×D×8 bytes,
+// and reduces scoring from N×O(D) to N×O(M) + rerankK×O(D).
+func (c *EnterpriseHierarchicalClient) pqAcceleratedScoring(
+	realBlobs []*blob.Blob,
+	normalizedQuery []float64,
+	topK int,
+	stats hierarchical.SearchStats,
+	timing hierarchical.SearchTiming,
+	startAES time.Time,
+) ([]hierarchical.Result, hierarchical.SearchStats, hierarchical.SearchTiming) {
+	// Phase 1: Decrypt PQ codes (tiny) and ADC score all vectors.
+	adcTable := c.pqModel.BuildADCTable(normalizedQuery)
+
+	type pqScoredBlob struct {
+		id       string
+		blobIdx  int // index into realBlobs for full vector re-rank
+		score    float64
+	}
+
+	// Parallel PQ code decryption and ADC scoring.
+	numWorkers := runtime.NumCPU()
+	if numWorkers > len(realBlobs) {
+		numWorkers = len(realBlobs)
+	}
+	if numWorkers == 0 {
+		numWorkers = 1
+	}
+	chunkSize := (len(realBlobs) + numWorkers - 1) / numWorkers
+
+	type workerResult struct {
+		scored []pqScoredBlob
+		failed int
+	}
+	workerResults := make([]workerResult, numWorkers)
+
+	var wg sync.WaitGroup
+	for w := 0; w < numWorkers; w++ {
+		start := w * chunkSize
+		end := start + chunkSize
+		if end > len(realBlobs) {
+			end = len(realBlobs)
+		}
+		if start >= end {
+			continue
+		}
+		wg.Add(1)
+		go func(w, start, end int) {
+			defer wg.Done()
+			local := make([]pqScoredBlob, 0, end-start)
+			failed := 0
+			for i := start; i < end; i++ {
+				b := realBlobs[i]
+				if len(b.PQCiphertext) == 0 {
+					failed++
+					continue
+				}
+				origID := extractOriginalID(b.ID)
+				codes, err := c.encryptor.DecryptWithAAD(b.PQCiphertext, []byte(origID))
+				if err != nil {
+					failed++
+					continue
+				}
+				score := pq.ADCScore(adcTable, codes)
+				local = append(local, pqScoredBlob{id: origID, blobIdx: i, score: score})
+			}
+			workerResults[w] = workerResult{scored: local, failed: failed}
+		}(w, start, end)
+	}
+	wg.Wait()
+
+	timing.AESDecrypt = time.Since(startAES)
+
+	// Merge PQ scores, dedup by ID (keep best score and blob index).
 	startScore := time.Now()
+
+	type bestEntry struct {
+		score   float64
+		blobIdx int
+	}
+	bestMap := make(map[string]bestEntry, len(realBlobs))
+	totalFailed := 0
+	for _, wr := range workerResults {
+		totalFailed += wr.failed
+		for _, s := range wr.scored {
+			if existing, ok := bestMap[s.id]; !ok || s.score > existing.score {
+				bestMap[s.id] = bestEntry{score: s.score, blobIdx: s.blobIdx}
+			}
+		}
+	}
+	stats.DecryptSucceeded = len(bestMap)
+	stats.DecryptFailed = totalFailed
+
+	// Phase 2: Select top re-rank candidates via PQ scores.
+	rerankK := topK * c.pqRerankMult
+	if rerankK > len(bestMap) {
+		rerankK = len(bestMap)
+	}
+
+	// Use min-heap to find top rerankK candidates by PQ score.
+	h := make(minScoreHeap, 0, rerankK+1)
+	heap.Init(&h)
+	for id, entry := range bestMap {
+		if h.Len() < rerankK {
+			heap.Push(&h, scoredItem{id: id, score: entry.score})
+		} else if entry.score > h[0].score {
+			h[0] = scoredItem{id: id, score: entry.score}
+			heap.Fix(&h, 0)
+		}
+	}
+
+	// Collect candidate IDs and their blob indices for full vector decryption.
+	candidateIDs := make(map[string]bool, h.Len())
+	for _, item := range h {
+		candidateIDs[item.id] = true
+	}
+
+	// Collect blobs to decrypt (only the re-rank candidates).
+	var rerankBlobs []*blob.Blob
+	for _, b := range realBlobs {
+		origID := extractOriginalID(b.ID)
+		if candidateIDs[origID] {
+			rerankBlobs = append(rerankBlobs, b)
+		}
+	}
+
+	// Phase 3: Decrypt full vectors for re-rank candidates and exact score.
+	decrypted, _ := parallelDecryptBlobs(rerankBlobs, c.encryptor)
+
 	scoreMap := make(map[string]float64, len(decrypted))
 	for _, d := range decrypted {
 		vec := d.vector
@@ -544,14 +728,11 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 		}
 	}
 
-	// Select top-K using min-heap: O(n log K) instead of O(n log n) full sort.
-	result.Results = topKFromMap(scoreMap, topK)
+	results := topKFromMap(scoreMap, topK)
+	timing.LocalScoring = time.Since(startScore)
+	stats.VectorsScored = len(bestMap)
 
-	result.Timing.LocalScoring = time.Since(startScore)
-	result.Stats.VectorsScored = len(scoreMap)
-
-	result.Timing.Total = time.Since(startTotal)
-	return result, nil
+	return results, stats, timing
 }
 
 // generateDecoySupers delegates to the shared package-level function in hierarchical.go.

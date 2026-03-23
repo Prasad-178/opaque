@@ -965,6 +965,11 @@ func (db *DB) buildLocked(ctx context.Context) error {
 		progress("indexing", 1)
 	}
 
+	// Enable PQ on the search client if trained.
+	if db.pqModel != nil {
+		searchClient.SetPQ(db.pqModel)
+	}
+
 	db.blobStore = store
 	db.searchClient = searchClient
 	db.state = stateReady
