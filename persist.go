@@ -14,12 +14,14 @@ import (
 	"github.com/Prasad-178/opaque/pkg/enterprise"
 	"github.com/Prasad-178/opaque/pkg/hierarchical"
 	"github.com/Prasad-178/opaque/pkg/pca"
+	"github.com/Prasad-178/opaque/pkg/pq"
 )
 
 const (
 	metadataFile       = "metadata.json"
 	enterpriseFile     = "enterprise.gob"
 	pcaFile            = "pca.gob"
+	pqFile             = "pq.bin"
 	vectorMetadataFile = "vector_metadata.enc"
 	blobsDir           = "blobs"
 	persistVersion     = 1
@@ -32,6 +34,7 @@ type saveMetadata struct {
 	Config       Config       `json:"config"`
 	ClusterStats ClusterStats `json:"cluster_stats"`
 	HasPCA       bool         `json:"has_pca"`
+	HasPQ        bool         `json:"has_pq"`
 	DeletedIDs   []string     `json:"deleted_ids,omitempty"`
 	HasMetadata  bool         `json:"has_metadata,omitempty"`
 }
@@ -83,6 +86,17 @@ func (db *DB) Save(path string) error {
 			return fmt.Errorf("opaque: failed to save PCA model: %w", err)
 		}
 		f.Close()
+	}
+
+	// Save PQ model if present.
+	hasPQ := db.pqModel != nil
+	if hasPQ {
+		pqPath := filepath.Join(path, pqFile)
+		pqData := db.pqModel.Serialize()
+		if err := os.WriteFile(pqPath, pqData, 0o600); err != nil {
+			os.RemoveAll(path)
+			return fmt.Errorf("opaque: failed to save PQ model: %w", err)
+		}
 	}
 
 	// Export blobs to a FileStore at <path>/blobs/.
@@ -141,6 +155,7 @@ func (db *DB) Save(path string) error {
 			Iterations:    db.clusterStats.Iterations,
 		},
 		HasPCA:      hasPCA,
+		HasPQ:       hasPQ,
 		DeletedIDs:  deletedIDsList(db.deletedIDs),
 		HasMetadata: hasVectorMetadata,
 	}
@@ -213,6 +228,22 @@ func Load(path string) (*DB, error) {
 		}
 	}
 
+	// Load PQ model if saved.
+	var pqModel *pq.PQ
+	if meta.HasPQ {
+		pqPath := filepath.Join(path, pqFile)
+		pqData, err := os.ReadFile(pqPath)
+		if err != nil {
+			store.Close()
+			return nil, fmt.Errorf("opaque: failed to read PQ file: %w", err)
+		}
+		pqModel, err = pq.Deserialize(pqData)
+		if err != nil {
+			store.Close()
+			return nil, fmt.Errorf("opaque: failed to load PQ model: %w", err)
+		}
+	}
+
 	// Load vector metadata if saved.
 	var vectorMetadata map[string]Metadata
 	if meta.HasMetadata {
@@ -244,6 +275,7 @@ func Load(path string) (*DB, error) {
 		enterpriseCfg: enterpriseCfg,
 		blobStore:     store,
 		pcaModel:      pcaModel,
+		pqModel:       pqModel,
 		deletedIDs:    deletedIDsMap(meta.DeletedIDs),
 		metadata:      vectorMetadata,
 		loaded:        true,
@@ -267,6 +299,9 @@ func Load(path string) (*DB, error) {
 	if err != nil {
 		store.Close()
 		return nil, fmt.Errorf("opaque: failed to create search client: %w", err)
+	}
+	if pqModel != nil {
+		searchClient.SetPQ(pqModel)
 	}
 	db.searchClient = searchClient
 
