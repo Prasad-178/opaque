@@ -177,8 +177,11 @@ GloVe 6B 300-dim word vectors — real NLP embeddings from Stanford. At 300-dim,
 
 | Config | Recall@1 | Recall@10 | Avg Query | P50 Query |
 |--------|----------|-----------|-----------|-----------|
-| probe-8 (25%) | 82.0% | **81.0%** | **162ms** | 165ms |
-| probe-16 (50%) | **98.0%** | **91.2%** | 207ms | 188ms |
+| probe-8 (25%) | 82.0% | 81.0% | **162ms** | 165ms |
+| probe-16 (50%) | 98.0% | 91.2% | 207ms | 188ms |
+| probe-32 (100%) | **100%** | **100%** | 311ms | 255ms |
+
+**Recommended config: probe-16** — 91.2% Recall@10 at 207ms with full privacy guarantees. For applications requiring perfect recall, probe-32 achieves 100% Recall@10 at 311ms — latency scales sub-linearly (4x clusters, only ~2x time).
 
 #### PCA Dimensionality Reduction on GloVe
 
@@ -207,7 +210,23 @@ GloVe 6B 300-dim word vectors — real NLP embeddings from Stanford. At 300-dim,
 
 **Finding:** Despite "concentrated" variance (67% at 128-dim vs GIST's 87% at 128-dim), PCA still severely degrades Recall@10 for GloVe. The cosine similarity neighborhoods change significantly under PCA even when bulk variance is preserved. The latency gain (2x) does not justify the recall loss (81% → 34%).
 
-**PCA Conclusion:** PCA dimensionality reduction is **not effective** for preserving cosine-similarity search quality on either image descriptors (GIST) or word embeddings (GloVe). The technique may work for embeddings with extreme variance concentration (>95% in top-K components), but standard embedding types don't exhibit this. For latency reduction, CKKS slot packing (SIMD batch HE) and parallel processing are the effective approaches.
+### PCA: Lessons Learned
+
+PCA dimensionality reduction is available in the pipeline (`Config.PCADimension`) and is applied client-side before CKKS encryption — zero privacy impact. However, benchmarking on two fundamentally different embedding types revealed that **PCA is not generally effective** for preserving cosine-similarity search quality:
+
+| Dataset | Type | Best PCA Config | Recall@10 (baseline → PCA) | Verdict |
+|---------|------|-----------------|---------------------------|---------|
+| GIST 100K | Image descriptors (960d) | PCA→256 (93.7% variance) | 98.8% → 19.0% | Not viable |
+| GloVe 100K | Word embeddings (300d) | PCA→128 (67.0% variance) | 81.0% → 33.8% | Not viable |
+
+**Why PCA fails for cosine search:** PCA preserves bulk variance (L2 distance structure) but cosine similarity depends on *angular* relationships between vectors. Projecting to a lower-dimensional subspace distorts these angles, changing which vectors are nearest neighbors — even when most variance is retained.
+
+**When PCA might help:**
+- Embeddings with extreme variance concentration (>99% in top-K components)
+- Use cases where approximate recall (~50%) is acceptable for large latency gains
+- As a pre-filter stage combined with re-ranking on original dimensions
+
+**Recommended approach for latency reduction:** CKKS SIMD slot packing and parallel processing are the proven approaches. These achieve 3-13x speedups without any recall loss. PCA remains available for experimentation with custom embeddings.
 
 ## Pipeline Optimizations
 
@@ -227,7 +246,7 @@ The following optimizations have been applied to the k-means + HE search pipelin
 | Dimension-bounded rotations | Search | Fewer HE rotations for non-power-of-2 dims (960d: 10 vs 14) |
 | Heap-based top-K selection | Search | O(n log K) vs O(n log n) for scoring results (min-heap, K=10) |
 | Pre-sized score map | Search | Reduced map growth allocations during local scoring |
-| PCA dimensionality reduction | Both | Reduces HE ops, AES size, local scoring (client-side, zero privacy impact) |
+| PCA dimensionality reduction | Both | Reduces HE ops, AES size, local scoring — situational, see notes below |
 
 All optimizations preserve privacy guarantees: same HE encryption, same AES-GCM, same decoy patterns. PCA is applied client-side before encryption — the server never sees original or reduced vectors.
 
