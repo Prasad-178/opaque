@@ -160,7 +160,7 @@ func profileHESubPhases(t *testing.T, dim int, trainingVectors [][]float64) {
 	t.Helper()
 
 	// Create HE engine and batch cache.
-	provider, err := crypto.NewDirectHEProvider(1)
+	provider, err := crypto.NewDirectHEProvider(2) // Need 2: one for profiling, one for provider calls
 	if err != nil {
 		t.Fatalf("NewDirectHEProvider: %v", err)
 	}
