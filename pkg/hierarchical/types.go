@@ -227,6 +227,12 @@ type SearchTiming struct {
 	HECentroidScores time.Duration // All 64 centroid dot products
 	HEDecryptScores  time.Duration
 
+	// Level 1 sub-phases (for GPU profiling analysis)
+	HEQueryPack     time.Duration // Query replication into CKKS slots
+	HEBatchMultiply time.Duration // HE multiply + rescale (NTT-dominated)
+	HEBatchRotate   time.Duration // Rotation tree for partial sums
+	HEBatchDecrypt  time.Duration // Decrypt packed results
+
 	// Level 2: Sub-bucket fetch
 	BucketSelection time.Duration // Selecting buckets + generating decoys
 	BucketFetch     time.Duration // Fetching from storage

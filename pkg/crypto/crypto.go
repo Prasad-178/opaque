@@ -8,10 +8,20 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/tuneinsight/lattigo/v5/core/rlwe"
 	"github.com/tuneinsight/lattigo/v5/he/hefloat"
 )
+
+// HEProfile contains sub-phase timing for a single HE batch operation.
+// Used for GPU acceleration analysis to identify which phases benefit from GPU.
+type HEProfile struct {
+	Multiply time.Duration // Polynomial multiplication (NTT-dominated)
+	Rescale  time.Duration // Scale management after multiplication
+	Rotate   time.Duration // Galois rotations for partial sum (all rotations combined)
+	Add      time.Duration // Ring additions (all adds combined)
+}
 
 // Engine provides homomorphic encryption operations using CKKS scheme.
 // CKKS allows approximate arithmetic on encrypted floating-point numbers,
@@ -379,6 +389,52 @@ func (e *Engine) HomomorphicBatchDotProduct(encPackedQuery *rlwe.Ciphertext, pac
 	}
 
 	return result, nil
+}
+
+// HomomorphicBatchDotProductProfiled is like HomomorphicBatchDotProduct but also returns
+// sub-phase timing for GPU acceleration analysis.
+func (e *Engine) HomomorphicBatchDotProductProfiled(encPackedQuery *rlwe.Ciphertext, packedCentroids *rlwe.Plaintext, numCentroids, dimension int) (*rlwe.Ciphertext, HEProfile, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	var prof HEProfile
+
+	if packedCentroids == nil {
+		return nil, prof, errors.New("packed centroids is nil")
+	}
+
+	// Multiply: E(packed_q) * packed_centroids — NTT-dominated
+	start := time.Now()
+	result, err := e.evaluator.MulNew(encPackedQuery, packedCentroids)
+	if err != nil {
+		return nil, prof, fmt.Errorf("failed to multiply: %w", err)
+	}
+	prof.Multiply = time.Since(start)
+
+	// Rescale after multiplication
+	start = time.Now()
+	if err := e.evaluator.Rescale(result, result); err != nil {
+		return nil, prof, fmt.Errorf("failed to rescale: %w", err)
+	}
+	prof.Rescale = time.Since(start)
+
+	// Partial sum within each centroid's dimension slots
+	for stride := 1; stride < dimension; stride *= 2 {
+		start = time.Now()
+		rotated, err := e.evaluator.RotateNew(result, stride)
+		if err != nil {
+			return nil, prof, fmt.Errorf("failed to rotate by %d: %w", stride, err)
+		}
+		prof.Rotate += time.Since(start)
+
+		start = time.Now()
+		if err := e.evaluator.Add(result, rotated, result); err != nil {
+			return nil, prof, fmt.Errorf("failed to add: %w", err)
+		}
+		prof.Add += time.Since(start)
+	}
+
+	return result, prof, nil
 }
 
 // DecryptBatchScalars decrypts and extracts multiple dot product results from a batch operation.

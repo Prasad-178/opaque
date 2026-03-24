@@ -49,6 +49,13 @@ type HEProvider interface {
 	Close()
 }
 
+// ProfiledEvalEngine extends EvalEngine with sub-phase timing for GPU analysis.
+// Implementations that support profiling can be detected via type assertion.
+type ProfiledEvalEngine interface {
+	EvalEngine
+	HomomorphicBatchDotProductProfiled(encQuery *rlwe.Ciphertext, packedCentroids *rlwe.Plaintext, numCentroids, dimension int) (*rlwe.Ciphertext, HEProfile, error)
+}
+
 // EvalEngine provides homomorphic evaluation operations.
 // Acquired from HEProvider.Acquire(), must be returned via Release().
 // Not thread-safe — each goroutine should acquire its own.
