@@ -155,6 +155,49 @@ For development on Apple Silicon without a CUDA GPU:
 
 CKKS with LogN=14 requires ~200MB GPU memory for parameters + keys + workspace. Any modern GPU has sufficient memory.
 
+## Real GPU Benchmark Results (Tesla T4, g4dn.xlarge)
+
+Benchmarked HEonGPU (CKKS) on AWS g4dn.xlarge (Tesla T4, 16GB VRAM, CUDA 12.9) against Lattigo CPU on Apple M4 Pro. Both use `poly_modulus_degree=16384` (LogN=14).
+
+### Per-Operation Comparison
+
+| Operation | HEonGPU (T4 GPU) | Lattigo (M4 CPU) | Speedup |
+|-----------|-------------------|-------------------|---------|
+| Encrypt | 1.47ms | 7.14ms | **4.9x** |
+| Plain Multiply | 0.027ms | 0.70ms | **26x** |
+| Rescale | 0.107ms | 1.18ms | **11x** |
+| **Rotate (Galois)** | **0.761ms** | **6.55ms** | **8.6x** |
+| Decrypt | 0.030ms | 9.38ms | **313x** |
+| Add | 0.020ms | 0.45ms | **22x** |
+
+### Search Pipeline Projection
+
+**SIFT 128-dim (1 pack, 7 rotations):**
+
+| Component | CPU (Lattigo) | GPU (HEonGPU) | Speedup |
+|-----------|---------------|---------------|---------|
+| Batch HE scoring | 48.2ms | ~6.4ms | **7.5x** |
+| + Encrypt + Decrypt | 16.5ms | 1.5ms | 11x |
+| **Total HE** | **64.7ms** | **~8ms** | **8x** |
+
+**GIST 960-dim (4 packs, 10 rotations each):**
+
+| Component | CPU (Lattigo) | GPU (HEonGPU) | Speedup |
+|-----------|---------------|---------------|---------|
+| Batch HE scoring | 270ms | ~32ms | **8.5x** |
+| + Encrypt + Decrypt | 41ms | ~1.5ms | 27x |
+| **Total HE** | **311ms** | **~33ms** | **9.4x** |
+
+### End-to-End Impact (Projected)
+
+| Dataset | Current (CPU) | With GPU HE | With GPU HE + PQ |
+|---------|---------------|-------------|-------------------|
+| SIFT 100K probe-16 | 160ms | ~120ms (1.3x) | ~100ms (1.6x) |
+| **GIST 100K probe-8** | **2.6s** | **~700ms (3.7x)** | **~350ms (7.4x)** |
+| GIST 100K probe-16 | 6.2s | ~1.5s (4.1x) | ~800ms (7.8x) |
+
+**Key insight:** GPU HE alone gives 3.7x on high-dimensional GIST. Combined with PQ, the total improvement reaches **7.4x** — cutting GIST 100K from 2.6 seconds to ~350ms.
+
 ## References
 
 - [HEonGPU](https://github.com/Alisah-Ozcan/HEonGPU) — 380x over SEAL, CKKS+BFV+TFHE on GPU
