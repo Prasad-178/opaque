@@ -142,7 +142,7 @@ For development on Apple Silicon without a CUDA GPU:
 | PQ scoring + re-rank | ~300ms | ~300ms | 0 |
 | **Total** | **~1.4s** | **~420ms** | **3.3x** |
 
-**Key insight:** GPU HE + PQ combined is the strongest optimization for high-dimensional vectors. GPU reduces HE time, PQ reduces local scoring time. Together they cut GIST 960-dim from 2.6s to ~420ms.
+**Projected insight:** GPU HE + PQ combined would be the strongest optimization for high-dimensional vectors. GPU reduces HE time, PQ reduces local scoring time. Together they could cut GIST 960-dim from 2.6s to ~420ms. These are projections — actual end-to-end GPU pipeline has not been built yet.
 
 ## Hardware Requirements
 
@@ -188,7 +188,9 @@ Benchmarked HEonGPU (CKKS) on AWS g4dn.xlarge (Tesla T4, 16GB VRAM, CUDA 12.9) a
 | + Encrypt + Decrypt | 41ms | ~1.5ms | 27x |
 | **Total HE** | **311ms** | **~33ms** | **9.4x** |
 
-### End-to-End Impact (Projected)
+### End-to-End Impact (Projected, Not Measured)
+
+> **Note:** The numbers below are projections based on combining independently measured components (Lattigo CPU profiling + HEonGPU GPU benchmarks + PQ synthetic benchmarks). No end-to-end GPU pipeline has been built yet — this requires Go ↔ HEonGPU integration. Actual results may differ due to data transfer overhead, memory layout differences, and parameter compatibility.
 
 | Dataset | Current (CPU) | With GPU HE | With GPU HE + PQ |
 |---------|---------------|-------------|-------------------|
@@ -196,7 +198,7 @@ Benchmarked HEonGPU (CKKS) on AWS g4dn.xlarge (Tesla T4, 16GB VRAM, CUDA 12.9) a
 | **GIST 100K probe-8** | **2.6s** | **~700ms (3.7x)** | **~350ms (7.4x)** |
 | GIST 100K probe-16 | 6.2s | ~1.5s (4.1x) | ~800ms (7.8x) |
 
-**Key insight:** GPU HE alone gives 3.7x on high-dimensional GIST. Combined with PQ, the total improvement reaches **7.4x** — cutting GIST 100K from 2.6 seconds to ~350ms.
+**Projected insight:** GPU HE alone could give ~3.7x on high-dimensional GIST. Combined with PQ, the projected improvement reaches ~7.4x — potentially cutting GIST 100K from 2.6s to ~350ms. These are estimates pending actual GPU integration.
 
 ## References
 

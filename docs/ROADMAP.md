@@ -109,7 +109,7 @@ Add split/merge logic when cluster sizes become skewed. These formulas are exact
 Perform centroid updates entirely in the homomorphic encryption domain — the server updates encrypted centroids without ever decrypting them. This eliminates the plaintext-during-rebuild window and provides end-to-end encrypted index maintenance. The incremental mean formula requires only one HE subtraction, one scalar multiplication, and one HE addition (depth-1 circuit).
 
 ### GPU Acceleration — Profiled, Benchmarked on Tesla T4
-Profiling reveals Galois rotation (key-switching) is 71-84% of HE time, not NTT. Real benchmarks on AWS g4dn.xlarge (Tesla T4) confirm **8.6x speedup on rotation** (0.76ms GPU vs 6.55ms CPU). GIST 960-dim HE scoring: 311ms CPU → ~33ms GPU (9.4x). Combined with PQ, GPU+PQ cuts GIST 100K end-to-end from 2.6s to ~350ms (**7.4x**).
+Profiling reveals Galois rotation (key-switching) is 71-84% of HE time, not NTT. Real benchmarks on AWS g4dn.xlarge (Tesla T4) confirm **8.6x speedup on rotation** (0.76ms GPU vs 6.55ms CPU per operation). GIST 960-dim HE scoring: 311ms CPU → projected ~33ms GPU (9.4x on HE alone). Combined with PQ, projected end-to-end from 2.6s to ~350ms (7.4x) — pending actual GPU integration into Opaque pipeline.
 
 Recommended approach: hybrid client-server with HEonGPU on CUDA, communicating via existing gRPC. Terraform GPU benchmark infrastructure at `deploy/gpu/` (ephemeral g4dn.xlarge, toggle on/off). See `docs/GPU_ACCELERATION.md` for full profiling data, benchmark results, architecture, and implementation plan.
 

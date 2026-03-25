@@ -365,14 +365,14 @@ Profiling revealed **Galois rotation (key-switching)** is 71-84% of HE time — 
 | Rescale | 0.11ms | 1.18ms | 11x |
 | Decrypt | 0.03ms | 9.38ms | 313x |
 
-**Search pipeline projection:**
+**Search pipeline projection (estimated, not measured end-to-end):**
 
-| Dataset | CPU HE | GPU HE | Speedup | End-to-End with GPU+PQ |
-|---------|--------|--------|---------|------------------------|
-| SIFT 128-dim (1 pack) | 64.7ms | ~8ms | 8x | ~100ms (1.6x total) |
-| **GIST 960-dim (4 packs)** | **311ms** | **~33ms** | **9.4x** | **~350ms (7.4x total)** |
+| Dataset | CPU HE (measured) | GPU HE (projected) | Speedup | Projected E2E with GPU+PQ |
+|---------|-------------------|---------------------|---------|---------------------------|
+| SIFT 128-dim (1 pack) | 64.7ms | ~8ms | 8x | ~100ms (1.6x) |
+| GIST 960-dim (4 packs) | 311ms | ~33ms | 9.4x | ~350ms (7.4x) |
 
-GPU HE + PQ combined cuts GIST 100K from 2.6s to ~350ms. See `docs/GPU_ACCELERATION.md` for full analysis, architecture, and Terraform infrastructure.
+> **Note:** Per-operation GPU numbers above are measured (HEonGPU standalone benchmark). End-to-end projections combine independently measured components — no GPU-integrated Opaque pipeline exists yet. See `docs/GPU_ACCELERATION.md` for full analysis, architecture, and Terraform infrastructure.
 
 ## Privacy Overhead
 
