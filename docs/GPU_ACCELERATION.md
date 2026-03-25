@@ -165,12 +165,47 @@ CKKS with LogN=14 requires ~200MB GPU memory for parameters + keys + workspace. 
 - [ICICLE v4](https://github.com/ingonyama-zk/icicle) — Lattice crypto primitives with Go bindings, Apple Silicon planned
 - [Go + Metal GPU](https://towardsdatascience.com/programming-apple-gpus-through-go-and-metal-shading-language-a0e7a60a3dba/) — Calling Metal compute shaders from Go
 
+## GPU Benchmark Infrastructure
+
+Ephemeral Terraform infrastructure for running HE benchmarks on real CUDA hardware. See `deploy/gpu/` for full source.
+
+**Quick start:**
+
+```bash
+cd deploy/gpu
+terraform init
+terraform apply -var="enabled=true"    # Spot g4dn.xlarge, ~$0.16/hr
+bash run_benchmarks.sh                  # SSH in, run all benchmarks, save results
+terraform destroy -var="enabled=true"   # Tear down, $0 when off
+```
+
+**What it provisions:**
+- g4dn.xlarge spot instance (NVIDIA T4, 16GB VRAM)
+- AWS Deep Learning AMI (CUDA + NVIDIA drivers pre-installed)
+- Auto-installs Go, clones Opaque, builds GPU-NTT + HEonGPU
+- SSH key auto-generated, results saved to `deploy/gpu/results/`
+
+**Toggle:** `enabled=false` (default) means no resources exist. Set `enabled=true` only when running benchmarks. All resources destroyed on `terraform destroy`.
+
+**Cost:** ~$0.16/hr spot ($0.53/hr on-demand). Typical benchmark run (30 min) costs ~$0.08.
+
+**AWS profile:** Uses `--profile personal` to avoid touching production accounts.
+
 ## Reproducing
 
 ```bash
+# Local profiling (no GPU needed):
+
 # SIFT 128-dim HE sub-phase profiling (~30s)
 go test -tags sift1m -v -run TestGPU_ProfilingSIFT100K ./test/ -timeout 30m
 
 # GIST 960-dim HE sub-phase profiling (~12s)
 go test -tags gist -v -run TestGPU_ProfilingGIST ./test/ -timeout 30m
+
+# GPU benchmarks (requires AWS):
+
+cd deploy/gpu
+terraform init && terraform apply -var="enabled=true"
+bash run_benchmarks.sh
+terraform destroy -var="enabled=true"
 ```

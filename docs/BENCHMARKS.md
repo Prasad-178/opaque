@@ -406,4 +406,13 @@ go test -v -run TestPQ100KBenchmark ./test/ -timeout 30m
 
 # PQ SIFT 100K benchmark (real image descriptors, requires SIFT1M download, ~2 min)
 go test -tags sift1m -v -run TestPQ_SIFT100K ./test/ -timeout 30m
+
+# GPU profiling — HE sub-phase breakdown (SIFT 128-dim, ~30s)
+go test -tags sift1m -v -run TestGPU_ProfilingSIFT100K ./test/ -timeout 30m
+
+# GPU profiling — HE sub-phase breakdown (GIST 960-dim, ~12s)
+go test -tags gist -v -run TestGPU_ProfilingGIST ./test/ -timeout 30m
+
+# GPU benchmarks on AWS (requires terraform, see deploy/gpu/README.md)
+# cd deploy/gpu && terraform apply -var="enabled=true" && bash run_benchmarks.sh
 ```
