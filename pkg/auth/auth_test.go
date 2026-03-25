@@ -270,13 +270,13 @@ func TestTokenScopes(t *testing.T) {
 func TestCleanupExpiredTokens(t *testing.T) {
 	ctx := context.Background()
 
-	// Create service with very short TTL
+	// Create service with short TTL (long enough for bcrypt to finish both auths).
 	enterpriseCfg, _ := enterprise.NewConfig("test-enterprise", 128, 64)
 	store := enterprise.NewMemoryStore()
 	store.Put(ctx, enterpriseCfg)
 
 	cfg := ServiceConfig{
-		TokenTTL:      2 * time.Second,
+		TokenTTL:      5 * time.Second,
 		RefreshWindow: 500 * time.Millisecond,
 		LSHBits:       8,
 		Dimension:     128,
@@ -294,7 +294,7 @@ func TestCleanupExpiredTokens(t *testing.T) {
 	}
 
 	// Wait for expiry
-	time.Sleep(2100 * time.Millisecond)
+	time.Sleep(5100 * time.Millisecond)
 
 	// Cleanup
 	cleaned := service.CleanupExpiredTokens()
