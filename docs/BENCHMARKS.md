@@ -167,6 +167,24 @@ PCA is applied client-side before CKKS encryption — zero privacy impact. Recal
 > go test -tags gist -v -run TestGIST100K_PCA_Benchmark ./test/ -timeout 60m
 > ```
 
+#### Product Quantization (PQ) on GIST
+
+Measured with `go test -tags gist -v -run TestPQ_GIST100K ./test/ -timeout 60m`.
+
+PQ compresses 960-dim vectors from 7,680 bytes (960 float64s) to 32 bytes (M=32 codes), enabling fast ADC scoring. Two-phase search: PQ ADC for bulk scoring, then exact re-ranking of top candidates. All recall measured against brute-force cosine ground truth on original 960-dim vectors.
+
+| Config | Recall@1 | Recall@10 | Avg Query | P50 Query | Speedup |
+|--------|----------|-----------|-----------|-----------|---------|
+| **standard-probe8 (baseline)** | **100%** | **96.0%** | **9.53s** | **9.13s** | **1x** |
+| standard-probe16 | 100% | 100.0% | 13.0s | 12.9s | 0.7x |
+| **PQ-M32 probe-8** | **100%** | **98.0%** | **497ms** | **465ms** | **19.2x** |
+| PQ-M48 probe-8 | 95% | 98.0% | 784ms | 647ms | 12.1x |
+| PQ-M32 probe-16 | 100% | 99.0% | 855ms | 702ms | 11.1x |
+
+**Finding:** PQ is transformative for high-dimensional vectors. PQ-M32 probe-8 achieves **19.2x speedup** (9.53s → 497ms) with **+2pp better recall** (98.0% vs 96.0%) than standard. Unlike PCA, PQ preserves angular relationships because it quantizes subspaces independently and re-ranks top candidates with exact scores.
+
+**Recommended GIST config: PQ-M32 probe-8** — sub-second queries at 98% recall with full privacy guarantees. For 99%+ recall, use PQ-M32 probe-16 (855ms).
+
 ### GloVe 100K (300-dim Word Embeddings)
 
 Measured with `go test -tags glove -v -run TestGloVe_PCA_Benchmark ./test/ -timeout 30m`.

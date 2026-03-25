@@ -135,14 +135,19 @@ For development on Apple Silicon without a CUDA GPU:
 
 **GIST 100K (960-dim, probe-8, with GPU HE + PQ):**
 
-| Phase | CPU + PQ | With GPU HE + PQ | Savings |
-|-------|----------|-------------------|---------|
-| HE scoring (4 packs) | ~270ms × 4 | ~20ms × 4 | -1000ms |
-| HE encrypt+decrypt | ~41ms | ~41ms | 0 |
-| PQ scoring + re-rank | ~300ms | ~300ms | 0 |
-| **Total** | **~1.4s** | **~420ms** | **3.3x** |
+PQ-M32 probe-8 is **measured** at 497ms on CPU (see BENCHMARKS.md). The breakdown:
+- HE scoring (4 packs): ~270ms (measured, CPU)
+- HE encrypt+decrypt: ~41ms (measured, CPU)
+- PQ ADC + re-rank: ~186ms (measured, CPU — the PQ savings)
 
-**Projected insight:** GPU HE + PQ combined would be the strongest optimization for high-dimensional vectors. GPU reduces HE time, PQ reduces local scoring time. Together they could cut GIST 960-dim from 2.6s to ~420ms. These are projections — actual end-to-end GPU pipeline has not been built yet.
+| Phase | CPU + PQ (measured) | With GPU HE + PQ (projected) | Savings |
+|-------|---------------------|------------------------------|---------|
+| HE scoring (4 packs) | ~270ms | ~20ms × 4 = ~80ms | -190ms |
+| HE encrypt+decrypt | ~41ms | ~41ms | 0 |
+| PQ ADC + re-rank | ~186ms | ~186ms | 0 |
+| **Total** | **497ms (measured)** | **~307ms (projected)** | **1.6x** |
+
+**Key finding:** PQ alone already delivers the massive win (19.2x vs standard). GPU HE would provide an additional ~1.6x on top of PQ by reducing the HE scoring phase. The combined projection is ~307ms — but PQ at 497ms is already sub-second and may be sufficient without GPU complexity.
 
 ## Hardware Requirements
 
@@ -192,13 +197,13 @@ Benchmarked HEonGPU (CKKS) on AWS g4dn.xlarge (Tesla T4, 16GB VRAM, CUDA 12.9) a
 
 > **Note:** The numbers below are projections based on combining independently measured components (Lattigo CPU profiling + HEonGPU GPU benchmarks + PQ synthetic benchmarks). No end-to-end GPU pipeline has been built yet — this requires Go ↔ HEonGPU integration. Actual results may differ due to data transfer overhead, memory layout differences, and parameter compatibility.
 
-| Dataset | Current (CPU) | With GPU HE | With GPU HE + PQ |
-|---------|---------------|-------------|-------------------|
-| SIFT 100K probe-16 | 160ms | ~120ms (1.3x) | ~100ms (1.6x) |
-| **GIST 100K probe-8** | **2.6s** | **~700ms (3.7x)** | **~350ms (7.4x)** |
-| GIST 100K probe-16 | 6.2s | ~1.5s (4.1x) | ~800ms (7.8x) |
+| Dataset | Standard CPU | PQ CPU (measured) | GPU HE + PQ (projected) |
+|---------|-------------|-------------------|-------------------------|
+| SIFT 100K probe-16 | 160ms | 127ms (1.26x) | ~100ms (1.6x projected) |
+| **GIST 100K probe-8** | **9.53s** | **497ms (19.2x measured)** | **~307ms (projected)** |
+| GIST 100K probe-16 | 13.0s | 855ms (15.2x measured) | ~665ms (projected) |
 
-**Projected insight:** GPU HE alone could give ~3.7x on high-dimensional GIST. Combined with PQ, the projected improvement reaches ~7.4x — potentially cutting GIST 100K from 2.6s to ~350ms. These are estimates pending actual GPU integration.
+**Key insight:** PQ alone delivers transformative speedups on high-dimensional data — **19.2x measured** on GIST 960-dim. GPU HE would add an additional ~1.6x on top. The earlier 350ms projection was optimistic; real PQ measurement at 497ms is close and already sub-second. GPU integration would primarily help if sub-300ms latency is required.
 
 ## References
 
