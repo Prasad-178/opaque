@@ -114,6 +114,24 @@ The SIFT1M dataset contains 1,000,000 128-dimensional real embeddings. All recal
 
 **Recommended production config: strict-8** — 96.8% Recall@10 while scanning only 6.2% of the dataset, with full privacy guarantees (HE + AES + 8 decoys).
 
+#### Product Quantization (PQ) on SIFT1M
+
+Measured with `go test -tags sift1m -v -run TestPQ_SIFT1M ./test/ -timeout 60m`.
+
+PQ-M8 compresses 128-dim vectors from 1024 bytes to 8 bytes and uses ADC lookup tables for fast approximate scoring, with exact re-ranking of top candidates. All recall measured against brute-force cosine ground truth over the full 1M dataset.
+
+| Config | Recall@1 | Recall@10 | Avg Query | P50 Query |
+|--------|----------|-----------|-----------|-----------|
+| standard-strict8 (baseline) | 100.0% | 96.8% | 470ms | 417ms |
+| standard-strict16 | 100.0% | 100.0% | 2.31s | 1.86s |
+| PQ-M8-strict8 | 90.0% | 92.2% | 336ms | 304ms |
+| **PQ-M8-strict16** | **100.0%** | **98.0%** | **402ms** | **389ms** |
+| PQ-M8-strict32 | 100.0% | 99.8% | 525ms | 488ms |
+| **PQ-M8-probe16** | **100.0%** | **99.6%** | **415ms** | **405ms** |
+| PQ-M8-probe32 | 100.0% | 99.8% | 512ms | 492ms |
+
+**Best PQ config: PQ-M8-probe16** — 99.6% Recall@10 at 415ms. For comparable recall to standard-strict16 (100% at 2.3s), PQ achieves 99.6% at 415ms — **5.6x faster**. Privacy identical.
+
 #### Scaling (strict-8 config, multi-probe threshold=0.95)
 
 | Vectors | Build Time | Avg Query | Recall@10 |
