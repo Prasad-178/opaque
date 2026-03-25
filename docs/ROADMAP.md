@@ -108,10 +108,10 @@ Add split/merge logic when cluster sizes become skewed. These formulas are exact
 ### Incremental Indexing (Tier 3: HE-Native Centroid Updates)
 Perform centroid updates entirely in the homomorphic encryption domain — the server updates encrypted centroids without ever decrypting them. This eliminates the plaintext-during-rebuild window and provides end-to-end encrypted index maintenance. The incremental mean formula requires only one HE subtraction, one scalar multiplication, and one HE addition (depth-1 circuit).
 
-### GPU Acceleration — Profiled, Architecture Designed
-Profiling reveals Galois rotation (key-switching) is 71-84% of HE time, not NTT. GPU key-switching could yield 3.2x (SIFT 128-dim) to 5.1x (GIST 960-dim) speedup on HE operations. Combined with PQ, GPU+PQ could cut GIST 960-dim from 2.6s to ~420ms (6.2x).
+### GPU Acceleration — Profiled, Benchmarked on Tesla T4
+Profiling reveals Galois rotation (key-switching) is 71-84% of HE time, not NTT. Real benchmarks on AWS g4dn.xlarge (Tesla T4) confirm **8.6x speedup on rotation** (0.76ms GPU vs 6.55ms CPU). GIST 960-dim HE scoring: 311ms CPU → ~33ms GPU (9.4x). Combined with PQ, GPU+PQ cuts GIST 100K end-to-end from 2.6s to ~350ms (**7.4x**).
 
-Recommended approach: hybrid client-server with HEonGPU or FIDESlib on CUDA, communicating via existing gRPC. Apple Metal path is novel but uncharted. Terraform GPU benchmark infrastructure ready at `deploy/gpu/` (ephemeral g4dn.xlarge spot, ~$0.16/hr, toggle on/off). See `docs/GPU_ACCELERATION.md` for full profiling data, architecture, and implementation plan.
+Recommended approach: hybrid client-server with HEonGPU on CUDA, communicating via existing gRPC. Terraform GPU benchmark infrastructure at `deploy/gpu/` (ephemeral g4dn.xlarge, toggle on/off). See `docs/GPU_ACCELERATION.md` for full profiling data, benchmark results, architecture, and implementation plan.
 
 ### ~~Product Quantization (PQ)~~ (Done)
 Optional PQ via `Config.PQSubspaces`. Compresses vectors into compact M-byte codes and uses ADC lookup tables for fast approximate scoring. Two-phase search: PQ ADC for bulk scoring, exact re-ranking of top candidates with full vectors. Applied client-side before AES encryption — zero privacy impact.

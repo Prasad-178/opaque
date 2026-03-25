@@ -350,6 +350,30 @@ fmt.Printf("Clusters: %d, Min: %d, Max: %d, Avg: %.1f, Empty: %d\n",
     stats.NumClusters, stats.MinSize, stats.MaxSize, stats.AvgSize, stats.EmptyClusters)
 ```
 
+## GPU Acceleration (Tesla T4 Benchmarks)
+
+HEonGPU CKKS benchmarked on AWS g4dn.xlarge (Tesla T4, 16GB VRAM, CUDA 12.9) against Lattigo CPU on Apple M4 Pro. Both use `poly_modulus_degree=16384` (LogN=14, our production parameters).
+
+Profiling revealed **Galois rotation (key-switching)** is 71-84% of HE time — the GPU target.
+
+**Per-operation comparison:**
+
+| Operation | GPU (T4) | CPU (M4) | Speedup |
+|-----------|----------|----------|---------|
+| **Rotate (Galois)** | **0.76ms** | **6.55ms** | **8.6x** |
+| Multiply (plain) | 0.03ms | 0.70ms | 26x |
+| Rescale | 0.11ms | 1.18ms | 11x |
+| Decrypt | 0.03ms | 9.38ms | 313x |
+
+**Search pipeline projection:**
+
+| Dataset | CPU HE | GPU HE | Speedup | End-to-End with GPU+PQ |
+|---------|--------|--------|---------|------------------------|
+| SIFT 128-dim (1 pack) | 64.7ms | ~8ms | 8x | ~100ms (1.6x total) |
+| **GIST 960-dim (4 packs)** | **311ms** | **~33ms** | **9.4x** | **~350ms (7.4x total)** |
+
+GPU HE + PQ combined cuts GIST 100K from 2.6s to ~350ms. See `docs/GPU_ACCELERATION.md` for full analysis, architecture, and Terraform infrastructure.
+
 ## Privacy Overhead
 
 The privacy guarantees add overhead compared to plaintext search:
