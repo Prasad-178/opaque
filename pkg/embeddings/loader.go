@@ -185,6 +185,52 @@ func GIST1M(dir string) (*Dataset, error) {
 	}, nil
 }
 
+// SIFT10M loads the SIFT10M dataset (first 10M vectors from BigANN SIFT1B).
+// Expected files:
+//   - sift10m_base.bvecs: 10M base vectors (128-dim, uint8)
+//   - sift10m_query.fvecs: query vectors (reused from SIFT1M)
+//
+// Download with: scripts/download_sift10m.sh
+func SIFT10M(dir string) (*Dataset, error) {
+	basePath := filepath.Join(dir, "sift10m_base.bvecs")
+	queryPath := filepath.Join(dir, "sift10m_query.fvecs")
+
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("SIFT10M base not found: %s\nDownload with: scripts/download_sift10m.sh", basePath)
+	}
+
+	vectors, err := LoadBvecs(basePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load SIFT10M base vectors: %w", err)
+	}
+
+	var queries [][]float64
+	if _, err := os.Stat(queryPath); err == nil {
+		queries, err = LoadFvecs(queryPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load queries: %w", err)
+		}
+	}
+
+	ids := make([]string, len(vectors))
+	for i := range ids {
+		ids[i] = fmt.Sprintf("sift10m_%d", i)
+	}
+
+	dim := 0
+	if len(vectors) > 0 {
+		dim = len(vectors[0])
+	}
+
+	return &Dataset{
+		Name:      "sift10m",
+		Dimension: dim,
+		Vectors:   vectors,
+		IDs:       ids,
+		Queries:   queries,
+	}, nil
+}
+
 // GloVe loads GloVe word vectors from a text file.
 // Format: word dim1 dim2 dim3 ... dimN (space-separated, one vector per line)
 //
