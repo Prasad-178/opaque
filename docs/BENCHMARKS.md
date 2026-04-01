@@ -132,13 +132,32 @@ PQ-M8 compresses 128-dim vectors from 1024 bytes to 8 bytes and uses ADC lookup 
 
 **Best PQ config: PQ-M8-probe16** — 99.6% Recall@10 at 415ms. For comparable recall to standard-strict16 (100% at 2.3s), PQ achieves 99.6% at 415ms — **5.6x faster**. Privacy identical.
 
-#### Scaling (strict-8 config, multi-probe threshold=0.95)
+#### Multi-Million Scale with PQ (SIFT 2M and 5M)
 
-| Vectors | Build Time | Avg Query | Recall@10 |
-|---------|-----------|-----------|-----------|
-| 100K | ~3s | ~100ms | ~98% |
-| 500K | ~12s | ~350ms | ~97% |
-| 1M | ~25s | ~500ms | ~97% |
+Measured with `go test -tags sift10m -v -run TestPQ_SIFT10M ./test/ -timeout 120m`.
+
+First 2M and 5M vectors from BigANN SIFT1B (bvecs format, same 128-dim SIFT descriptors). Ground truth computed via brute-force cosine similarity at each scale. **No other HE-based private search system has published benchmarks at multi-million scale.**
+
+**2M vectors (128 clusters):**
+
+| Config | Recall@1 | Recall@10 | Avg Query | P50 |
+|--------|----------|-----------|-----------|-----|
+| standard-strict8 | 80.0% | 85.0% | 713ms | 701ms |
+| PQ-M8-strict8 | 95.0% | 85.0% | **183ms** | 180ms |
+| PQ-M8-strict16 | 95.0% | 97.0% | **377ms** | 352ms |
+| **PQ-M8-probe16** | **95.0%** | **98.0%** | **814ms** | **689ms** |
+| PQ-M8-probe32 | 100.0% | 100.0% | 1.49s | 1.55s |
+
+**5M vectors (256 clusters, partial — build time ~37 min per PQ config):**
+
+| Config | Recall@1 | Recall@10 | Avg Query |
+|--------|----------|-----------|-----------|
+| standard-strict8 | 85.0% | 82.5% | 12.4s |
+| PQ-M8-strict8 | 70.0% | 77.5% | **1.65s** |
+
+**Key finding:** At 2M scale, PQ-M8-probe16 achieves **98% recall at 814ms** — sub-second private search on 2 million real vectors. PQ-M8-strict8 runs at **183ms** (3.9x faster than standard). At 5M, PQ cuts query time from 12.4s to 1.65s (**7.5x speedup**).
+
+#### Scaling (strict-8 config, multi-probe threshold=0.95)
 
 Latency scales sub-linearly with dataset size due to clustering — doubling vectors doesn't double query time.
 
