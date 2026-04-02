@@ -148,14 +148,7 @@ First 2M and 5M vectors from BigANN SIFT1B (bvecs format, same 128-dim SIFT desc
 | **PQ-M8-probe16** | **95.0%** | **98.0%** | **814ms** | **689ms** |
 | PQ-M8-probe32 | 100.0% | 100.0% | 1.49s | 1.55s |
 
-**5M vectors (256 clusters, partial — build time ~37 min per PQ config):**
-
-| Config | Recall@1 | Recall@10 | Avg Query |
-|--------|----------|-----------|-----------|
-| standard-strict8 | 85.0% | 82.5% | 12.4s |
-| PQ-M8-strict8 | 70.0% | 77.5% | **1.65s** |
-
-**Key finding:** At 2M scale, PQ-M8-probe16 achieves **98% recall at 814ms** — sub-second private search on 2 million real vectors. PQ-M8-strict8 runs at **183ms** (3.9x faster than standard). At 5M, PQ cuts query time from 12.4s to 1.65s (**7.5x speedup**).
+**Key finding:** At 2M scale, PQ-M8-probe16 achieves **98% recall at 814ms** — sub-second private search on 2 million real vectors. PQ-M8-strict8 runs at **183ms** (3.9x faster than standard). PQ-M8-probe32 achieves **100% recall at 1.49s**.
 
 #### Scaling (strict-8 config, multi-probe threshold=0.95)
 
