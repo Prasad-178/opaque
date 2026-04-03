@@ -32,6 +32,71 @@
 
 **Pacmann (ICLR 2025)** — Scales to 100M with PIR. Slower (3.1s) but at 100x our scale. If we can demonstrate 10M with reasonable latency, we close this gap.
 
+## Deep-Dive: Compass (OSDI 2025) — Closest Competitor
+
+**Paper:** Zhu, Patel, Zaharia, Popa. "Compass: Encrypted Semantic Search with High Accuracy." OSDI 2025. ([USENIX](https://www.usenix.org/conference/osdi25/presentation/zhu-jinhao), [ePrint 2024/1255](https://eprint.iacr.org/2024/1255))
+
+### Architecture
+
+Compass performs HNSW graph traversal over encrypted embeddings stored in Ring ORAM. The client drives the search algorithm; the server holds only encrypted ORAM blocks and performs XOR-based bandwidth reduction.
+
+```
+Client: HNSW search controller + direction sketch + PQ decoder
+  ↕ Ring ORAM (2 round trips per access)
+Server: Encrypted ORAM tree (each block = one HNSW node)
+```
+
+### Key Techniques
+
+**Directional Neighbor Filtering:** At each HNSW node, instead of fetching ALL neighbors from ORAM (expensive), the client uses a small locally-cached "direction sketch" to determine which neighbors are in the same direction as the query. Only directionally-aligned neighbors are fetched. This dramatically reduces ORAM accesses per step.
+
+**Speculative Neighbor Prefetch:** Instead of waiting for each HNSW step to complete before fetching the next node, Compass predicts likely next nodes and issues prefetch requests in parallel. This pipelines ORAM round-trips, hiding latency.
+
+**Graph-Traversal Tailored ORAM:** Modified Ring ORAM optimized for HNSW's access pattern. Eviction (ORAM background maintenance) takes 5.8s but runs asynchronously — overlapped with LLM generation in a RAG pipeline so the user doesn't perceive it.
+
+**PQ compression:** Embeddings within ORAM blocks are PQ-compressed (8 sub-vectors for 128-dim, 32 for 768-dim). This reduces per-block size and ORAM bandwidth.
+
+### Performance
+
+| Dataset | Vectors | Dims | Perceived Latency | Notes |
+|---------|---------|------|-------------------|-------|
+| SIFT1M | 1M | 128 | <1s (~600-900ms) | PQ with 8 sub-vectors |
+| LAION | ~1M | 512 | <1s | Similar bandwidth despite 4x larger dims |
+| MS MARCO | ~8.8M | 768 | **1.3s** | Enterprise-scale; eviction in background |
+| TripClick | ~1.5M | 768 | ~1s | M=128 HNSW connectivity |
+
+Recall claimed to match plaintext HNSW quality.
+
+### Security Model
+
+**What does NOT leak (cryptographic):**
+- Which embeddings are accessed (ORAM guarantee)
+- The query vector
+- Search results
+- Data content (all encrypted)
+
+**What leaks:**
+- Query timing (when, not what)
+- Volume pattern (fixed/padded, so minimal leakage)
+
+**Security claim:** Privacy of data, queries, and results "even if the server is compromised." This is **cryptographic** access pattern hiding (ORAM), stronger than Opaque's **statistical** hiding (decoys).
+
+### Comparison with Opaque
+
+| Dimension | Opaque | Compass |
+|-----------|--------|---------|
+| **SIFT1M latency** | **415ms** | **~600-900ms** |
+| **Access pattern privacy** | Statistical (decoys) | **Cryptographic (ORAM)** |
+| **Search algorithm** | IVF (k-means clusters) | HNSW (graph-based) |
+| **HE usage** | Only centroid scoring | None (ORAM-only, no HE) |
+| **Largest dataset** | 2M (benchmarked) | **8.8M (MS MARCO)** |
+| **Background overhead** | None | 5.8s eviction (async) |
+| **PQ usage** | ADC for local scoring | Embedding compression in ORAM |
+
+**Opaque is 1.5-2x faster** on SIFT1M but **Compass provides stronger security guarantees**. The fundamental tradeoff: Opaque minimizes crypto (only centroid scoring under HE), Compass puts everything under ORAM. Opaque's decoys are practical but weaker; Compass's ORAM is provable but slower.
+
+**Paper positioning:** This tradeoff is the key differentiator. Opaque demonstrates that for the honest-but-curious threat model (common in enterprise deployments), statistical access pattern hiding with decoys is sufficient and yields significantly lower latency. Compass is the right choice when defending against a fully compromised server.
+
 ## Why Opaque Is Fast
 
 Most systems do all computation under crypto (MPC, ORAM, garbled circuits). Opaque's key architectural insight: **minimize what's done under HE**.
