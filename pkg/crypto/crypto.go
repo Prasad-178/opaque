@@ -30,6 +30,7 @@ type Engine struct {
 	params    hefloat.Parameters
 	encoder   *hefloat.Encoder
 	evaluator *hefloat.Evaluator
+	evalKeys  *rlwe.MemEvaluationKeySet // Stored for GPU key serialization
 
 	// Only set on client side
 	secretKey *rlwe.SecretKey
@@ -79,6 +80,7 @@ func NewClientEngine() (*Engine, error) {
 		params:    params,
 		encoder:   hefloat.NewEncoder(params),
 		evaluator: hefloat.NewEvaluator(params, evk),
+		evalKeys:  evk,
 		secretKey: sk,
 		publicKey: pk,
 		encryptor: rlwe.NewEncryptor(params, pk),

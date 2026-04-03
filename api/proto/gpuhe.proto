@@ -1,0 +1,118 @@
+syntax = "proto3";
+
+package opaque.gpu.v1;
+
+option go_package = "github.com/Prasad-178/opaque/api/proto/gpuhe;gpuhe";
+
+// GPUHEService offloads expensive HE operations to a GPU-accelerated server.
+//
+// Architecture:
+//   Client (Go/Lattigo) handles: key generation, encryption, decryption
+//   GPU Server handles: homomorphic multiply, rescale, Galois rotations, add
+//
+// The client sends evaluation keys once (RegisterEvalKeys), then sends
+// encrypted queries for batch dot product computation. The server never
+// has access to secret keys or decrypted data.
+service GPUHEService {
+  // RegisterEvalKeys sends CKKS evaluation keys to the server.
+  // Must be called once before any computation. The server stores these
+  // keys and creates an evaluator for subsequent operations.
+  // Keys include: CKKS parameters, relinearization key, and Galois keys.
+  rpc RegisterEvalKeys(RegisterEvalKeysRequest) returns (RegisterEvalKeysResponse);
+
+  // BatchDotProduct computes multiple dot products in a single HE operation.
+  // The server performs: MulNew + Rescale + RotateNew loop + Add loop.
+  // Input: encrypted packed query + plaintext packed centroids.
+  // Output: encrypted result with dot products at positions [0, dim, 2*dim, ...].
+  rpc BatchDotProduct(BatchDotProductRequest) returns (BatchDotProductResponse);
+
+  // HealthCheck reports server status and backend type.
+  rpc HealthCheck(GPUHealthCheckRequest) returns (GPUHealthCheckResponse);
+}
+
+// RegisterEvalKeysRequest contains serialized CKKS evaluation keys.
+message RegisterEvalKeysRequest {
+  // Serialized CKKS parameters (hefloat.Parameters via MarshalBinary).
+  bytes ckks_params = 1;
+
+  // Serialized relinearization key (rlwe.RelinearizationKey via WriteTo).
+  bytes relin_key = 2;
+
+  // Serialized Galois keys. Each entry is one GaloisKey via WriteTo.
+  // The server needs one key per rotation step used in batch dot product.
+  repeated bytes galois_keys = 3;
+
+  // Galois elements corresponding to each Galois key (for the evaluator).
+  repeated uint64 galois_elements = 4;
+
+  // Session ID for this client (allows multiple clients).
+  string session_id = 5;
+}
+
+message RegisterEvalKeysResponse {
+  bool success = 1;
+  string error = 2;
+
+  // Server-reported memory usage after loading keys.
+  uint64 gpu_memory_bytes = 3;
+}
+
+// BatchDotProductRequest contains serialized ciphertext and plaintext for batch computation.
+message BatchDotProductRequest {
+  // Session ID (must match a previous RegisterEvalKeys call).
+  string session_id = 1;
+
+  // Serialized encrypted packed query (rlwe.Ciphertext via WriteTo).
+  bytes encrypted_query = 2;
+
+  // Serialized packed centroids plaintext (rlwe.Plaintext via WriteTo).
+  bytes packed_centroids = 3;
+
+  // Number of centroids packed in the plaintext.
+  int32 num_centroids = 4;
+
+  // Vector dimension (for rotation count calculation).
+  int32 dimension = 5;
+}
+
+message BatchDotProductResponse {
+  // Serialized encrypted result (rlwe.Ciphertext via WriteTo).
+  // Contains dot products at positions [0, dim, 2*dim, ...].
+  bytes encrypted_result = 1;
+
+  string error = 2;
+
+  // Server-side computation time in microseconds.
+  int64 compute_time_us = 3;
+
+  // Sub-phase timing (for profiling).
+  int64 multiply_us = 4;
+  int64 rescale_us = 5;
+  int64 rotate_us = 6;
+  int64 add_us = 7;
+}
+
+// GPUHealthCheckRequest is empty.
+message GPUHealthCheckRequest {}
+
+message GPUHealthCheckResponse {
+  enum Status {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+  }
+  Status status = 1;
+
+  enum Backend {
+    CPU_STUB = 0;  // Lattigo CPU (for testing without GPU)
+    CUDA = 1;      // HEonGPU / custom CUDA
+    METAL = 2;     // Apple Metal (future)
+  }
+  Backend backend = 2;
+
+  // GPU device name (e.g., "Tesla T4", "Apple M4 GPU").
+  string device_name = 3;
+
+  // Number of active sessions.
+  int32 active_sessions = 4;
+}
