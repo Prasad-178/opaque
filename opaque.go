@@ -53,6 +53,7 @@ import (
 	"github.com/Prasad-178/opaque/pkg/blob"
 	"github.com/Prasad-178/opaque/pkg/client"
 	"github.com/Prasad-178/opaque/pkg/cluster"
+	"github.com/Prasad-178/opaque/pkg/crypto"
 	"github.com/Prasad-178/opaque/pkg/encrypt"
 	"github.com/Prasad-178/opaque/pkg/enterprise"
 	"github.com/Prasad-178/opaque/pkg/hierarchical"
@@ -191,6 +192,18 @@ type Config struct {
 	// The callback is invoked synchronously from the Build goroutine. Keep it fast.
 	// A nil callback disables progress reporting (default).
 	OnBuildProgress func(phase string, pct float64) `json:"-"`
+
+	// GPUServerAddress is the address of a GPU HE acceleration server.
+	// When set, the search pipeline offloads expensive HE operations (batch dot
+	// product, Galois rotations) to this server instead of computing locally.
+	// The server receives only evaluation keys and encrypted data — secret keys
+	// never leave the client.
+	//
+	// Format: "host:port" (e.g., "localhost:50052").
+	// Start the server with: go run ./cmd/gpu-server/
+	//
+	// Default: "" (disabled, uses local CPU computation).
+	GPUServerAddress string
 
 	// AutoIndexEnabled enables a background lifecycle manager that automatically
 	// calls Build/Rebuild when data changes are detected.
@@ -950,13 +963,29 @@ func (db *DB) buildLocked(ctx context.Context) error {
 	// Map library config to internal search config (use effective dimension post-PCA).
 	searchCfg := db.makeSearchConfig(enterpriseCfg, indexDim)
 
-	// Create the search client with configurable pool size.
+	// Create the search client. Use GPU provider if configured, otherwise local CPU.
 	if progress != nil {
 		progress("indexing", 0)
 	}
-	searchClient, err := client.NewEnterpriseHierarchicalClientWithPoolSize(
-		searchCfg, creds, store, db.cfg.WorkerPoolSize,
-	)
+	var searchClient *client.EnterpriseHierarchicalClient
+	if db.cfg.GPUServerAddress != "" {
+		gpuProvider, gpuErr := crypto.NewGPUHEProvider(crypto.GPUHEProviderConfig{
+			ServerAddress: db.cfg.GPUServerAddress,
+			LocalPoolSize: 2,
+			Timeout:       30 * time.Second,
+		})
+		if gpuErr != nil {
+			store.Close()
+			return fmt.Errorf("opaque: failed to create GPU HE provider: %w", gpuErr)
+		}
+		searchClient, err = client.NewEnterpriseHierarchicalClientWithProvider(
+			searchCfg, creds, store, gpuProvider,
+		)
+	} else {
+		searchClient, err = client.NewEnterpriseHierarchicalClientWithPoolSize(
+			searchCfg, creds, store, db.cfg.WorkerPoolSize,
+		)
+	}
 	if err != nil {
 		store.Close()
 		return fmt.Errorf("opaque: failed to create search client: %w", err)
