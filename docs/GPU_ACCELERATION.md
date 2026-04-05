@@ -107,11 +107,19 @@ For development on Apple Silicon without a CUDA GPU:
 
 **Note:** This is research-grade work and would be publishable.
 
-#### Phase 3: Integration & Benchmarking (2 weeks)
+#### Phase 3: Integration & Benchmarking — PARTIALLY DONE
 
-1. Add `GPUHEProvider` implementing the existing `HEProvider` interface
-2. Benchmark real end-to-end speedup on SIFT 100K and GIST 100K
-3. Measure GPU memory usage, warm-up time, throughput under concurrent queries
+**Completed:**
+- `GPUHEProvider` implementing `HEProvider` interface (`pkg/crypto/gpu_provider.go`)
+- GPU HE gRPC proto definition (`api/proto/gpuhe.proto`) with RegisterEvalKeys, BatchDotProduct, HealthCheck
+- GPU server stub with Lattigo CPU backend (`cmd/gpu-server/main.go`)
+- Config wiring: `GPUServerAddress` in opaque.Config, auto-creates GPUHEProvider
+- Comprehensive tests: encrypt/decrypt, batch dot product, matches DirectHEProvider, pool mechanics
+
+**Remaining:**
+- cgo bridge between Go GPU server and HEonGPU C++ library (enables real GPU acceleration)
+- End-to-end benchmarks through Opaque pipeline with GPU backend
+- GPU memory usage and concurrent query throughput measurements
 
 ### Projected End-to-End Impact
 
@@ -164,16 +172,26 @@ CKKS with LogN=14 requires ~200MB GPU memory for parameters + keys + workspace. 
 
 Benchmarked HEonGPU (CKKS) on AWS g4dn.xlarge (Tesla T4, 16GB VRAM, CUDA 12.9) against Lattigo CPU on Apple M4 Pro. Both use `poly_modulus_degree=16384` (LogN=14).
 
-### Per-Operation Comparison
+### Per-Operation Comparison (poly_modulus_degree=16384, confirmed across 2 runs)
 
 | Operation | HEonGPU (T4 GPU) | Lattigo (M4 CPU) | Speedup |
 |-----------|-------------------|-------------------|---------|
-| Encrypt | 1.47ms | 7.14ms | **4.9x** |
-| Plain Multiply | 0.027ms | 0.70ms | **26x** |
+| Encrypt | 1.46ms | 7.14ms | **4.9x** |
+| Plain Multiply | 0.026ms | 0.70ms | **27x** |
 | Rescale | 0.107ms | 1.18ms | **11x** |
-| **Rotate (Galois)** | **0.761ms** | **6.55ms** | **8.6x** |
+| **Rotate (Galois)** | **0.759ms** | **6.55ms** | **8.6x** |
 | Decrypt | 0.030ms | 9.38ms | **313x** |
-| Add | 0.020ms | 0.45ms | **22x** |
+| Add | 0.021ms | 0.45ms | **21x** |
+| Relinearize | 0.669ms | N/A (included in MulNew) | — |
+
+**Cross-degree scaling (HEonGPU, all measured on T4):**
+
+| Degree | Rotate | Multiply | Rescale | Encrypt | Notes |
+|--------|--------|----------|---------|---------|-------|
+| 4096 | 0.085ms | 0.009ms | 0.043ms | 1.61ms | Small params |
+| 8192 | 0.142ms | 0.009ms | 0.045ms | 1.27ms | |
+| **16384** | **0.759ms** | **0.041ms** | **0.107ms** | **1.46ms** | **Our params (LogN=14)** |
+| 32768 | 4.27ms | 0.138ms | 0.453ms | 2.48ms | Large params |
 
 ### Search Pipeline Projection
 
