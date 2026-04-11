@@ -137,12 +137,26 @@ func (p *GPUHEProvider) RegisterEvalKeys() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	// Extract exact modulus primes for the GPU server.
+	ringQ := engine.params.RingQ()
+	qModuli := ringQ.ModuliChain()
+	var pModuli []uint64
+	if ringP := engine.params.RingP(); ringP != nil {
+		pModuli = ringP.ModuliChain()
+	}
+
 	resp, err := p.client.RegisterEvalKeys(ctx, &pb.RegisterEvalKeysRequest{
-		CkksParams:     paramsBytes,
-		RelinKey:       relinBytes,
-		GaloisKeys:     galoisKeys,
-		GaloisElements: galoisElems,
-		SessionId:      p.sessionID,
+		SessionId: p.sessionID,
+		Params: &pb.CKKSParams{
+			LogN:            int32(engine.params.LogN()),
+			QModuli:         qModuli,
+			PModuli:         pModuli,
+			LogDefaultScale: 45,
+		},
+		CkksParamsBinary:     paramsBytes,
+		RelinKeySerialized:   relinBytes,
+		GaloisKeysSerialized: galoisKeys,
+		GaloisElements:       galoisElems,
 	})
 	if err != nil {
 		return fmt.Errorf("RegisterEvalKeys RPC failed: %w", err)
@@ -181,7 +195,7 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 		p.mu.Unlock()
 	}
 
-	// Serialize ciphertext and plaintext.
+	// Serialize ciphertext and plaintext (legacy format for CPU stub).
 	queryBytes, err := serializeCiphertext(encQuery)
 	if err != nil {
 		return nil, fmt.Errorf("serialize query: %w", err)
@@ -192,12 +206,18 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 		return nil, fmt.Errorf("serialize centroids: %w", err)
 	}
 
+	// Also extract raw coefficients (for HEonGPU GPU backend).
+	rawQuery := extractRawCiphertext(encQuery)
+	rawCentroids := extractRawPlaintext(packedCentroids)
+
 	// Send to GPU server.
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
 
 	resp, err := p.client.BatchDotProduct(ctx, &pb.BatchDotProductRequest{
 		SessionId:       p.sessionID,
+		RawQuery:        rawQuery,
+		RawCentroids:    rawCentroids,
 		EncryptedQuery:  queryBytes,
 		PackedCentroids: centroidBytes,
 		NumCentroids:    int32(numCentroids),
@@ -210,11 +230,19 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 		return nil, fmt.Errorf("BatchDotProduct server error: %s", resp.Error)
 	}
 
-	// Deserialize result.
+	// Reconstruct result — prefer raw coefficients (GPU), fall back to serialized (CPU stub).
 	engine := p.localPool.GetPrimaryEngine()
-	result, err := engine.DeserializeCiphertext(resp.EncryptedResult)
-	if err != nil {
-		return nil, fmt.Errorf("deserialize result: %w", err)
+	var result *rlwe.Ciphertext
+	if resp.RawResult != nil && len(resp.RawResult.Polynomials) > 0 {
+		result, err = reconstructCiphertext(engine.params, resp.RawResult)
+		if err != nil {
+			return nil, fmt.Errorf("reconstruct raw result: %w", err)
+		}
+	} else {
+		result, err = engine.DeserializeCiphertext(resp.EncryptedResult)
+		if err != nil {
+			return nil, fmt.Errorf("deserialize result: %w", err)
+		}
 	}
 
 	return result, nil
@@ -280,6 +308,86 @@ func (g *gpuEvalEngine) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 func (g *gpuEvalEngine) DecryptScalar(ct *rlwe.Ciphertext) (float64, error) {
 	// Decryption: always local (secret key never leaves client).
 	return g.local.DecryptScalar(ct)
+}
+
+// --- Raw coefficient extraction and reconstruction ---
+// These functions bridge Lattigo's internal representation with the
+// cross-library raw coefficient format used for GPU communication.
+
+// extractRawCiphertext extracts raw uint64 coefficients from a Lattigo ciphertext.
+// The coefficients are in RNS+NTT domain — the server can reconstruct an
+// equivalent ciphertext in any CKKS library that uses the same modulus primes.
+func extractRawCiphertext(ct *rlwe.Ciphertext) *pb.RawCiphertext {
+	polys := make([]*pb.RawPolynomial, len(ct.Value))
+	for i, poly := range ct.Value {
+		numLevels := poly.Level() + 1
+		ringSize := poly.N()
+		flat := make([]uint64, 0, numLevels*ringSize)
+		for lvl := 0; lvl < numLevels; lvl++ {
+			flat = append(flat, poly.Coeffs[lvl]...)
+		}
+		polys[i] = &pb.RawPolynomial{
+			Coefficients: flat,
+			NumLevels:    int32(numLevels),
+			RingSize:     int32(ringSize),
+		}
+	}
+
+	return &pb.RawCiphertext{
+		Polynomials: polys,
+		Scale:       ct.Scale.Float64(),
+		IsNtt:       ct.IsNTT,
+		Depth:       int32(ct.Value[0].Level()),
+	}
+}
+
+// extractRawPlaintext extracts raw uint64 coefficients from a Lattigo plaintext.
+func extractRawPlaintext(pt *rlwe.Plaintext) *pb.RawPlaintext {
+	poly := pt.Value
+	numLevels := poly.Level() + 1
+	ringSize := poly.N()
+	flat := make([]uint64, 0, numLevels*ringSize)
+	for lvl := 0; lvl < numLevels; lvl++ {
+		flat = append(flat, poly.Coeffs[lvl]...)
+	}
+
+	return &pb.RawPlaintext{
+		Polynomial: &pb.RawPolynomial{
+			Coefficients: flat,
+			NumLevels:    int32(numLevels),
+			RingSize:     int32(ringSize),
+		},
+		Scale: pt.Scale.Float64(),
+		IsNtt: pt.IsNTT,
+	}
+}
+
+// reconstructCiphertext rebuilds a Lattigo ciphertext from raw coefficients.
+func reconstructCiphertext(params hefloat.Parameters, raw *pb.RawCiphertext) (*rlwe.Ciphertext, error) {
+	if len(raw.Polynomials) < 2 {
+		return nil, fmt.Errorf("need at least 2 polynomials, got %d", len(raw.Polynomials))
+	}
+
+	numLevels := int(raw.Polynomials[0].NumLevels)
+	ringSize := int(raw.Polynomials[0].RingSize)
+	level := numLevels - 1
+
+	ct := rlwe.NewCiphertext(params, len(raw.Polynomials)-1, level)
+	ct.IsNTT = raw.IsNtt
+	ct.Scale = rlwe.NewScale(raw.Scale)
+
+	for i, rawPoly := range raw.Polynomials {
+		if len(rawPoly.Coefficients) != numLevels*ringSize {
+			return nil, fmt.Errorf("poly %d: expected %d coeffs, got %d",
+				i, numLevels*ringSize, len(rawPoly.Coefficients))
+		}
+		for lvl := 0; lvl < numLevels; lvl++ {
+			start := lvl * ringSize
+			copy(ct.Value[i].Coeffs[lvl], rawPoly.Coefficients[start:start+ringSize])
+		}
+	}
+
+	return ct, nil
 }
 
 // --- Serialization helpers ---

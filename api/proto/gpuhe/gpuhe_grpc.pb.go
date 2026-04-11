@@ -38,16 +38,14 @@ const (
 // The client sends evaluation keys once (RegisterEvalKeys), then sends
 // encrypted queries for batch dot product computation. The server never
 // has access to secret keys or decrypted data.
+//
+// Two modes:
+//   - CPU stub: uses Lattigo-serialized bytes (bytes fields)
+//   - GPU (HEonGPU): uses raw uint64 coefficients (RawPolynomial fields)
 type GPUHEServiceClient interface {
-	// RegisterEvalKeys sends CKKS evaluation keys to the server.
-	// Must be called once before any computation. The server stores these
-	// keys and creates an evaluator for subsequent operations.
-	// Keys include: CKKS parameters, relinearization key, and Galois keys.
+	// RegisterEvalKeys sends CKKS parameters and evaluation keys to the server.
 	RegisterEvalKeys(ctx context.Context, in *RegisterEvalKeysRequest, opts ...grpc.CallOption) (*RegisterEvalKeysResponse, error)
-	// BatchDotProduct computes multiple dot products in a single HE operation.
-	// The server performs: MulNew + Rescale + RotateNew loop + Add loop.
-	// Input: encrypted packed query + plaintext packed centroids.
-	// Output: encrypted result with dot products at positions [0, dim, 2*dim, ...].
+	// BatchDotProduct computes packed dot products via HE.
 	BatchDotProduct(ctx context.Context, in *BatchDotProductRequest, opts ...grpc.CallOption) (*BatchDotProductResponse, error)
 	// HealthCheck reports server status and backend type.
 	HealthCheck(ctx context.Context, in *GPUHealthCheckRequest, opts ...grpc.CallOption) (*GPUHealthCheckResponse, error)
@@ -105,16 +103,14 @@ func (c *gPUHEServiceClient) HealthCheck(ctx context.Context, in *GPUHealthCheck
 // The client sends evaluation keys once (RegisterEvalKeys), then sends
 // encrypted queries for batch dot product computation. The server never
 // has access to secret keys or decrypted data.
+//
+// Two modes:
+//   - CPU stub: uses Lattigo-serialized bytes (bytes fields)
+//   - GPU (HEonGPU): uses raw uint64 coefficients (RawPolynomial fields)
 type GPUHEServiceServer interface {
-	// RegisterEvalKeys sends CKKS evaluation keys to the server.
-	// Must be called once before any computation. The server stores these
-	// keys and creates an evaluator for subsequent operations.
-	// Keys include: CKKS parameters, relinearization key, and Galois keys.
+	// RegisterEvalKeys sends CKKS parameters and evaluation keys to the server.
 	RegisterEvalKeys(context.Context, *RegisterEvalKeysRequest) (*RegisterEvalKeysResponse, error)
-	// BatchDotProduct computes multiple dot products in a single HE operation.
-	// The server performs: MulNew + Rescale + RotateNew loop + Add loop.
-	// Input: encrypted packed query + plaintext packed centroids.
-	// Output: encrypted result with dot products at positions [0, dim, 2*dim, ...].
+	// BatchDotProduct computes packed dot products via HE.
 	BatchDotProduct(context.Context, *BatchDotProductRequest) (*BatchDotProductResponse, error)
 	// HealthCheck reports server status and backend type.
 	HealthCheck(context.Context, *GPUHealthCheckRequest) (*GPUHealthCheckResponse, error)

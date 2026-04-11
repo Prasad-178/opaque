@@ -36,12 +36,12 @@ func newInProcessGPUServer() *inProcessGPUServer {
 
 func (s *inProcessGPUServer) RegisterEvalKeys(_ context.Context, req *pb.RegisterEvalKeysRequest) (*pb.RegisterEvalKeysResponse, error) {
 	var params hefloat.Parameters
-	if err := params.UnmarshalBinary(req.CkksParams); err != nil {
+	if err := params.UnmarshalBinary(req.CkksParamsBinary); err != nil {
 		return &pb.RegisterEvalKeysResponse{Success: false, Error: err.Error()}, nil
 	}
 
-	galoisKeys := make([]*rlwe.GaloisKey, len(req.GaloisKeys))
-	for i, kb := range req.GaloisKeys {
+	galoisKeys := make([]*rlwe.GaloisKey, len(req.GaloisKeysSerialized))
+	for i, kb := range req.GaloisKeysSerialized {
 		gk := &rlwe.GaloisKey{}
 		if _, err := gk.ReadFrom(bytes.NewReader(kb)); err != nil {
 			return &pb.RegisterEvalKeysResponse{Success: false, Error: err.Error()}, nil
@@ -50,9 +50,9 @@ func (s *inProcessGPUServer) RegisterEvalKeys(_ context.Context, req *pb.Registe
 	}
 
 	var rlk *rlwe.RelinearizationKey
-	if len(req.RelinKey) > 0 {
+	if len(req.RelinKeySerialized) > 0 {
 		rlk = &rlwe.RelinearizationKey{}
-		if _, err := rlk.ReadFrom(bytes.NewReader(req.RelinKey)); err != nil {
+		if _, err := rlk.ReadFrom(bytes.NewReader(req.RelinKeySerialized)); err != nil {
 			return &pb.RegisterEvalKeysResponse{Success: false, Error: err.Error()}, nil
 		}
 	}

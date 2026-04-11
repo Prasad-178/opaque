@@ -90,17 +90,22 @@ func (s *gpuHEServer) RegisterEvalKeys(_ context.Context, req *pb.RegisterEvalKe
 	}
 
 	log.Printf("[%s] RegisterEvalKeys: %d Galois keys, relin key %d bytes",
-		req.SessionId, len(req.GaloisKeys), len(req.RelinKey))
+		req.SessionId, len(req.GaloisKeysSerialized), len(req.RelinKeySerialized))
 
-	// Deserialize CKKS parameters.
+	if req.Params != nil {
+		log.Printf("[%s] CKKS params: LogN=%d, %d Q primes, %d P primes",
+			req.SessionId, req.Params.LogN, len(req.Params.QModuli), len(req.Params.PModuli))
+	}
+
+	// Deserialize CKKS parameters (use legacy binary format for CPU stub).
 	var params hefloat.Parameters
-	if err := params.UnmarshalBinary(req.CkksParams); err != nil {
+	if err := params.UnmarshalBinary(req.CkksParamsBinary); err != nil {
 		return &pb.RegisterEvalKeysResponse{Success: false, Error: fmt.Sprintf("unmarshal params: %v", err)}, nil
 	}
 
 	// Deserialize Galois keys.
-	galoisKeys := make([]*rlwe.GaloisKey, len(req.GaloisKeys))
-	for i, keyBytes := range req.GaloisKeys {
+	galoisKeys := make([]*rlwe.GaloisKey, len(req.GaloisKeysSerialized))
+	for i, keyBytes := range req.GaloisKeysSerialized {
 		gk := &rlwe.GaloisKey{}
 		if _, err := gk.ReadFrom(bytes.NewReader(keyBytes)); err != nil {
 			return &pb.RegisterEvalKeysResponse{
@@ -113,9 +118,9 @@ func (s *gpuHEServer) RegisterEvalKeys(_ context.Context, req *pb.RegisterEvalKe
 
 	// Deserialize relinearization key (optional).
 	var rlk *rlwe.RelinearizationKey
-	if len(req.RelinKey) > 0 {
+	if len(req.RelinKeySerialized) > 0 {
 		rlk = &rlwe.RelinearizationKey{}
-		if _, err := rlk.ReadFrom(bytes.NewReader(req.RelinKey)); err != nil {
+		if _, err := rlk.ReadFrom(bytes.NewReader(req.RelinKeySerialized)); err != nil {
 			return &pb.RegisterEvalKeysResponse{
 				Success: false,
 				Error:   fmt.Sprintf("deserialize relin key: %v", err),

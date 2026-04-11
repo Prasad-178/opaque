@@ -13,83 +13,133 @@ option go_package = "github.com/Prasad-178/opaque/api/proto/gpuhe;gpuhe";
 // The client sends evaluation keys once (RegisterEvalKeys), then sends
 // encrypted queries for batch dot product computation. The server never
 // has access to secret keys or decrypted data.
+//
+// Two modes:
+//   - CPU stub: uses Lattigo-serialized bytes (bytes fields)
+//   - GPU (HEonGPU): uses raw uint64 coefficients (RawPolynomial fields)
 service GPUHEService {
-  // RegisterEvalKeys sends CKKS evaluation keys to the server.
-  // Must be called once before any computation. The server stores these
-  // keys and creates an evaluator for subsequent operations.
-  // Keys include: CKKS parameters, relinearization key, and Galois keys.
+  // RegisterEvalKeys sends CKKS parameters and evaluation keys to the server.
   rpc RegisterEvalKeys(RegisterEvalKeysRequest) returns (RegisterEvalKeysResponse);
 
-  // BatchDotProduct computes multiple dot products in a single HE operation.
-  // The server performs: MulNew + Rescale + RotateNew loop + Add loop.
-  // Input: encrypted packed query + plaintext packed centroids.
-  // Output: encrypted result with dot products at positions [0, dim, 2*dim, ...].
+  // BatchDotProduct computes packed dot products via HE.
   rpc BatchDotProduct(BatchDotProductRequest) returns (BatchDotProductResponse);
 
   // HealthCheck reports server status and backend type.
   rpc HealthCheck(GPUHealthCheckRequest) returns (GPUHealthCheckResponse);
 }
 
-// RegisterEvalKeysRequest contains serialized CKKS evaluation keys.
+// RawPolynomial represents a single polynomial in RNS+NTT form.
+// Layout: coefficients[level * ring_size + i] for level in [0, num_levels), i in [0, ring_size).
+// This is the format used for cross-library coefficient transfer (Lattigo ↔ HEonGPU).
+message RawPolynomial {
+  // Flat array of uint64 coefficients: num_levels × ring_size values.
+  // Ordered as: [level0_coeff0, level0_coeff1, ..., level0_coeffN-1, level1_coeff0, ...]
+  repeated uint64 coefficients = 1 [packed = true];
+
+  // Number of active modulus levels in this polynomial.
+  int32 num_levels = 2;
+
+  // Ring size (N = 2^LogN, e.g., 16384).
+  int32 ring_size = 3;
+}
+
+// RawCiphertext represents a CKKS ciphertext as raw polynomial coefficients.
+// A standard ciphertext has 2 polynomials (c0, c1).
+message RawCiphertext {
+  // Polynomials in the ciphertext (typically 2: c0 and c1).
+  repeated RawPolynomial polynomials = 1;
+
+  // CKKS scale factor (e.g., 2^45).
+  double scale = 2;
+
+  // Whether coefficients are in NTT domain (should always be true for CKKS).
+  bool is_ntt = 3;
+
+  // Depth (number of rescale operations performed).
+  int32 depth = 4;
+}
+
+// RawPlaintext represents a CKKS plaintext as raw polynomial coefficients.
+message RawPlaintext {
+  RawPolynomial polynomial = 1;
+  double scale = 2;
+  bool is_ntt = 3;
+}
+
+// CKKSParams contains the CKKS parameter specification needed by the GPU server
+// to create a matching HE context.
+message CKKSParams {
+  // Log2 of ring degree (e.g., 14 for N=16384).
+  int32 log_n = 1;
+
+  // Exact modulus primes for the ciphertext modulus chain Q.
+  repeated uint64 q_moduli = 2 [packed = true];
+
+  // Exact modulus primes for the key-switching auxiliary chain P.
+  repeated uint64 p_moduli = 3 [packed = true];
+
+  // Default scale (log2, e.g., 45 for scale=2^45).
+  int32 log_default_scale = 4;
+}
+
+// RegisterEvalKeysRequest sends CKKS parameters and evaluation keys.
 message RegisterEvalKeysRequest {
-  // Serialized CKKS parameters (hefloat.Parameters via MarshalBinary).
-  bytes ckks_params = 1;
+  // Session ID for this client.
+  string session_id = 1;
 
-  // Serialized relinearization key (rlwe.RelinearizationKey via WriteTo).
-  bytes relin_key = 2;
+  // CKKS parameters with exact modulus primes.
+  CKKSParams params = 2;
 
-  // Serialized Galois keys. Each entry is one GaloisKey via WriteTo.
-  // The server needs one key per rotation step used in batch dot product.
-  repeated bytes galois_keys = 3;
+  // Galois keys as raw polynomial data.
+  // Each key corresponds to one galois_element.
+  repeated bytes galois_keys_serialized = 3;
+  repeated uint64 galois_elements = 4 [packed = true];
 
-  // Galois elements corresponding to each Galois key (for the evaluator).
-  repeated uint64 galois_elements = 4;
+  // Relinearization key (serialized).
+  bytes relin_key_serialized = 5;
 
-  // Session ID for this client (allows multiple clients).
-  string session_id = 5;
+  // Legacy: Lattigo-serialized params (for CPU stub compatibility).
+  bytes ckks_params_binary = 6;
 }
 
 message RegisterEvalKeysResponse {
   bool success = 1;
   string error = 2;
-
-  // Server-reported memory usage after loading keys.
   uint64 gpu_memory_bytes = 3;
 }
 
-// BatchDotProductRequest contains serialized ciphertext and plaintext for batch computation.
+// BatchDotProductRequest sends encrypted query and plaintext centroids.
 message BatchDotProductRequest {
-  // Session ID (must match a previous RegisterEvalKeys call).
   string session_id = 1;
 
-  // Serialized encrypted packed query (rlwe.Ciphertext via WriteTo).
-  bytes encrypted_query = 2;
+  // Raw coefficient format (for HEonGPU GPU backend).
+  RawCiphertext raw_query = 2;
+  RawPlaintext raw_centroids = 3;
 
-  // Serialized packed centroids plaintext (rlwe.Plaintext via WriteTo).
-  bytes packed_centroids = 3;
+  // Legacy: Lattigo-serialized format (for CPU stub backend).
+  bytes encrypted_query = 4;
+  bytes packed_centroids = 5;
 
-  // Number of centroids packed in the plaintext.
-  int32 num_centroids = 4;
-
-  // Vector dimension (for rotation count calculation).
-  int32 dimension = 5;
+  // Computation parameters.
+  int32 num_centroids = 6;
+  int32 dimension = 7;
 }
 
 message BatchDotProductResponse {
-  // Serialized encrypted result (rlwe.Ciphertext via WriteTo).
-  // Contains dot products at positions [0, dim, 2*dim, ...].
-  bytes encrypted_result = 1;
+  // Raw coefficient result (for HEonGPU GPU backend).
+  RawCiphertext raw_result = 1;
 
-  string error = 2;
+  // Legacy: Lattigo-serialized result (for CPU stub backend).
+  bytes encrypted_result = 2;
 
-  // Server-side computation time in microseconds.
-  int64 compute_time_us = 3;
+  string error = 3;
 
-  // Sub-phase timing (for profiling).
-  int64 multiply_us = 4;
-  int64 rescale_us = 5;
-  int64 rotate_us = 6;
-  int64 add_us = 7;
+  // Timing (microseconds).
+  int64 compute_time_us = 4;
+  int64 multiply_us = 5;
+  int64 rescale_us = 6;
+  int64 rotate_us = 7;
+  int64 add_us = 8;
 }
 
 // GPUHealthCheckRequest is empty.
@@ -104,15 +154,11 @@ message GPUHealthCheckResponse {
   Status status = 1;
 
   enum Backend {
-    CPU_STUB = 0;  // Lattigo CPU (for testing without GPU)
-    CUDA = 1;      // HEonGPU / custom CUDA
-    METAL = 2;     // Apple Metal (future)
+    CPU_STUB = 0;
+    CUDA = 1;
+    METAL = 2;
   }
   Backend backend = 2;
-
-  // GPU device name (e.g., "Tesla T4", "Apple M4 GPU").
   string device_name = 3;
-
-  // Number of active sessions.
   int32 active_sessions = 4;
 }
