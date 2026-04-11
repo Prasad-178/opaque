@@ -61,6 +61,26 @@ func NewParameters() (hefloat.Parameters, error) {
 	return params, nil
 }
 
+// NewParametersGPU creates CKKS parameters compatible with GPU HE libraries.
+// Uses LogP=[61] (single P prime) instead of [61,61], which produces a
+// decomposition structure (d=Q_size) matching HEonGPU's key-switching layout.
+// This enables raw coefficient transfer of evaluation keys between libraries.
+//
+// The CPU path uses [61,61] for slightly faster key-switching (fewer decomposition
+// components). The GPU path trades this for cross-library compatibility.
+func NewParametersGPU() (hefloat.Parameters, error) {
+	params, err := hefloat.NewParametersFromLiteral(hefloat.ParametersLiteral{
+		LogN:            14,
+		LogQ:            []int{60, 45, 45, 45, 45, 45, 45, 45},
+		LogP:            []int{61}, // Single P prime → d=8 decomposition, matches HEonGPU
+		LogDefaultScale: 45,
+	})
+	if err != nil {
+		return hefloat.Parameters{}, fmt.Errorf("failed to create GPU CKKS parameters: %w", err)
+	}
+	return params, nil
+}
+
 // NewClientEngine creates an encryption engine for client-side operations.
 // Generates a new key pair for encryption/decryption.
 func NewClientEngine() (*Engine, error) {
@@ -68,7 +88,12 @@ func NewClientEngine() (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create parameters: %w", err)
 	}
+	return NewClientEngineWithParams(params)
+}
 
+// NewClientEngineWithParams creates an encryption engine with the given CKKS parameters.
+// Use NewParameters() for CPU path or NewParametersGPU() for GPU-compatible path.
+func NewClientEngineWithParams(params hefloat.Parameters) (*Engine, error) {
 	// Generate key pair
 	kgen := rlwe.NewKeyGenerator(params)
 	sk, pk := kgen.GenKeyPairNew()

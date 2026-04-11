@@ -12,7 +12,18 @@ import (
 )
 
 func main() {
-	params, err := crypto.NewParameters()
+	fmt.Println("╔══════════════════════════════════════════════════╗")
+	fmt.Println("║  COMPARING CPU PATH [61,61] vs GPU PATH [61]    ║")
+	fmt.Println("╚══════════════════════════════════════════════════╝")
+
+	fmt.Println("\n========== CPU PATH (LogP = [61, 61]) ==========")
+	inspectParams(crypto.NewParameters())
+
+	fmt.Println("\n========== GPU PATH (LogP = [61]) ==========")
+	inspectParams(crypto.NewParametersGPU())
+}
+
+func inspectParams(params hefloat.Parameters, err error) {
 	if err != nil {
 		panic(err)
 	}
@@ -37,8 +48,8 @@ func main() {
 
 	fmt.Println("\n=== Galois Key Structure ===")
 
-	// Create engine to get actual keys
-	engine, err := crypto.NewClientEngine()
+	// Create engine from THESE params (not default)
+	engine, err := crypto.NewClientEngineWithParams(params)
 	if err != nil {
 		panic(err)
 	}
@@ -82,6 +93,20 @@ func main() {
 					vqp[0].Q.Level()+1, vqp[0].Q.N())
 				fmt.Printf("    Poly[0].P: %d levels × %d coeffs\n",
 					vqp[0].P.Level()+1, vqp[0].P.N())
+			}
+		}
+	}
+
+	// Dump actual P level count from the key
+	fmt.Printf("\n=== Actual P levels in Galois key polynomials ===\n")
+	for i := 0; i < gc.BaseRNSDecompositionVectorSize() && i < 1; i++ {
+		for j := 0; j < len(gc.Value[i]) && j < 1; j++ {
+			for k := 0; k < len(gc.Value[i][j]); k++ {
+				pLevel := gc.Value[i][j][k].P.Level()
+				pN := gc.Value[i][j][k].P.N()
+				qLevel := gc.Value[i][j][k].Q.Level()
+				fmt.Printf("  Value[%d][%d][%d]: Q.Level=%d Q.N=%d  P.Level=%d P.N=%d\n",
+					i, j, k, qLevel, gc.Value[i][j][k].Q.N(), pLevel, pN)
 			}
 		}
 	}
