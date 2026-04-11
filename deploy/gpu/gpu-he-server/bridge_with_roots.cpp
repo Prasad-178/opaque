@@ -74,15 +74,13 @@ int main(int argc, char** argv) {
             f.close();
             std::cout << "Keys loaded (coefficient domain)!" << std::endl;
 
-            // The keys are in COEFFICIENT domain (Lattigo INTT was applied).
-            // Apply HEonGPU's NTT to convert to HEonGPU's NTT domain.
-            std::cout << "Applying HEonGPU NTT to key data..." << std::endl;
+            // Apply HEonGPU's NTT to convert from coeff domain to NTT domain.
+            std::cout << "Applying HEonGPU NTT..." << std::endl;
 
-            int Q_size = q.size();
-            int QP_size = q.size() + p.size();
+            int Q_size = q.size();   // 8
+            int QP_size = q.size() + p.size(); // 9
             int n_power = 14;
 
-            // NTT configuration
             gpuntt::ntt_rns_configuration<uint64_t> cfg_ntt = {
                 .n_power = n_power,
                 .ntt_type = gpuntt::FORWARD,
@@ -92,16 +90,22 @@ int main(int argc, char** argv) {
                 .stream = cudaStreamDefault
             };
 
-            // Get NTT table and moduli from context (these are on GPU)
-            auto* ntt_table = context->ntt_table_->data();
-            auto* moduli = context->modulus_->data();
-            int total_polys = 2 * Q_size;
+            // Use public accessors (added via sed patch on GPU instance)
+            auto* ntt_table = context->get_ntt_table().data();
+            auto* moduli = context->get_modulus().data();
 
             // Apply NTT to each galois element's key data using public data() accessor
-            // Each galois element has galoiskey_size uint64 values on GPU
-            // = total_polys * QP_size * N values = total_polys batches of QP_size moduli
-            auto galois_map = context->get_galois_elts ? ... // We need the element list
-            // Actually, we know the elements from our key file
+            // Key data per galois element: 2*Q_size*QP_size*N uint64 values.
+            // Layout: [decomp_0: c0_mods[QP_size*N] c1_mods[QP_size*N] | decomp_1: ...]
+            // = Q_size decomp × 2 polys, each with QP_size mods of N coeffs.
+            //
+            // GPU_NTT_Inplace(data, table, moduli, cfg, batch_count, mod_count):
+            //   Processes batch_count groups, each group has mod_count polynomials of N.
+            //   Polynomial j in each group uses modulus[j % mod_count].
+            //
+            // We have Q_size*2 = 16 groups, each with QP_size = 9 polynomials.
+            int batch_count = Q_size * 2; // 16
+
             std::vector<int> galois_elts = {5,25,625,30177,28609,28545,7937,15873,31745,30721,28673,24577,16385,1};
 
             for (int elt : galois_elts) {
@@ -109,24 +113,25 @@ int main(int argc, char** argv) {
                 if (key_data) {
                     gpuntt::GPU_NTT_Inplace(
                         key_data, ntt_table, moduli, cfg_ntt,
-                        total_polys * QP_size,  // total polynomial count
-                        QP_size                 // moduli per "layer"
+                        batch_count,  // 16 groups
+                        QP_size       // 9 mods per group
                     );
                 }
             }
 
-            // Also NTT the conjugation (zero) key
+            // NTT the conjugation (zero) key
             Data64* c_key = gk.c_data();
             if (c_key) {
                 gpuntt::GPU_NTT_Inplace(
                     c_key, ntt_table, moduli, cfg_ntt,
-                    total_polys * QP_size, QP_size
+                    batch_count, QP_size
                 );
             }
 
             HEONGPU_CUDA_CHECK(cudaGetLastError());
             cudaDeviceSynchronize();
-            std::cout << "NTT conversion complete!" << std::endl;
+            std::cout << "NTT done (" << galois_elts.size() << " keys × "
+                      << batch_count << " batches × " << QP_size << " mods)" << std::endl;
 
             // Generate local keys for testing
             HEKeyGenerator<S> keygen(context);
