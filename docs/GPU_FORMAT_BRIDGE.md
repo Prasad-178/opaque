@@ -150,7 +150,34 @@ This requires running both libraries with the same secret key on a CUDA-capable 
 
 **Remaining issue:** Rotation produces incorrect results (garbage values). The polynomial coefficient ORDERING within each key's data block differs between Lattigo and HEonGPU. Both use Cooley-Tukey NTT with bit-reversed output, but may derive different primitive roots of unity for the twiddle factors.
 
-**Next step:** Empirically compare NTT primitive roots between libraries for the same prime modulus. If roots differ, apply a permutation to the coefficients during conversion.
+### NTT Root Analysis (completed)
+
+**Root cause confirmed:** Lattigo and HEonGPU use different primitive roots of unity (ψ) for their NTT. All 9 primes have different ψ values between libraries.
+
+**Why they differ:**
+- Lattigo deterministically selects roots based on its internal SubRing initialization
+- HEonGPU uses `std::random_device` to find an initial root, then minimizes from that starting point via `find_minimal_primitive_root`. The minimization depends on the random starting point, making the roots **non-deterministic across HEonGPU instances**
+
+**Solution: NTT root exchange protocol.** The GPU server creates its HEonGPU context, extracts the ψ values it chose for each prime, and sends them to the Go client during registration. The client uses these exact roots to convert evaluation key coefficients from Lattigo's NTT domain to HEonGPU's NTT domain.
+
+The conversion per polynomial per modulus level is:
+1. Apply Lattigo's INTT (using Lattigo's own `ring.INTTStandard`, handles Montgomery form correctly)
+2. Apply HEonGPU's NTT (using the server-provided ψ values)
+
+This is O(N log N) per polynomial, done once during key setup (~2 min for all 14 Galois keys).
+
+### Implementation Status
+
+| Component | Status |
+|-----------|--------|
+| File format header | ✅ Correct (scheme uint8, keyswitching uint8, storage uint8, d=0, group_order=5) |
+| File size | ✅ Matches HEonGPU native (283,115,733 bytes) |
+| Key loading | ✅ HEonGPU loads without crash |
+| NTT root analysis | ✅ Root cause identified (different ψ values) |
+| NTT root exchange | 🔲 Need proto update + server-side root extraction |
+| NTT domain conversion | 🔲 Need server's ψ values to apply correct conversion |
+| Rotation verification | 🔲 Pending conversion fix |
+| End-to-end benchmark | 🔲 Pending rotation verification |
 
 ## Verification Plan
 
