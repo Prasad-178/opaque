@@ -19,11 +19,12 @@ import (
 	"github.com/tuneinsight/lattigo/v5/he/hefloat"
 )
 
-// HEonGPU binary format constants (from heongpu/util/schemes.h)
+// HEonGPU binary format constants.
+// These enums are all uint8_t in HEonGPU (1 byte each).
 const (
-	heongpuSchemeTypeCKKS       int32 = 2 // scheme_type::ckks
-	heongpuKeySwitchingMethodI  int32 = 1 // keyswitching_type::KEYSWITCHING_METHOD_I
-	heongpuStorageTypeHost      int32 = 1 // storage_type::HOST
+	heongpuSchemeTypeCKKS       uint8 = 2 // scheme_type::ckks
+	heongpuKeySwitchingMethodI  uint8 = 1 // keyswitching_type::KEYSWITCHING_METHOD_I
+	heongpuStorageTypeHost      uint8 = 1 // storage_type::HOST
 )
 
 // SerializeGaloisKeysHEonGPU converts Lattigo Galois keys to HEonGPU's binary format.
@@ -59,41 +60,42 @@ func SerializeGaloisKeysHEonGPU(
 
 	var buf bytes.Buffer
 
-	// Header
-	binary.Write(&buf, binary.LittleEndian, heongpuSchemeTypeCKKS)    // scheme_
-	binary.Write(&buf, binary.LittleEndian, heongpuKeySwitchingMethodI) // key_type
-	binary.Write(&buf, binary.LittleEndian, int32(ringSize))          // ring_size
-	binary.Write(&buf, binary.LittleEndian, int32(qPrimeSize))       // Q_prime_size_
-	binary.Write(&buf, binary.LittleEndian, int32(qSize))            // Q_size_
-	binary.Write(&buf, binary.LittleEndian, int32(d))                // d_
-	binary.Write(&buf, binary.LittleEndian, true)                    // customized (use custom galois elements)
-	binary.Write(&buf, binary.LittleEndian, groupOrder)              // group_order_
-	binary.Write(&buf, binary.LittleEndian, heongpuStorageTypeHost)  // storage_type_
-	binary.Write(&buf, binary.LittleEndian, true)                    // galois_key_generated_
+	// Header — types must EXACTLY match HEonGPU's save() sizeof() calls.
+	// Enums are uint8_t (1 byte). Ints are int (4 bytes). Bool is 1 byte.
+	// galoiskey_size_ is Data64 = uint64_t (8 bytes).
+	binary.Write(&buf, binary.LittleEndian, heongpuSchemeTypeCKKS)      // scheme_type (uint8, 1B)
+	binary.Write(&buf, binary.LittleEndian, heongpuKeySwitchingMethodI) // keyswitching_type (uint8, 1B)
+	binary.Write(&buf, binary.LittleEndian, int32(ringSize))            // ring_size (int, 4B)
+	binary.Write(&buf, binary.LittleEndian, int32(qPrimeSize))         // Q_prime_size_ (int, 4B)
+	binary.Write(&buf, binary.LittleEndian, int32(qSize))              // Q_size_ (int, 4B)
+	binary.Write(&buf, binary.LittleEndian, int32(d))                  // d_ (int, 4B)
+	binary.Write(&buf, binary.LittleEndian, uint8(1))                  // customized (bool, 1B) = true
+	binary.Write(&buf, binary.LittleEndian, groupOrder)                // group_order_ (int, 4B)
+	binary.Write(&buf, binary.LittleEndian, heongpuStorageTypeHost)    // storage_type (uint8, 1B)
+	binary.Write(&buf, binary.LittleEndian, uint8(1))                  // galois_key_generated_ (bool, 1B) = true
 
-	// Custom galois elements (we use the "customized" path)
+	// Custom galois elements list
 	customGaloisElts := make([]uint32, len(galoisElements))
 	for i, el := range galoisElements {
 		customGaloisElts[i] = uint32(el)
 	}
-	binary.Write(&buf, binary.LittleEndian, uint32(len(customGaloisElts)))
+	binary.Write(&buf, binary.LittleEndian, uint32(len(customGaloisElts))) // uint32 count
 	for _, el := range customGaloisElts {
-		binary.Write(&buf, binary.LittleEndian, el)
+		binary.Write(&buf, binary.LittleEndian, el) // uint32 per element
 	}
 
-	// galois_elt_zero (conjugation element = 2N - 1)
+	// galois_elt_zero (conjugation galois element = 2N - 1)
 	galoisEltZero := int32(2*ringSize - 1)
-	binary.Write(&buf, binary.LittleEndian, galoisEltZero)
+	binary.Write(&buf, binary.LittleEndian, galoisEltZero) // int, 4B
 
-	// galoiskey_size_
-	binary.Write(&buf, binary.LittleEndian, galoisKeySize)
+	// galoiskey_size_ — Data64 = uint64_t, 8 bytes
+	binary.Write(&buf, binary.LittleEndian, uint64(galoisKeySize)) // uint64, 8B
 
-	// Key data: key_count + per-key data + zero_key data
-	binary.Write(&buf, binary.LittleEndian, uint32(len(galoisKeys)))
+	// Key data: key_count (uint32) + per-key [int key_id + Data64[] data] + zero_key [Data64[] data]
+	binary.Write(&buf, binary.LittleEndian, uint32(len(galoisKeys))) // key_count
 
 	for i, gk := range galoisKeys {
-		galoisElt := int32(galoisElements[i])
-		binary.Write(&buf, binary.LittleEndian, galoisElt)
+		binary.Write(&buf, binary.LittleEndian, int32(galoisElements[i])) // galois element (int, 4B)
 
 		// Extract raw coefficients from Lattigo's GadgetCiphertext.
 		// Layout: for each decomposition level d, for each polynomial (c0, c1),
