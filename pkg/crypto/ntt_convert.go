@@ -33,8 +33,21 @@ type NTTConverter struct {
 	heongpuNTTRoots  [][]uint64 // HEonGPU's forward NTT roots (computed)
 }
 
-// NewNTTConverter creates a converter for the given GPU-compatible parameters.
+// NewNTTConverter creates a converter using locally-computed HEonGPU roots.
+// NOTE: This may not match the actual GPU server's roots (which are non-deterministic).
+// Prefer NewNTTConverterWithRoots when server-provided roots are available.
 func NewNTTConverter(params hefloat.Parameters) *NTTConverter {
+	return newNTTConverter(params, nil)
+}
+
+// NewNTTConverterWithRoots creates a converter using server-provided NTT roots.
+// The serverRoots are the ψ values returned by InitContext — one per prime in Q∪P order.
+// This guarantees the conversion matches the GPU server's NTT domain exactly.
+func NewNTTConverterWithRoots(params hefloat.Parameters, serverRoots []uint64) *NTTConverter {
+	return newNTTConverter(params, serverRoots)
+}
+
+func newNTTConverter(params hefloat.Parameters, serverRoots []uint64) *NTTConverter {
 	N := 1 << params.LogN()
 	logN := params.LogN()
 
@@ -79,7 +92,14 @@ func NewNTTConverter(params hefloat.Parameters) *NTTConverter {
 	// Compute HEonGPU's NTT roots
 	conv.heongpuNTTRoots = make([][]uint64, len(allModuli))
 	for i, p := range allModuli {
-		psi := computeHEonGPUPsi(p, uint64(N))
+		var psi uint64
+		if serverRoots != nil && i < len(serverRoots) {
+			// Use server-provided root (guaranteed to match GPU server's NTT)
+			psi = serverRoots[i]
+		} else {
+			// Compute locally (may not match GPU server due to non-deterministic root selection)
+			psi = computeHEonGPUPsi(p, uint64(N))
+		}
 		conv.heongpuNTTRoots[i] = generateNTTTable(psi, p, N)
 	}
 

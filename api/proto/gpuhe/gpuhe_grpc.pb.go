@@ -19,6 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	GPUHEService_InitContext_FullMethodName      = "/opaque.gpu.v1.GPUHEService/InitContext"
 	GPUHEService_RegisterEvalKeys_FullMethodName = "/opaque.gpu.v1.GPUHEService/RegisterEvalKeys"
 	GPUHEService_BatchDotProduct_FullMethodName  = "/opaque.gpu.v1.GPUHEService/BatchDotProduct"
 	GPUHEService_HealthCheck_FullMethodName      = "/opaque.gpu.v1.GPUHEService/HealthCheck"
@@ -43,7 +44,12 @@ const (
 //   - CPU stub: uses Lattigo-serialized bytes (bytes fields)
 //   - GPU (HEonGPU): uses raw uint64 coefficients (RawPolynomial fields)
 type GPUHEServiceClient interface {
-	// RegisterEvalKeys sends CKKS parameters and evaluation keys to the server.
+	// InitContext creates an HEonGPU context with the given parameters and returns
+	// the server's NTT primitive roots (ψ per prime). The client needs these roots
+	// to convert evaluation key coefficients from Lattigo's NTT domain to HEonGPU's.
+	// Must be called before RegisterEvalKeys.
+	InitContext(ctx context.Context, in *InitContextRequest, opts ...grpc.CallOption) (*InitContextResponse, error)
+	// RegisterEvalKeys sends evaluation keys (converted to server's NTT domain).
 	RegisterEvalKeys(ctx context.Context, in *RegisterEvalKeysRequest, opts ...grpc.CallOption) (*RegisterEvalKeysResponse, error)
 	// BatchDotProduct computes packed dot products via HE.
 	BatchDotProduct(ctx context.Context, in *BatchDotProductRequest, opts ...grpc.CallOption) (*BatchDotProductResponse, error)
@@ -57,6 +63,16 @@ type gPUHEServiceClient struct {
 
 func NewGPUHEServiceClient(cc grpc.ClientConnInterface) GPUHEServiceClient {
 	return &gPUHEServiceClient{cc}
+}
+
+func (c *gPUHEServiceClient) InitContext(ctx context.Context, in *InitContextRequest, opts ...grpc.CallOption) (*InitContextResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InitContextResponse)
+	err := c.cc.Invoke(ctx, GPUHEService_InitContext_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *gPUHEServiceClient) RegisterEvalKeys(ctx context.Context, in *RegisterEvalKeysRequest, opts ...grpc.CallOption) (*RegisterEvalKeysResponse, error) {
@@ -108,7 +124,12 @@ func (c *gPUHEServiceClient) HealthCheck(ctx context.Context, in *GPUHealthCheck
 //   - CPU stub: uses Lattigo-serialized bytes (bytes fields)
 //   - GPU (HEonGPU): uses raw uint64 coefficients (RawPolynomial fields)
 type GPUHEServiceServer interface {
-	// RegisterEvalKeys sends CKKS parameters and evaluation keys to the server.
+	// InitContext creates an HEonGPU context with the given parameters and returns
+	// the server's NTT primitive roots (ψ per prime). The client needs these roots
+	// to convert evaluation key coefficients from Lattigo's NTT domain to HEonGPU's.
+	// Must be called before RegisterEvalKeys.
+	InitContext(context.Context, *InitContextRequest) (*InitContextResponse, error)
+	// RegisterEvalKeys sends evaluation keys (converted to server's NTT domain).
 	RegisterEvalKeys(context.Context, *RegisterEvalKeysRequest) (*RegisterEvalKeysResponse, error)
 	// BatchDotProduct computes packed dot products via HE.
 	BatchDotProduct(context.Context, *BatchDotProductRequest) (*BatchDotProductResponse, error)
@@ -124,6 +145,9 @@ type GPUHEServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedGPUHEServiceServer struct{}
 
+func (UnimplementedGPUHEServiceServer) InitContext(context.Context, *InitContextRequest) (*InitContextResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InitContext not implemented")
+}
 func (UnimplementedGPUHEServiceServer) RegisterEvalKeys(context.Context, *RegisterEvalKeysRequest) (*RegisterEvalKeysResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterEvalKeys not implemented")
 }
@@ -152,6 +176,24 @@ func RegisterGPUHEServiceServer(s grpc.ServiceRegistrar, srv GPUHEServiceServer)
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&GPUHEService_ServiceDesc, srv)
+}
+
+func _GPUHEService_InitContext_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InitContextRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GPUHEServiceServer).InitContext(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GPUHEService_InitContext_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GPUHEServiceServer).InitContext(ctx, req.(*InitContextRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _GPUHEService_RegisterEvalKeys_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -215,6 +257,10 @@ var GPUHEService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "opaque.gpu.v1.GPUHEService",
 	HandlerType: (*GPUHEServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "InitContext",
+			Handler:    _GPUHEService_InitContext_Handler,
+		},
 		{
 			MethodName: "RegisterEvalKeys",
 			Handler:    _GPUHEService_RegisterEvalKeys_Handler,

@@ -18,7 +18,13 @@ option go_package = "github.com/Prasad-178/opaque/api/proto/gpuhe;gpuhe";
 //   - CPU stub: uses Lattigo-serialized bytes (bytes fields)
 //   - GPU (HEonGPU): uses raw uint64 coefficients (RawPolynomial fields)
 service GPUHEService {
-  // RegisterEvalKeys sends CKKS parameters and evaluation keys to the server.
+  // InitContext creates an HEonGPU context with the given parameters and returns
+  // the server's NTT primitive roots (ψ per prime). The client needs these roots
+  // to convert evaluation key coefficients from Lattigo's NTT domain to HEonGPU's.
+  // Must be called before RegisterEvalKeys.
+  rpc InitContext(InitContextRequest) returns (InitContextResponse);
+
+  // RegisterEvalKeys sends evaluation keys (converted to server's NTT domain).
   rpc RegisterEvalKeys(RegisterEvalKeysRequest) returns (RegisterEvalKeysResponse);
 
   // BatchDotProduct computes packed dot products via HE.
@@ -82,6 +88,26 @@ message CKKSParams {
   int32 log_default_scale = 4;
 }
 
+// InitContextRequest asks the GPU server to create an HEonGPU context
+// with the given CKKS parameters and return its NTT roots.
+message InitContextRequest {
+  string session_id = 1;
+  CKKSParams params = 2;
+}
+
+// InitContextResponse returns the server's NTT primitive roots (ψ per prime).
+// The client uses these to convert evaluation key coefficients from Lattigo's
+// NTT domain to HEonGPU's NTT domain before sending them.
+message InitContextResponse {
+  bool success = 1;
+  string error = 2;
+
+  // Primitive 2N-th root of unity (ψ) for each prime in Q∪P order.
+  // These are the roots HEonGPU selected for its NTT — they may differ
+  // from Lattigo's roots and are non-deterministic across server restarts.
+  repeated uint64 ntt_roots = 3 [packed = true];
+}
+
 // RegisterEvalKeysRequest sends CKKS parameters and evaluation keys.
 message RegisterEvalKeysRequest {
   // Session ID for this client.
@@ -100,6 +126,10 @@ message RegisterEvalKeysRequest {
 
   // Legacy: Lattigo-serialized params (for CPU stub compatibility).
   bytes ckks_params_binary = 6;
+
+  // HEonGPU-format Galois keys (with NTT domain conversion applied).
+  // This is a single binary blob that HEonGPU's Galoiskey::load() can read directly.
+  bytes galois_keys_heongpu = 7;
 }
 
 message RegisterEvalKeysResponse {

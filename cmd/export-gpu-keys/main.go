@@ -60,7 +60,7 @@ func main() {
 	log.Println("Serializing to HEonGPU format...")
 	serStart := time.Now()
 
-	data, err := crypto.SerializeGaloisKeysHEonGPU(params, keys, elements)
+	data, err := crypto.SerializeGaloisKeysHEonGPU(params, keys, elements, nil)
 	if err != nil {
 		log.Fatalf("SerializeGaloisKeysHEonGPU: %v", err)
 	}

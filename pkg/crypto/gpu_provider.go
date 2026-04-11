@@ -103,8 +103,12 @@ func NewGPUHEProvider(cfg GPUHEProviderConfig) (*GPUHEProvider, error) {
 	return p, nil
 }
 
-// RegisterEvalKeys sends the evaluation keys (Galois + relin) to the GPU server.
+// RegisterEvalKeys initializes the GPU server context and sends evaluation keys.
 // This is called automatically on the first HomomorphicBatchDotProduct if not called explicitly.
+//
+// The registration is a two-step process:
+//  1. InitContext: server creates HEonGPU context and returns NTT roots
+//  2. RegisterEvalKeys: client converts keys to server's NTT domain and sends them
 func (p *GPUHEProvider) RegisterEvalKeys() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -115,29 +119,7 @@ func (p *GPUHEProvider) RegisterEvalKeys() error {
 
 	engine := p.localPool.GetPrimaryEngine()
 
-	// Serialize CKKS parameters.
-	paramsBytes, err := engine.params.MarshalBinary()
-	if err != nil {
-		return fmt.Errorf("failed to serialize params: %w", err)
-	}
-
-	// Serialize Galois keys.
-	galoisElems := galoisElements(engine.params)
-	galoisKeys, err := serializeGaloisKeys(engine, galoisElems)
-	if err != nil {
-		return fmt.Errorf("failed to serialize Galois keys: %w", err)
-	}
-
-	// Serialize relinearization key.
-	relinBytes, err := serializeRelinKey(engine)
-	if err != nil {
-		return fmt.Errorf("failed to serialize relin key: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	// Extract exact modulus primes for the GPU server.
+	// Extract exact modulus primes.
 	ringQ := engine.params.RingQ()
 	qModuli := ringQ.ModuliChain()
 	var pModuli []uint64
@@ -145,18 +127,80 @@ func (p *GPUHEProvider) RegisterEvalKeys() error {
 		pModuli = ringP.ModuliChain()
 	}
 
-	resp, err := p.client.RegisterEvalKeys(ctx, &pb.RegisterEvalKeysRequest{
+	ckksParams := &pb.CKKSParams{
+		LogN:            int32(engine.params.LogN()),
+		QModuli:         qModuli,
+		PModuli:         pModuli,
+		LogDefaultScale: 45,
+	}
+
+	// Step 1: InitContext — get server's NTT roots.
+	initCtx, initCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer initCancel()
+
+	initResp, err := p.client.InitContext(initCtx, &pb.InitContextRequest{
 		SessionId: p.sessionID,
-		Params: &pb.CKKSParams{
-			LogN:            int32(engine.params.LogN()),
-			QModuli:         qModuli,
-			PModuli:         pModuli,
-			LogDefaultScale: 45,
-		},
-		CkksParamsBinary:     paramsBytes,
-		RelinKeySerialized:   relinBytes,
-		GaloisKeysSerialized: galoisKeys,
-		GaloisElements:       galoisElems,
+		Params:    ckksParams,
+	})
+	if err != nil {
+		return fmt.Errorf("InitContext RPC failed: %w", err)
+	}
+	if !initResp.Success {
+		return fmt.Errorf("InitContext failed: %s", initResp.Error)
+	}
+
+	serverRoots := initResp.NttRoots
+
+	// Step 2: Serialize eval keys with server's NTT roots for domain conversion.
+	galoisElems := galoisElements(engine.params)
+
+	// Get Galois keys from eval key set
+	evk := engine.GetEvalKeys()
+	if evk == nil {
+		return fmt.Errorf("no evaluation keys available")
+	}
+
+	gkeys := make([]*rlwe.GaloisKey, len(galoisElems))
+	for i, el := range galoisElems {
+		gk, err := evk.GetGaloisKey(el)
+		if err != nil {
+			return fmt.Errorf("GetGaloisKey(%d): %w", el, err)
+		}
+		gkeys[i] = gk
+	}
+
+	// Serialize in HEonGPU format with NTT domain conversion
+	galoisKeysHEonGPU, err := SerializeGaloisKeysHEonGPU(engine.params, gkeys, galoisElems, serverRoots)
+	if err != nil {
+		return fmt.Errorf("SerializeGaloisKeysHEonGPU: %w", err)
+	}
+
+	// Also serialize Lattigo format for CPU stub fallback
+	paramsBytes, err := engine.params.MarshalBinary()
+	if err != nil {
+		return fmt.Errorf("failed to serialize params: %w", err)
+	}
+	galoisKeysLattigo, err := serializeGaloisKeys(engine, galoisElems)
+	if err != nil {
+		return fmt.Errorf("failed to serialize Lattigo Galois keys: %w", err)
+	}
+	relinBytes, err := serializeRelinKey(engine)
+	if err != nil {
+		return fmt.Errorf("failed to serialize relin key: %w", err)
+	}
+
+	// Step 3: Send eval keys to GPU server.
+	regCtx, regCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer regCancel()
+
+	resp, err := p.client.RegisterEvalKeys(regCtx, &pb.RegisterEvalKeysRequest{
+		SessionId:             p.sessionID,
+		Params:                ckksParams,
+		CkksParamsBinary:      paramsBytes,
+		RelinKeySerialized:    relinBytes,
+		GaloisKeysSerialized:  galoisKeysLattigo,
+		GaloisElements:        galoisElems,
+		GaloisKeysHeongpu:     galoisKeysHEonGPU, // HEonGPU-format keys with correct NTT domain
 	})
 	if err != nil {
 		return fmt.Errorf("RegisterEvalKeys RPC failed: %w", err)

@@ -67,7 +67,7 @@ func (x GPUHealthCheckResponse_Status) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use GPUHealthCheckResponse_Status.Descriptor instead.
 func (GPUHealthCheckResponse_Status) EnumDescriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{9, 0}
+	return file_gpuhe_proto_rawDescGZIP(), []int{11, 0}
 }
 
 type GPUHealthCheckResponse_Backend int32
@@ -116,7 +116,7 @@ func (x GPUHealthCheckResponse_Backend) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use GPUHealthCheckResponse_Backend.Descriptor instead.
 func (GPUHealthCheckResponse_Backend) EnumDescriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{9, 1}
+	return file_gpuhe_proto_rawDescGZIP(), []int{11, 1}
 }
 
 // RawPolynomial represents a single polynomial in RNS+NTT form.
@@ -395,6 +395,126 @@ func (x *CKKSParams) GetLogDefaultScale() int32 {
 	return 0
 }
 
+// InitContextRequest asks the GPU server to create an HEonGPU context
+// with the given CKKS parameters and return its NTT roots.
+type InitContextRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Params        *CKKSParams            `protobuf:"bytes,2,opt,name=params,proto3" json:"params,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InitContextRequest) Reset() {
+	*x = InitContextRequest{}
+	mi := &file_gpuhe_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InitContextRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InitContextRequest) ProtoMessage() {}
+
+func (x *InitContextRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gpuhe_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InitContextRequest.ProtoReflect.Descriptor instead.
+func (*InitContextRequest) Descriptor() ([]byte, []int) {
+	return file_gpuhe_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *InitContextRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *InitContextRequest) GetParams() *CKKSParams {
+	if x != nil {
+		return x.Params
+	}
+	return nil
+}
+
+// InitContextResponse returns the server's NTT primitive roots (ψ per prime).
+// The client uses these to convert evaluation key coefficients from Lattigo's
+// NTT domain to HEonGPU's NTT domain before sending them.
+type InitContextResponse struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Success bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error   string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	// Primitive 2N-th root of unity (ψ) for each prime in Q∪P order.
+	// These are the roots HEonGPU selected for its NTT — they may differ
+	// from Lattigo's roots and are non-deterministic across server restarts.
+	NttRoots      []uint64 `protobuf:"varint,3,rep,packed,name=ntt_roots,json=nttRoots,proto3" json:"ntt_roots,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InitContextResponse) Reset() {
+	*x = InitContextResponse{}
+	mi := &file_gpuhe_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InitContextResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InitContextResponse) ProtoMessage() {}
+
+func (x *InitContextResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gpuhe_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InitContextResponse.ProtoReflect.Descriptor instead.
+func (*InitContextResponse) Descriptor() ([]byte, []int) {
+	return file_gpuhe_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *InitContextResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *InitContextResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *InitContextResponse) GetNttRoots() []uint64 {
+	if x != nil {
+		return x.NttRoots
+	}
+	return nil
+}
+
 // RegisterEvalKeysRequest sends CKKS parameters and evaluation keys.
 type RegisterEvalKeysRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -410,13 +530,16 @@ type RegisterEvalKeysRequest struct {
 	RelinKeySerialized []byte `protobuf:"bytes,5,opt,name=relin_key_serialized,json=relinKeySerialized,proto3" json:"relin_key_serialized,omitempty"`
 	// Legacy: Lattigo-serialized params (for CPU stub compatibility).
 	CkksParamsBinary []byte `protobuf:"bytes,6,opt,name=ckks_params_binary,json=ckksParamsBinary,proto3" json:"ckks_params_binary,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// HEonGPU-format Galois keys (with NTT domain conversion applied).
+	// This is a single binary blob that HEonGPU's Galoiskey::load() can read directly.
+	GaloisKeysHeongpu []byte `protobuf:"bytes,7,opt,name=galois_keys_heongpu,json=galoisKeysHeongpu,proto3" json:"galois_keys_heongpu,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *RegisterEvalKeysRequest) Reset() {
 	*x = RegisterEvalKeysRequest{}
-	mi := &file_gpuhe_proto_msgTypes[4]
+	mi := &file_gpuhe_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -428,7 +551,7 @@ func (x *RegisterEvalKeysRequest) String() string {
 func (*RegisterEvalKeysRequest) ProtoMessage() {}
 
 func (x *RegisterEvalKeysRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[4]
+	mi := &file_gpuhe_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -441,7 +564,7 @@ func (x *RegisterEvalKeysRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterEvalKeysRequest.ProtoReflect.Descriptor instead.
 func (*RegisterEvalKeysRequest) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{4}
+	return file_gpuhe_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RegisterEvalKeysRequest) GetSessionId() string {
@@ -486,6 +609,13 @@ func (x *RegisterEvalKeysRequest) GetCkksParamsBinary() []byte {
 	return nil
 }
 
+func (x *RegisterEvalKeysRequest) GetGaloisKeysHeongpu() []byte {
+	if x != nil {
+		return x.GaloisKeysHeongpu
+	}
+	return nil
+}
+
 type RegisterEvalKeysResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Success        bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
@@ -497,7 +627,7 @@ type RegisterEvalKeysResponse struct {
 
 func (x *RegisterEvalKeysResponse) Reset() {
 	*x = RegisterEvalKeysResponse{}
-	mi := &file_gpuhe_proto_msgTypes[5]
+	mi := &file_gpuhe_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -509,7 +639,7 @@ func (x *RegisterEvalKeysResponse) String() string {
 func (*RegisterEvalKeysResponse) ProtoMessage() {}
 
 func (x *RegisterEvalKeysResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[5]
+	mi := &file_gpuhe_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -522,7 +652,7 @@ func (x *RegisterEvalKeysResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterEvalKeysResponse.ProtoReflect.Descriptor instead.
 func (*RegisterEvalKeysResponse) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{5}
+	return file_gpuhe_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RegisterEvalKeysResponse) GetSuccess() bool {
@@ -565,7 +695,7 @@ type BatchDotProductRequest struct {
 
 func (x *BatchDotProductRequest) Reset() {
 	*x = BatchDotProductRequest{}
-	mi := &file_gpuhe_proto_msgTypes[6]
+	mi := &file_gpuhe_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -577,7 +707,7 @@ func (x *BatchDotProductRequest) String() string {
 func (*BatchDotProductRequest) ProtoMessage() {}
 
 func (x *BatchDotProductRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[6]
+	mi := &file_gpuhe_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -590,7 +720,7 @@ func (x *BatchDotProductRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchDotProductRequest.ProtoReflect.Descriptor instead.
 func (*BatchDotProductRequest) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{6}
+	return file_gpuhe_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *BatchDotProductRequest) GetSessionId() string {
@@ -661,7 +791,7 @@ type BatchDotProductResponse struct {
 
 func (x *BatchDotProductResponse) Reset() {
 	*x = BatchDotProductResponse{}
-	mi := &file_gpuhe_proto_msgTypes[7]
+	mi := &file_gpuhe_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -673,7 +803,7 @@ func (x *BatchDotProductResponse) String() string {
 func (*BatchDotProductResponse) ProtoMessage() {}
 
 func (x *BatchDotProductResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[7]
+	mi := &file_gpuhe_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -686,7 +816,7 @@ func (x *BatchDotProductResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchDotProductResponse.ProtoReflect.Descriptor instead.
 func (*BatchDotProductResponse) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{7}
+	return file_gpuhe_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *BatchDotProductResponse) GetRawResult() *RawCiphertext {
@@ -754,7 +884,7 @@ type GPUHealthCheckRequest struct {
 
 func (x *GPUHealthCheckRequest) Reset() {
 	*x = GPUHealthCheckRequest{}
-	mi := &file_gpuhe_proto_msgTypes[8]
+	mi := &file_gpuhe_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -766,7 +896,7 @@ func (x *GPUHealthCheckRequest) String() string {
 func (*GPUHealthCheckRequest) ProtoMessage() {}
 
 func (x *GPUHealthCheckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[8]
+	mi := &file_gpuhe_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -779,7 +909,7 @@ func (x *GPUHealthCheckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GPUHealthCheckRequest.ProtoReflect.Descriptor instead.
 func (*GPUHealthCheckRequest) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{8}
+	return file_gpuhe_proto_rawDescGZIP(), []int{10}
 }
 
 type GPUHealthCheckResponse struct {
@@ -794,7 +924,7 @@ type GPUHealthCheckResponse struct {
 
 func (x *GPUHealthCheckResponse) Reset() {
 	*x = GPUHealthCheckResponse{}
-	mi := &file_gpuhe_proto_msgTypes[9]
+	mi := &file_gpuhe_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -806,7 +936,7 @@ func (x *GPUHealthCheckResponse) String() string {
 func (*GPUHealthCheckResponse) ProtoMessage() {}
 
 func (x *GPUHealthCheckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[9]
+	mi := &file_gpuhe_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -819,7 +949,7 @@ func (x *GPUHealthCheckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GPUHealthCheckResponse.ProtoReflect.Descriptor instead.
 func (*GPUHealthCheckResponse) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{9}
+	return file_gpuhe_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GPUHealthCheckResponse) GetStatus() GPUHealthCheckResponse_Status {
@@ -876,7 +1006,15 @@ const file_gpuhe_proto_rawDesc = "" +
 	"\x05log_n\x18\x01 \x01(\x05R\x04logN\x12\x1d\n" +
 	"\bq_moduli\x18\x02 \x03(\x04B\x02\x10\x01R\aqModuli\x12\x1d\n" +
 	"\bp_moduli\x18\x03 \x03(\x04B\x02\x10\x01R\apModuli\x12*\n" +
-	"\x11log_default_scale\x18\x04 \x01(\x05R\x0flogDefaultScale\"\xae\x02\n" +
+	"\x11log_default_scale\x18\x04 \x01(\x05R\x0flogDefaultScale\"f\n" +
+	"\x12InitContextRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x121\n" +
+	"\x06params\x18\x02 \x01(\v2\x19.opaque.gpu.v1.CKKSParamsR\x06params\"f\n" +
+	"\x13InitContextResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1f\n" +
+	"\tntt_roots\x18\x03 \x03(\x04B\x02\x10\x01R\bnttRoots\"\xde\x02\n" +
 	"\x17RegisterEvalKeysRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x121\n" +
@@ -884,7 +1022,8 @@ const file_gpuhe_proto_rawDesc = "" +
 	"\x16galois_keys_serialized\x18\x03 \x03(\fR\x14galoisKeysSerialized\x12+\n" +
 	"\x0fgalois_elements\x18\x04 \x03(\x04B\x02\x10\x01R\x0egaloisElements\x120\n" +
 	"\x14relin_key_serialized\x18\x05 \x01(\fR\x12relinKeySerialized\x12,\n" +
-	"\x12ckks_params_binary\x18\x06 \x01(\fR\x10ckksParamsBinary\"t\n" +
+	"\x12ckks_params_binary\x18\x06 \x01(\fR\x10ckksParamsBinary\x12.\n" +
+	"\x13galois_keys_heongpu\x18\a \x01(\fR\x11galoisKeysHeongpu\"t\n" +
 	"\x18RegisterEvalKeysResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12(\n" +
@@ -924,8 +1063,9 @@ const file_gpuhe_proto_rawDesc = "" +
 	"\aBackend\x12\f\n" +
 	"\bCPU_STUB\x10\x00\x12\b\n" +
 	"\x04CUDA\x10\x01\x12\t\n" +
-	"\x05METAL\x10\x022\xb1\x02\n" +
-	"\fGPUHEService\x12c\n" +
+	"\x05METAL\x10\x022\x87\x03\n" +
+	"\fGPUHEService\x12T\n" +
+	"\vInitContext\x12!.opaque.gpu.v1.InitContextRequest\x1a\".opaque.gpu.v1.InitContextResponse\x12c\n" +
 	"\x10RegisterEvalKeys\x12&.opaque.gpu.v1.RegisterEvalKeysRequest\x1a'.opaque.gpu.v1.RegisterEvalKeysResponse\x12`\n" +
 	"\x0fBatchDotProduct\x12%.opaque.gpu.v1.BatchDotProductRequest\x1a&.opaque.gpu.v1.BatchDotProductResponse\x12Z\n" +
 	"\vHealthCheck\x12$.opaque.gpu.v1.GPUHealthCheckRequest\x1a%.opaque.gpu.v1.GPUHealthCheckResponseB4Z2github.com/Prasad-178/opaque/api/proto/gpuhe;gpuheb\x06proto3"
@@ -943,7 +1083,7 @@ func file_gpuhe_proto_rawDescGZIP() []byte {
 }
 
 var file_gpuhe_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_gpuhe_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_gpuhe_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_gpuhe_proto_goTypes = []any{
 	(GPUHealthCheckResponse_Status)(0),  // 0: opaque.gpu.v1.GPUHealthCheckResponse.Status
 	(GPUHealthCheckResponse_Backend)(0), // 1: opaque.gpu.v1.GPUHealthCheckResponse.Backend
@@ -951,33 +1091,38 @@ var file_gpuhe_proto_goTypes = []any{
 	(*RawCiphertext)(nil),               // 3: opaque.gpu.v1.RawCiphertext
 	(*RawPlaintext)(nil),                // 4: opaque.gpu.v1.RawPlaintext
 	(*CKKSParams)(nil),                  // 5: opaque.gpu.v1.CKKSParams
-	(*RegisterEvalKeysRequest)(nil),     // 6: opaque.gpu.v1.RegisterEvalKeysRequest
-	(*RegisterEvalKeysResponse)(nil),    // 7: opaque.gpu.v1.RegisterEvalKeysResponse
-	(*BatchDotProductRequest)(nil),      // 8: opaque.gpu.v1.BatchDotProductRequest
-	(*BatchDotProductResponse)(nil),     // 9: opaque.gpu.v1.BatchDotProductResponse
-	(*GPUHealthCheckRequest)(nil),       // 10: opaque.gpu.v1.GPUHealthCheckRequest
-	(*GPUHealthCheckResponse)(nil),      // 11: opaque.gpu.v1.GPUHealthCheckResponse
+	(*InitContextRequest)(nil),          // 6: opaque.gpu.v1.InitContextRequest
+	(*InitContextResponse)(nil),         // 7: opaque.gpu.v1.InitContextResponse
+	(*RegisterEvalKeysRequest)(nil),     // 8: opaque.gpu.v1.RegisterEvalKeysRequest
+	(*RegisterEvalKeysResponse)(nil),    // 9: opaque.gpu.v1.RegisterEvalKeysResponse
+	(*BatchDotProductRequest)(nil),      // 10: opaque.gpu.v1.BatchDotProductRequest
+	(*BatchDotProductResponse)(nil),     // 11: opaque.gpu.v1.BatchDotProductResponse
+	(*GPUHealthCheckRequest)(nil),       // 12: opaque.gpu.v1.GPUHealthCheckRequest
+	(*GPUHealthCheckResponse)(nil),      // 13: opaque.gpu.v1.GPUHealthCheckResponse
 }
 var file_gpuhe_proto_depIdxs = []int32{
 	2,  // 0: opaque.gpu.v1.RawCiphertext.polynomials:type_name -> opaque.gpu.v1.RawPolynomial
 	2,  // 1: opaque.gpu.v1.RawPlaintext.polynomial:type_name -> opaque.gpu.v1.RawPolynomial
-	5,  // 2: opaque.gpu.v1.RegisterEvalKeysRequest.params:type_name -> opaque.gpu.v1.CKKSParams
-	3,  // 3: opaque.gpu.v1.BatchDotProductRequest.raw_query:type_name -> opaque.gpu.v1.RawCiphertext
-	4,  // 4: opaque.gpu.v1.BatchDotProductRequest.raw_centroids:type_name -> opaque.gpu.v1.RawPlaintext
-	3,  // 5: opaque.gpu.v1.BatchDotProductResponse.raw_result:type_name -> opaque.gpu.v1.RawCiphertext
-	0,  // 6: opaque.gpu.v1.GPUHealthCheckResponse.status:type_name -> opaque.gpu.v1.GPUHealthCheckResponse.Status
-	1,  // 7: opaque.gpu.v1.GPUHealthCheckResponse.backend:type_name -> opaque.gpu.v1.GPUHealthCheckResponse.Backend
-	6,  // 8: opaque.gpu.v1.GPUHEService.RegisterEvalKeys:input_type -> opaque.gpu.v1.RegisterEvalKeysRequest
-	8,  // 9: opaque.gpu.v1.GPUHEService.BatchDotProduct:input_type -> opaque.gpu.v1.BatchDotProductRequest
-	10, // 10: opaque.gpu.v1.GPUHEService.HealthCheck:input_type -> opaque.gpu.v1.GPUHealthCheckRequest
-	7,  // 11: opaque.gpu.v1.GPUHEService.RegisterEvalKeys:output_type -> opaque.gpu.v1.RegisterEvalKeysResponse
-	9,  // 12: opaque.gpu.v1.GPUHEService.BatchDotProduct:output_type -> opaque.gpu.v1.BatchDotProductResponse
-	11, // 13: opaque.gpu.v1.GPUHEService.HealthCheck:output_type -> opaque.gpu.v1.GPUHealthCheckResponse
-	11, // [11:14] is the sub-list for method output_type
-	8,  // [8:11] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	5,  // 2: opaque.gpu.v1.InitContextRequest.params:type_name -> opaque.gpu.v1.CKKSParams
+	5,  // 3: opaque.gpu.v1.RegisterEvalKeysRequest.params:type_name -> opaque.gpu.v1.CKKSParams
+	3,  // 4: opaque.gpu.v1.BatchDotProductRequest.raw_query:type_name -> opaque.gpu.v1.RawCiphertext
+	4,  // 5: opaque.gpu.v1.BatchDotProductRequest.raw_centroids:type_name -> opaque.gpu.v1.RawPlaintext
+	3,  // 6: opaque.gpu.v1.BatchDotProductResponse.raw_result:type_name -> opaque.gpu.v1.RawCiphertext
+	0,  // 7: opaque.gpu.v1.GPUHealthCheckResponse.status:type_name -> opaque.gpu.v1.GPUHealthCheckResponse.Status
+	1,  // 8: opaque.gpu.v1.GPUHealthCheckResponse.backend:type_name -> opaque.gpu.v1.GPUHealthCheckResponse.Backend
+	6,  // 9: opaque.gpu.v1.GPUHEService.InitContext:input_type -> opaque.gpu.v1.InitContextRequest
+	8,  // 10: opaque.gpu.v1.GPUHEService.RegisterEvalKeys:input_type -> opaque.gpu.v1.RegisterEvalKeysRequest
+	10, // 11: opaque.gpu.v1.GPUHEService.BatchDotProduct:input_type -> opaque.gpu.v1.BatchDotProductRequest
+	12, // 12: opaque.gpu.v1.GPUHEService.HealthCheck:input_type -> opaque.gpu.v1.GPUHealthCheckRequest
+	7,  // 13: opaque.gpu.v1.GPUHEService.InitContext:output_type -> opaque.gpu.v1.InitContextResponse
+	9,  // 14: opaque.gpu.v1.GPUHEService.RegisterEvalKeys:output_type -> opaque.gpu.v1.RegisterEvalKeysResponse
+	11, // 15: opaque.gpu.v1.GPUHEService.BatchDotProduct:output_type -> opaque.gpu.v1.BatchDotProductResponse
+	13, // 16: opaque.gpu.v1.GPUHEService.HealthCheck:output_type -> opaque.gpu.v1.GPUHealthCheckResponse
+	13, // [13:17] is the sub-list for method output_type
+	9,  // [9:13] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_gpuhe_proto_init() }
@@ -991,7 +1136,7 @@ func file_gpuhe_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gpuhe_proto_rawDesc), len(file_gpuhe_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   10,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

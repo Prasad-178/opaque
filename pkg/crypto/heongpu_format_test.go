@@ -32,7 +32,7 @@ func TestSerializeGaloisKeysHEonGPU(t *testing.T) {
 		keys[i] = gk
 	}
 
-	data, err := SerializeGaloisKeysHEonGPU(params, keys, elements)
+	data, err := SerializeGaloisKeysHEonGPU(params, keys, elements, nil)
 	if err != nil {
 		t.Fatalf("SerializeGaloisKeysHEonGPU: %v", err)
 	}

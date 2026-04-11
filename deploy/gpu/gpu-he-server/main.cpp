@@ -60,9 +60,9 @@ public:
         device_name_ = prop.name;
     }
 
-    Status RegisterEvalKeys(ServerContext* ctx,
-                            const RegisterEvalKeysRequest* req,
-                            RegisterEvalKeysResponse* resp) override {
+    Status InitContext(ServerContext* ctx,
+                       const InitContextRequest* req,
+                       InitContextResponse* resp) override {
         if (req->session_id().empty()) {
             resp->set_success(false);
             resp->set_error("session_id required");
@@ -76,22 +76,20 @@ public:
             return Status::OK;
         }
 
-        std::cout << "[" << req->session_id() << "] RegisterEvalKeys: LogN="
+        std::cout << "[" << req->session_id() << "] InitContext: LogN="
                   << params.log_n() << ", Q=" << params.q_moduli_size()
-                  << " primes, P=" << params.p_moduli_size() << " primes" << std::endl;
+                  << ", P=" << params.p_moduli_size() << std::endl;
 
         try {
             auto session = std::make_shared<Session>();
 
-            // Extract modulus primes.
             std::vector<uint64_t> q_moduli(params.q_moduli().begin(), params.q_moduli().end());
             std::vector<uint64_t> p_moduli(params.p_moduli().begin(), params.p_moduli().end());
             session->q_moduli = q_moduli;
             session->p_moduli = p_moduli;
 
-            // Create HEonGPU context with exact same primes as Lattigo.
             session->context = heongpu::GenHEContext<heongpu::Scheme::CKKS>(
-                heongpu::sec_level_type::none // We specify exact primes, skip security check
+                heongpu::sec_level_type::none
             );
             session->context->set_poly_modulus_degree(1 << params.log_n());
             session->context->set_coeff_modulus_values(q_moduli, p_moduli);
@@ -100,25 +98,77 @@ public:
             session->ring_size = 1 << params.log_n();
             session->coeff_modulus_count = q_moduli.size();
 
-            // Create operator for HE computation.
-            session->op = std::make_unique<heongpu::HEOperator<heongpu::Scheme::CKKS>>(
-                session->context
-            );
+            // Extract NTT roots (ψ per prime) using the same function
+            // that the context uses internally during generate().
+            std::vector<heongpu::Modulus64> prime_vector;
+            for (auto q : q_moduli) prime_vector.push_back(heongpu::Modulus64(q));
+            for (auto p : p_moduli) prime_vector.push_back(heongpu::Modulus64(p));
 
-            // TODO: Deserialize Galois and relin keys from raw coefficient format.
-            // For now, the server can only compute with keys generated locally.
-            // The full key deserialization requires matching the serialization
-            // format between Lattigo and HEonGPU for evaluation keys.
+            std::vector<uint64_t> ntt_roots =
+                heongpu::generate_primitive_root_of_unity(1 << params.log_n(), prime_vector);
+
+            // Return roots to client
+            for (auto root : ntt_roots) {
+                resp->add_ntt_roots(root);
+            }
 
             std::lock_guard<std::mutex> lock(sessions_mu_);
             sessions_[req->session_id()] = session;
 
             resp->set_success(true);
-            std::cout << "[" << req->session_id() << "] Session created" << std::endl;
+            std::cout << "[" << req->session_id() << "] Context created, "
+                      << ntt_roots.size() << " NTT roots returned" << std::endl;
 
         } catch (const std::exception& e) {
             resp->set_success(false);
-            resp->set_error(std::string("Setup failed: ") + e.what());
+            resp->set_error(std::string("InitContext failed: ") + e.what());
+        }
+
+        return Status::OK;
+    }
+
+    Status RegisterEvalKeys(ServerContext* ctx,
+                            const RegisterEvalKeysRequest* req,
+                            RegisterEvalKeysResponse* resp) override {
+        if (req->session_id().empty()) {
+            resp->set_success(false);
+            resp->set_error("session_id required");
+            return Status::OK;
+        }
+
+        // Session must already exist (created by InitContext).
+        std::shared_ptr<Session> session;
+        {
+            std::lock_guard<std::mutex> lock(sessions_mu_);
+            auto it = sessions_.find(req->session_id());
+            if (it == sessions_.end()) {
+                resp->set_success(false);
+                resp->set_error("session not found; call InitContext first");
+                return Status::OK;
+            }
+            session = it->second;
+        }
+
+        std::cout << "[" << req->session_id() << "] RegisterEvalKeys: "
+                  << req->galois_keys_heongpu().size() << " bytes HEonGPU-format keys" << std::endl;
+
+        try {
+            std::lock_guard<std::mutex> lock(session->mu);
+
+            // Load HEonGPU-format Galois keys (NTT-converted by Go client).
+            if (!req->galois_keys_heongpu().empty()) {
+                std::istringstream gk_stream(req->galois_keys_heongpu());
+                session->galois_key = std::make_unique<Galoiskey<Scheme::CKKS>>();
+                session->galois_key->set_context(session->context);
+                session->galois_key->load(gk_stream);
+                std::cout << "[" << req->session_id() << "] Galois keys loaded" << std::endl;
+            }
+
+            resp->set_success(true);
+
+        } catch (const std::exception& e) {
+            resp->set_success(false);
+            resp->set_error(std::string("RegisterEvalKeys failed: ") + e.what());
         }
 
         return Status::OK;

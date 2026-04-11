@@ -31,10 +31,13 @@ const (
 // The output can be loaded by HEonGPU's Galoiskey::load() method.
 //
 // Requires GPU-compatible parameters (NewParametersGPU with LogP=[61]).
+// If serverNTTRoots is provided (from InitContext), uses those exact roots
+// for NTT domain conversion. If nil, computes roots locally (may not match server).
 func SerializeGaloisKeysHEonGPU(
 	params hefloat.Parameters,
 	galoisKeys []*rlwe.GaloisKey,
 	galoisElements []uint64,
+	serverNTTRoots []uint64,
 ) ([]byte, error) {
 	if len(galoisKeys) != len(galoisElements) {
 		return nil, fmt.Errorf("galoisKeys length %d != galoisElements length %d",
@@ -51,7 +54,12 @@ func SerializeGaloisKeysHEonGPU(
 	}
 
 	// Create NTT domain converter (Lattigo NTT → HEonGPU NTT)
-	converter := NewNTTConverter(params)
+	var converter *NTTConverter
+	if len(serverNTTRoots) > 0 {
+		converter = NewNTTConverterWithRoots(params, serverNTTRoots)
+	} else {
+		converter = NewNTTConverter(params)
+	}
 
 	// For KEYSWITCHING_METHOD_I: d_ is NOT used (stays 0 in HEonGPU).
 	// galoiskey_size = 2 * Q_size * Q_prime_size * ring_size.
