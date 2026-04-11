@@ -69,19 +69,46 @@ func SerializeGaloisKeysHEonGPU(
 	binary.Write(&buf, binary.LittleEndian, int32(qPrimeSize))         // Q_prime_size_ (int, 4B)
 	binary.Write(&buf, binary.LittleEndian, int32(qSize))              // Q_size_ (int, 4B)
 	binary.Write(&buf, binary.LittleEndian, int32(d))                  // d_ (int, 4B)
-	binary.Write(&buf, binary.LittleEndian, uint8(1))                  // customized (bool, 1B) = true
+	// customized = false — use the galois_elt map format.
+	// (HEonGPU's load() has a bug in the customized=true path: it passes
+	// the uninitialized size variable as the read length instead of sizeof.)
+	binary.Write(&buf, binary.LittleEndian, uint8(0))                  // customized (bool, 1B) = false
 	binary.Write(&buf, binary.LittleEndian, groupOrder)                // group_order_ (int, 4B)
 	binary.Write(&buf, binary.LittleEndian, heongpuStorageTypeHost)    // storage_type (uint8, 1B)
 	binary.Write(&buf, binary.LittleEndian, uint8(1))                  // galois_key_generated_ (bool, 1B) = true
 
-	// Custom galois elements list
-	customGaloisElts := make([]uint32, len(galoisElements))
-	for i, el := range galoisElements {
-		customGaloisElts[i] = uint32(el)
+	// Galois element map: pairs of {shift_step (int) → galois_element (int)}.
+	// HEonGPU's load() reads: uint32 count, then count × (int first, int second).
+	// The key data map uses galois_element as the key (galois_elt[first] = second
+	// in save(), but load() reads first/second and does galois_elt[first] = second).
+	// From save(): galois_elt map stores {rotation_step → galois_element}.
+	// But wait — save() iterates the map and writes {first, second} = {step, element}.
+	// And load() reads them and does galois_elt[first] = second.
+	// The device_location_ map uses galois_element (second) as the key.
+	// So we write: count, then pairs of {rotation_power, galois_element}.
+	//
+	// For our rotations by powers of 2: step 1→elt 5, step 2→elt 25, etc.
+	// Also need negative steps: step -1→elt X, step -2→elt Y, etc.
+	// HEonGPU generates both positive and negative rotation keys.
+	//
+	// Actually, looking at the save() code more carefully: the key_data in
+	// device_location_ is keyed by galois_element (galois.second), not by step.
+	// So the map entry {step, element} tells load() to register that galois_element,
+	// and the data section is keyed by galois_element.
+	type galoisPair struct {
+		step    int32
+		element int32
 	}
-	binary.Write(&buf, binary.LittleEndian, uint32(len(customGaloisElts))) // uint32 count
-	for _, el := range customGaloisElts {
-		binary.Write(&buf, binary.LittleEndian, el) // uint32 per element
+	var pairs []galoisPair
+	for i, el := range galoisElements {
+		step := int32(1 << i)
+		pairs = append(pairs, galoisPair{step: step, element: int32(el)})
+	}
+
+	binary.Write(&buf, binary.LittleEndian, uint32(len(pairs))) // galois_elt_size
+	for _, p := range pairs {
+		binary.Write(&buf, binary.LittleEndian, p.step)    // int first (rotation step)
+		binary.Write(&buf, binary.LittleEndian, p.element) // int second (galois element)
 	}
 
 	// galois_elt_zero (conjugation galois element = 2N - 1)
@@ -91,11 +118,12 @@ func SerializeGaloisKeysHEonGPU(
 	// galoiskey_size_ — Data64 = uint64_t, 8 bytes
 	binary.Write(&buf, binary.LittleEndian, uint64(galoisKeySize)) // uint64, 8B
 
-	// Key data: key_count (uint32) + per-key [int key_id + Data64[] data] + zero_key [Data64[] data]
-	binary.Write(&buf, binary.LittleEndian, uint32(len(galoisKeys))) // key_count
+	// Key data section: key_count + per-key {galois_element (int), Data64[] data} + zero_key {Data64[] data}
+	// The map key is galois_element (matching device_location_/host_location_ map keys in HEonGPU).
+	binary.Write(&buf, binary.LittleEndian, uint32(len(galoisKeys))) // key_count (uint32)
 
 	for i, gk := range galoisKeys {
-		binary.Write(&buf, binary.LittleEndian, int32(galoisElements[i])) // galois element (int, 4B)
+		binary.Write(&buf, binary.LittleEndian, int32(galoisElements[i])) // galois_element (int, 4B)
 
 		// Extract raw coefficients from Lattigo's GadgetCiphertext.
 		// Layout: for each decomposition level d, for each polynomial (c0, c1),
