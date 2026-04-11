@@ -15,6 +15,7 @@ import (
 	"math/big"
 
 	"github.com/tuneinsight/lattigo/v5/he/hefloat"
+	"github.com/tuneinsight/lattigo/v5/ring"
 )
 
 // NTTConverter converts polynomial coefficients between Lattigo and HEonGPU NTT domains.
@@ -94,44 +95,90 @@ func (c *NTTConverter) ConvertToHEonGPUDomain(coeffs []uint64, modulusIdx int) {
 	N := c.N
 
 	// Step 1: Lattigo INTT → coefficient domain
-	inttInPlace(coeffs, N, p, c.lattigoINTTRoots[modulusIdx], c.lattigoNInv[modulusIdx])
+	// Use Lattigo's own INTT which correctly handles Montgomery form roots.
+	var subRing *ring.SubRing
+	if modulusIdx <= c.params.MaxLevelQ() {
+		subRing = c.params.RingQ().SubRings[modulusIdx]
+	} else {
+		pIdx := modulusIdx - c.params.MaxLevelQ() - 1
+		subRing = c.params.RingP().SubRings[pIdx]
+	}
+
+	// Lattigo's INTTStandard uses Montgomery-form roots internally
+	tmp := make([]uint64, N)
+	ring.INTTStandard(coeffs, tmp, N, subRing.NInv, subRing.Modulus, subRing.MRedConstant, subRing.RootsBackward)
+	copy(coeffs, tmp)
 
 	// Step 2: HEonGPU NTT → HEonGPU NTT domain
+	// Our NTT uses standard (non-Montgomery) arithmetic
 	nttInPlace(coeffs, N, p, c.heongpuNTTRoots[modulusIdx])
 }
 
 // computeHEonGPUPsi finds HEonGPU's primitive 2N-th root of unity for prime p.
-// HEonGPU uses: smallest primitive root g of Z/pZ*, psi = g^((p-1)/(2N)) mod p.
+//
+// HEonGPU's algorithm (find_minimal_primitive_root):
+// 1. Find ANY primitive (2N)-th root by: random^((p-1)/(2N)) mod p,
+//    checking that the result has exact order 2N (is_primitive_root).
+// 2. Then find the SMALLEST such root by iterating through all (2N)-th
+//    roots of unity (there are phi(2N) = N of them) and keeping the minimum.
+//
+// This is deterministic because the minimal root is unique.
 func computeHEonGPUPsi(p, N uint64) uint64 {
+	degree := 2 * N
 	pBig := new(big.Int).SetUint64(p)
 	pm1 := new(big.Int).Sub(pBig, big.NewInt(1))
-	exp := new(big.Int).Div(pm1, new(big.Int).SetUint64(2*N))
+	quotient := new(big.Int).Div(pm1, new(big.Int).SetUint64(degree))
 
-	factors := primeFactorsOf(pm1)
-
-	for g := uint64(2); g < 1000; g++ {
-		gBig := new(big.Int).SetUint64(g)
-
-		isPrimRoot := true
-		for _, f := range factors {
-			subExp := new(big.Int).Div(pm1, f)
-			result := new(big.Int).Exp(gBig, subExp, pBig)
-			if result.Cmp(big.NewInt(1)) == 0 {
-				isPrimRoot = false
-				break
-			}
-		}
-
-		if isPrimRoot {
-			psi := new(big.Int).Exp(gBig, exp, pBig)
-			// Verify psi^N != 1 mod p (ensures 2N-th root, not just N-th)
-			psiN := new(big.Int).Exp(psi, new(big.Int).SetUint64(N), pBig)
-			if psiN.Cmp(big.NewInt(1)) != 0 {
-				return psi.Uint64()
-			}
+	// Find a primitive (2N)-th root of unity.
+	// Try small candidates: candidate = i^((p-1)/(2N)) mod p
+	var root *big.Int
+	for i := uint64(2); i < 10000; i++ {
+		candidate := new(big.Int).Exp(new(big.Int).SetUint64(i), quotient, pBig)
+		if isPrimitive2NthRoot(candidate, degree, pBig) {
+			root = candidate
+			break
 		}
 	}
-	return 0
+
+	if root == nil {
+		return 0
+	}
+
+	// Find the MINIMAL root by squaring through all equivalent roots.
+	// root^2 is also a generator of the group of (2N)-th roots.
+	// By iterating root, root^3, root^5, ... we visit all primitive roots.
+	minRoot := new(big.Int).Set(root)
+	generatorSq := new(big.Int).Mul(root, root)
+	generatorSq.Mod(generatorSq, pBig)
+
+	current := new(big.Int).Set(root)
+	for i := uint64(0); i < degree; i += 2 {
+		if current.Cmp(minRoot) < 0 {
+			minRoot.Set(current)
+		}
+		current.Mul(current, generatorSq)
+		current.Mod(current, pBig)
+	}
+
+	return minRoot.Uint64()
+}
+
+// isPrimitive2NthRoot checks if candidate is a primitive (degree)-th root of unity mod p.
+// It must satisfy: candidate^degree = 1 mod p AND candidate^(degree/2) != 1 mod p.
+func isPrimitive2NthRoot(candidate *big.Int, degree uint64, p *big.Int) bool {
+	if candidate.Sign() == 0 || candidate.Cmp(big.NewInt(1)) == 0 {
+		return false
+	}
+
+	// Check candidate^degree = 1 mod p
+	check := new(big.Int).Exp(candidate, new(big.Int).SetUint64(degree), p)
+	if check.Cmp(big.NewInt(1)) != 0 {
+		return false
+	}
+
+	// Check candidate^(degree/2) != 1 mod p (ensures primitive, not just order dividing degree)
+	halfCheck := new(big.Int).Exp(candidate, new(big.Int).SetUint64(degree/2), p)
+	return halfCheck.Cmp(big.NewInt(1)) != 0
 }
 
 // generateNTTTable generates the forward NTT root table from psi.
