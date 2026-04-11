@@ -116,8 +116,15 @@ For development on Apple Silicon without a CUDA GPU:
 - Config wiring: `GPUServerAddress` in opaque.Config, auto-creates GPUHEProvider
 - Comprehensive tests: encrypt/decrypt, batch dot product, matches DirectHEProvider, pool mechanics
 
+**Key breakthrough — eval key decomposition match:**
+- `NewParametersGPU()` with `LogP=[61]` produces decomposition `d=8`, matching HEonGPU exactly
+- Galois key sizes match: 2,359,296 uint64 = 18.0 MB per key (both libraries)
+- Raw uint64 coefficient transfer for eval keys is now feasible
+- See `docs/GPU_FORMAT_BRIDGE.md` for full analysis
+
 **Remaining:**
-- cgo bridge between Go GPU server and HEonGPU C++ library (enables real GPU acceleration)
+- Verify coefficient ordering matches between libraries (byte-for-byte comparison on CUDA hardware)
+- C++ GPU server using HEonGPU with eval keys loaded from Lattigo's raw coefficients
 - End-to-end benchmarks through Opaque pipeline with GPU backend
 - GPU memory usage and concurrent query throughput measurements
 

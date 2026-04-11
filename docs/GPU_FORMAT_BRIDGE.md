@@ -104,6 +104,40 @@ Client (Go/Lattigo)                         GPU Server (C++/HEonGPU)
 
 3. **Polynomial ordering in ciphertext:** Both store (c0, c1) but we must verify the same ordering convention (c0 first, then c1).
 
+## Evaluation Key Bridge: Decomposition Match Found
+
+### The Problem
+
+Lattigo and HEonGPU use different key-switching decomposition parameters by default:
+- Lattigo with `LogP=[61,61]` (2 P primes): `d=4` decomposition, 10 MB per Galois key
+- HEonGPU: `d=Q_size=8` decomposition, 18 MB per Galois key
+
+With different decomposition, the raw polynomial data is mathematically different — not just differently formatted.
+
+### The Solution: GPU-Compatible Parameters
+
+Using `LogP=[61]` (single P prime) forces Lattigo's decomposition to match HEonGPU:
+
+| Parameter | CPU Path `[61,61]` | GPU Path `[61]` | HEonGPU |
+|-----------|-------------------|-----------------|---------|
+| **d (decomposition)** | 4 | **8** | **8** |
+| **P levels per poly** | 2 | **1** | **1** |
+| **uint64 per Galois key** | 1,310,720 | **2,359,296** | **2,359,296** |
+| **MB per Galois key** | 10.0 | **18.0** | **18.0** |
+
+**Exact size match confirmed.** `NewParametersGPU()` uses `LogP=[61]` for GPU-compatible key generation.
+
+The CPU path (`LogP=[61,61]`) remains unchanged — it's slightly more efficient for CPU-only operation (fewer decomposition components = fewer polynomial multiplications per rotation). The GPU path trades this for cross-library compatibility.
+
+### Remaining Verification
+
+The sizes match, but we need to verify the coefficient ORDERING within the arrays:
+1. Generate a Galois key in Lattigo (GPU params) and extract raw uint64 arrays
+2. Generate a Galois key in HEonGPU with the same secret key and parameters
+3. Compare byte-for-byte — if they match, the bridge works without any conversion
+
+This requires running both libraries with the same secret key on a CUDA-capable machine.
+
 ## Verification Plan
 
 Before building the full pipeline, verify format compatibility:
