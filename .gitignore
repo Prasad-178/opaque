@@ -37,3 +37,4 @@ notes.txt
 # Private meeting notes
 GUY_MEETING_NOTES.md
 *.out
+third_party/
