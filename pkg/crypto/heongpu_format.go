@@ -50,13 +50,18 @@ func SerializeGaloisKeysHEonGPU(
 		return nil, fmt.Errorf("HEonGPU format requires LogP with 1 prime (got %d P primes); use NewParametersGPU()", pSize)
 	}
 
-	// For KEYSWITCHING_METHOD_I: d = Q_size, galoiskey_size = 2 * d * Q_prime_size * ring_size
-	d := qSize
-	galoisKeySize := int64(2 * d * qPrimeSize * ringSize)
+	// Create NTT domain converter (Lattigo NTT → HEonGPU NTT)
+	converter := NewNTTConverter(params)
 
-	// Group order (generator of multiplicative group mod 2N)
-	// HEonGPU uses the same generator as the NTT. For N=16384, group_order=5.
-	groupOrder := int32(findGenerator(2 * ringSize))
+	// For KEYSWITCHING_METHOD_I: d_ is NOT used (stays 0 in HEonGPU).
+	// galoiskey_size = 2 * Q_size * Q_prime_size * ring_size.
+	d := 0 // d_ is 0 for METHOD_I (only set for METHOD_II)
+	galoisKeySize := int64(2 * qSize * qPrimeSize * ringSize)
+
+	// Group order (generator of multiplicative group mod 2N).
+	// HEonGPU uses 5 as the generator for N=16384 (verified via native key dump).
+	// This matches Lattigo's GaloisElement(1) = 5.
+	groupOrder := int32(5) // Hardcoded to match HEonGPU's default for N=16384
 
 	var buf bytes.Buffer
 
@@ -128,7 +133,9 @@ func SerializeGaloisKeysHEonGPU(
 		// Extract raw coefficients from Lattigo's GadgetCiphertext.
 		// Layout: for each decomposition level d, for each polynomial (c0, c1),
 		//         flatten all Q levels then P levels.
-		keyData, err := extractGadgetData(gk.GadgetCiphertext, d, qSize, pSize, ringSize)
+		// Note: d_ in header is 0 for METHOD_I, but data has qSize decomposition levels.
+		// Apply NTT domain conversion: Lattigo NTT → HEonGPU NTT
+		keyData, err := extractGadgetDataConverted(gk.GadgetCiphertext, qSize, qSize, pSize, ringSize, converter)
 		if err != nil {
 			return nil, fmt.Errorf("galois key %d (element %d): %w", i, galoisElements[i], err)
 		}
@@ -163,6 +170,28 @@ func SerializeGaloisKeysHEonGPU(
 // [decomp0_poly0_level0[N] | decomp0_poly0_level1[N] | ... | decomp0_poly0_levelQP-1[N] |
 //  decomp0_poly1_level0[N] | ... | decomp0_poly1_levelQP-1[N] |
 //  decomp1_poly0_level0[N] | ... ]
+// extractGadgetDataConverted extracts and converts coefficients from Lattigo's NTT domain
+// to HEonGPU's NTT domain using the provided converter.
+func extractGadgetDataConverted(gc rlwe.GadgetCiphertext, d, qSize, pSize, ringSize int, conv *NTTConverter) ([]uint64, error) {
+	data, err := extractGadgetData(gc, d, qSize, pSize, ringSize)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert each polynomial level from Lattigo's NTT domain to HEonGPU's
+	qPrimeSize := qSize + pSize
+	for decomp := 0; decomp < d; decomp++ {
+		for poly := 0; poly < 2; poly++ {
+			for lvl := 0; lvl < qPrimeSize; lvl++ {
+				offset := (decomp*2*qPrimeSize + poly*qPrimeSize + lvl) * ringSize
+				conv.ConvertToHEonGPUDomain(data[offset:offset+ringSize], lvl)
+			}
+		}
+	}
+
+	return data, nil
+}
+
 func extractGadgetData(gc rlwe.GadgetCiphertext, d, qSize, pSize, ringSize int) ([]uint64, error) {
 	qPrimeSize := qSize + pSize
 	totalSize := 2 * d * qPrimeSize * ringSize

@@ -138,6 +138,20 @@ The sizes match, but we need to verify the coefficient ORDERING within the array
 
 This requires running both libraries with the same secret key on a CUDA-capable machine.
 
+### Current Progress (as of testing)
+
+**Format structure: CORRECT** — file loads in HEonGPU without crash, size matches byte-for-byte (283,115,733 bytes).
+
+**Key issues found and fixed:**
+1. HEonGPU enums (scheme_type, keyswitching_type, storage_type) are uint8, not int32
+2. HEonGPU's `load()` has a bug in the `customized=true` path — uses uninitialized variable as read length. Workaround: use `customized=false` with galois_elt map format.
+3. `d_` should be 0 for KEYSWITCHING_METHOD_I (not Q_size)
+4. `group_order_` should be 5 (the NTT generator for N=16384), not 3
+
+**Remaining issue:** Rotation produces incorrect results (garbage values). The polynomial coefficient ORDERING within each key's data block differs between Lattigo and HEonGPU. Both use Cooley-Tukey NTT with bit-reversed output, but may derive different primitive roots of unity for the twiddle factors.
+
+**Next step:** Empirically compare NTT primitive roots between libraries for the same prime modulus. If roots differ, apply a permutation to the coefficients during conversion.
+
 ## Verification Plan
 
 Before building the full pipeline, verify format compatibility:
