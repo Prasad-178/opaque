@@ -178,21 +178,22 @@ func SerializeGaloisKeysHEonGPU(
 // [decomp0_poly0_level0[N] | decomp0_poly0_level1[N] | ... | decomp0_poly0_levelQP-1[N] |
 //  decomp0_poly1_level0[N] | ... | decomp0_poly1_levelQP-1[N] |
 //  decomp1_poly0_level0[N] | ... ]
-// extractGadgetDataConverted extracts and converts coefficients from Lattigo's NTT domain
-// to HEonGPU's NTT domain using the provided converter.
+// extractGadgetDataConverted extracts coefficients and converts them from
+// Lattigo's NTT domain to standard coefficient domain using Lattigo's INTT.
+// The GPU server will apply its own NTT after loading to get to HEonGPU's domain.
 func extractGadgetDataConverted(gc rlwe.GadgetCiphertext, d, qSize, pSize, ringSize int, conv *NTTConverter) ([]uint64, error) {
 	data, err := extractGadgetData(gc, d, qSize, pSize, ringSize)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert each polynomial level from Lattigo's NTT domain to HEonGPU's
+	// Convert each polynomial level from Lattigo's NTT domain to coefficient domain
 	qPrimeSize := qSize + pSize
 	for decomp := 0; decomp < d; decomp++ {
 		for poly := 0; poly < 2; poly++ {
 			for lvl := 0; lvl < qPrimeSize; lvl++ {
 				offset := (decomp*2*qPrimeSize + poly*qPrimeSize + lvl) * ringSize
-				conv.ConvertToHEonGPUDomain(data[offset:offset+ringSize], lvl)
+				conv.ConvertToCoeffDomain(data[offset:offset+ringSize], lvl)
 			}
 		}
 	}

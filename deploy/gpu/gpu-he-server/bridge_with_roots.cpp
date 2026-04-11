@@ -72,7 +72,61 @@ int main(int argc, char** argv) {
             gk.set_context(context);
             gk.load(f);
             f.close();
-            std::cout << "Keys loaded successfully!" << std::endl;
+            std::cout << "Keys loaded (coefficient domain)!" << std::endl;
+
+            // The keys are in COEFFICIENT domain (Lattigo INTT was applied).
+            // Apply HEonGPU's NTT to convert to HEonGPU's NTT domain.
+            std::cout << "Applying HEonGPU NTT to key data..." << std::endl;
+
+            int Q_size = q.size();
+            int QP_size = q.size() + p.size();
+            int n_power = 14;
+
+            // NTT configuration
+            gpuntt::ntt_rns_configuration<uint64_t> cfg_ntt = {
+                .n_power = n_power,
+                .ntt_type = gpuntt::FORWARD,
+                .ntt_layout = gpuntt::PerPolynomial,
+                .reduction_poly = gpuntt::ReductionPolynomial::X_N_plus,
+                .zero_padding = false,
+                .stream = cudaStreamDefault
+            };
+
+            // Get NTT table and moduli from context (these are on GPU)
+            auto* ntt_table = context->ntt_table_->data();
+            auto* moduli = context->modulus_->data();
+            int total_polys = 2 * Q_size;
+
+            // Apply NTT to each galois element's key data using public data() accessor
+            // Each galois element has galoiskey_size uint64 values on GPU
+            // = total_polys * QP_size * N values = total_polys batches of QP_size moduli
+            auto galois_map = context->get_galois_elts ? ... // We need the element list
+            // Actually, we know the elements from our key file
+            std::vector<int> galois_elts = {5,25,625,30177,28609,28545,7937,15873,31745,30721,28673,24577,16385,1};
+
+            for (int elt : galois_elts) {
+                Data64* key_data = gk.data(elt);
+                if (key_data) {
+                    gpuntt::GPU_NTT_Inplace(
+                        key_data, ntt_table, moduli, cfg_ntt,
+                        total_polys * QP_size,  // total polynomial count
+                        QP_size                 // moduli per "layer"
+                    );
+                }
+            }
+
+            // Also NTT the conjugation (zero) key
+            Data64* c_key = gk.c_data();
+            if (c_key) {
+                gpuntt::GPU_NTT_Inplace(
+                    c_key, ntt_table, moduli, cfg_ntt,
+                    total_polys * QP_size, QP_size
+                );
+            }
+
+            HEONGPU_CUDA_CHECK(cudaGetLastError());
+            cudaDeviceSynchronize();
+            std::cout << "NTT conversion complete!" << std::endl;
 
             // Generate local keys for testing
             HEKeyGenerator<S> keygen(context);

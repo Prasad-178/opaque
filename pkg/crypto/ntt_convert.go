@@ -106,16 +106,14 @@ func newNTTConverter(params hefloat.Parameters, serverRoots []uint64) *NTTConver
 	return conv
 }
 
-// ConvertToHEonGPUDomain converts a polynomial's coefficients from Lattigo's NTT domain
-// to HEonGPU's NTT domain for a given modulus level.
+// ConvertToCoeffDomain converts coefficients from Lattigo's NTT domain
+// to standard coefficient domain using Lattigo's own INTT.
 //
-// The input coefficients are modified in-place.
-func (c *NTTConverter) ConvertToHEonGPUDomain(coeffs []uint64, modulusIdx int) {
-	p := c.allModuli[modulusIdx]
+// The GPU server can then apply its own NTT to get to HEonGPU's NTT domain.
+// This avoids reimplementing HEonGPU's NTT algorithm in Go.
+func (c *NTTConverter) ConvertToCoeffDomain(coeffs []uint64, modulusIdx int) {
 	N := c.N
 
-	// Step 1: Lattigo INTT → coefficient domain
-	// Use Lattigo's own INTT which correctly handles Montgomery form roots.
 	var subRing *ring.SubRing
 	if modulusIdx <= c.params.MaxLevelQ() {
 		subRing = c.params.RingQ().SubRings[modulusIdx]
@@ -124,14 +122,10 @@ func (c *NTTConverter) ConvertToHEonGPUDomain(coeffs []uint64, modulusIdx int) {
 		subRing = c.params.RingP().SubRings[pIdx]
 	}
 
-	// Lattigo's INTTStandard uses Montgomery-form roots internally
+	// Lattigo's INTTStandard correctly handles Montgomery-form roots
 	tmp := make([]uint64, N)
 	ring.INTTStandard(coeffs, tmp, N, subRing.NInv, subRing.Modulus, subRing.MRedConstant, subRing.RootsBackward)
 	copy(coeffs, tmp)
-
-	// Step 2: HEonGPU NTT → HEonGPU NTT domain
-	// Our NTT uses standard (non-Montgomery) arithmetic
-	nttInPlace(coeffs, N, p, c.heongpuNTTRoots[modulusIdx])
 }
 
 // computeHEonGPUPsi finds HEonGPU's primitive 2N-th root of unity for prime p.
