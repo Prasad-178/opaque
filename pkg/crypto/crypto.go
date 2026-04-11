@@ -345,6 +345,11 @@ func (e *Engine) GetParams() hefloat.Parameters {
 	return e.params
 }
 
+// GetEvalKeys returns the evaluation key set (Galois + relin keys) for inspection.
+func (e *Engine) GetEvalKeys() *rlwe.MemEvaluationKeySet {
+	return e.evalKeys
+}
+
 // HomomorphicBatchDotProduct computes multiple dot products in a single HE operation.
 // The query should be packed (replicated across slot segments) to match packed centroids.
 // Returns encrypted result where each dimension-sized segment contains one dot product.
