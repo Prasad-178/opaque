@@ -241,7 +241,7 @@ public:
                 // This avoids cross-library NTT conversion issues entirely.
                 if (req->query_is_coeff_domain()) {
                     gpuntt::ntt_rns_configuration<uint64_t> ntt_cfg = {
-                        .n_power = session->context->n_power,
+                        .n_power = session->context->get_n_power(),
                         .ntt_type = gpuntt::FORWARD,
                         .ntt_layout = gpuntt::PerPolynomial,
                         .reduction_poly = gpuntt::ReductionPolynomial::X_N_plus,
@@ -331,7 +331,7 @@ public:
             if (req->query_is_coeff_domain()) {
                 int res_levels = session->coeff_modulus_count - ct_result.depth();
                 gpuntt::ntt_rns_configuration<uint64_t> intt_cfg = {
-                    .n_power = session->context->n_power,
+                    .n_power = session->context->get_n_power(),
                     .ntt_type = gpuntt::INVERSE,
                     .ntt_layout = gpuntt::PerPolynomial,
                     .reduction_poly = gpuntt::ReductionPolynomial::X_N_plus,
