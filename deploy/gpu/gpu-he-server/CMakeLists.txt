@@ -56,10 +56,15 @@ add_executable(gpu-he-server
 target_include_directories(gpu-he-server PRIVATE
     ${PROTO_OUT}
     ${HEONGPU_DIR}/src/include
+    ${HEONGPU_DIR}/thirdparty/GPU-NTT/src/include
+    ${HEONGPU_DIR}/thirdparty/RNGonGPU/src/include
     ${HEONGPU_BUILD_DIR}/_deps/gpu-ntt-src/src/include
     ${HEONGPU_BUILD_DIR}/_deps/rmm-src/include
+    ${HEONGPU_BUILD_DIR}/_deps/rmm-src/cpp/include
+    ${HEONGPU_BUILD_DIR}/_deps/rmm-build/include
     ${HEONGPU_BUILD_DIR}/_deps/spdlog-src/include
     ${HEONGPU_BUILD_DIR}/_deps/rapids_logger-src/include
+    ${HEONGPU_BUILD_DIR}/_deps/nvtx3-src/c/include
 )
 
 # Add pkg-config include dirs if using pkg-config
