@@ -105,7 +105,6 @@ int main() {
     encoder.encode(pt_c, centroids, scale);
 
     std::cout << "After encoding:\n"
-              << "  coeff_modulus_count = " << pt_c.coeff_modulus_count() << " (expect " << Q_size << ")\n"
               << "  depth               = " << pt_c.depth() << " (expect 0)\n"
               << "  scale               = " << std::fixed << std::setprecision(1) << pt_c.scale() << " (expect " << scale << ")\n"
               << "  in_ntt_domain       = " << pt_c.in_ntt_domain() << " (expect 1)\n";
