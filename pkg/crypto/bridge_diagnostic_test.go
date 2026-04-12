@@ -553,6 +553,119 @@ func TestBridgeDiagnostic(t *testing.T) {
 		t.Log("  → All decrypted values become ~0 or garbage")
 	})
 
+	// ================================================================
+	t.Run("13_PsiPowers_ForGPUComparison", func(t *testing.T) {
+		// Print psi^0..psi^15 for Q[0] — compare with C++ diagnostic output.
+		// If these match, the root tables are compatible.
+		psi0 := serverRoots[0]
+		p0 := allModuli[0]
+		p0Big := new(big.Int).SetUint64(p0)
+		psiBig := new(big.Int).SetUint64(psi0)
+
+		t.Logf("Prime Q[0] = %d, psi = %d", p0, psi0)
+		t.Logf("First 16 powers of psi:")
+		power := big.NewInt(1)
+		for j := 0; j < 16; j++ {
+			t.Logf("  psi^%d = %d", j, power.Uint64())
+			power.Mul(power, psiBig)
+			power.Mod(power, p0Big)
+		}
+
+		// Also print the root TABLE values (after bit-reverse) for comparison
+		table := conv.heongpuNTTRoots[0]
+		t.Logf("\nRoot table (after generateNTTTable) first 16 entries:")
+		for j := 0; j < 16; j++ {
+			t.Logf("  roots[%d] = %d", j, table[j])
+		}
+
+		// Check: does roots[1] = psi^1 or psi^bitrev(1)?
+		t.Logf("\nRoot table consistency check:")
+		t.Logf("  roots[0] = %d (should be psi^0 = 1: %v)", table[0], table[0] == 1)
+		t.Logf("  roots[1] = %d", table[1])
+		t.Logf("  psi^1 = %d", psi0)
+		t.Logf("  roots[1] == psi^1: %v", table[1] == psi0)
+
+		// Compute psi^bitrev(1, logN) to check bit-reverse format
+		br1 := bitReverse(1, conv.logN)
+		psiBr1 := new(big.Int).Exp(psiBig, big.NewInt(int64(br1)), p0Big)
+		t.Logf("  bitrev(1, %d) = %d", conv.logN, br1)
+		t.Logf("  psi^bitrev(1) = psi^%d = %d", br1, psiBr1.Uint64())
+		t.Logf("  roots[1] == psi^bitrev(1): %v", table[1] == psiBr1.Uint64())
+	})
+
+	// ================================================================
+	t.Run("14_NTT_OutputOrder_Comparison", func(t *testing.T) {
+		// CRITICAL: Check if our Go NTT produces the same output order as HEonGPU.
+		//
+		// CT DIT NTT: input natural-order → output BIT-REVERSED order
+		// CT DIF NTT: input bit-reversed → output natural-order
+		//
+		// If HEonGPU uses natural output and our Go code produces bit-reversed,
+		// the data would be scrambled → wrong results.
+
+		p := conv.allModuli[0]
+		pBig := new(big.Int).SetUint64(p)
+		psiBig := new(big.Int).SetUint64(serverRoots[0])
+
+		// Test 1: NTT([1, 0, ..., 0])
+		data1 := make([]uint64, N)
+		data1[0] = 1
+		conv.nttCooleyTukeyInPlace(data1, p, conv.heongpuNTTRoots[0])
+
+		allOnes := true
+		for _, v := range data1 {
+			if v != 1 {
+				allOnes = false
+				break
+			}
+		}
+		t.Logf("NTT([1,0,...,0]) = all ones: %v", allOnes)
+
+		// Test 2: NTT([0, 1, 0, ..., 0])
+		data2 := make([]uint64, N)
+		data2[1] = 1
+		conv.nttCooleyTukeyInPlace(data2, p, conv.heongpuNTTRoots[0])
+
+		t.Logf("NTT([0,1,0,...,0]) first 8 outputs:")
+		for j := 0; j < 8; j++ {
+			t.Logf("  output[%d] = %d", j, data2[j])
+		}
+
+		// For natural-order output: output[k] = psi^k for all k
+		// For bit-reversed output: output[k] = psi^bitrev(k) for all k
+		// Check which pattern matches
+		naturalMatch := 0
+		bitrevMatch := 0
+		psiPower := big.NewInt(1)
+		for k := 0; k < N; k++ {
+			expected := psiPower.Uint64()
+			if data2[k] == expected {
+				naturalMatch++
+			}
+			br := bitReverse(k, conv.logN)
+			brPsi := new(big.Int).Exp(psiBig, big.NewInt(int64(br)), pBig)
+			if data2[k] == brPsi.Uint64() {
+				bitrevMatch++
+			}
+			psiPower.Mul(psiPower, psiBig)
+			psiPower.Mod(psiPower, pBig)
+		}
+
+		t.Logf("Output order analysis for NTT([0,1,0,...,0]):")
+		t.Logf("  Natural order matches (output[k]=psi^k): %d/%d", naturalMatch, N)
+		t.Logf("  Bit-rev order matches (output[k]=psi^bitrev(k)): %d/%d", bitrevMatch, N)
+
+		if naturalMatch == N {
+			t.Log("  → Our NTT produces NATURAL order output")
+		} else if bitrevMatch == N {
+			t.Log("  → Our NTT produces BIT-REVERSED order output")
+		} else {
+			t.Log("  → Our NTT produces NEITHER standard pattern")
+			t.Logf("  → Checking first few: output[0]=%d (psi^0=%d), output[1]=%d (psi^1=%d)",
+				data2[0], uint64(1), data2[1], serverRoots[0])
+		}
+	})
+
 	t.Log("")
 	t.Log("=== DIAGNOSTIC COMPLETE ===")
 }

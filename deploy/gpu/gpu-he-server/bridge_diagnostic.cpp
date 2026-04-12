@@ -319,6 +319,145 @@ int main() {
         }
     }
 
+    // ============================================================
+    print_separator("TEST 7: NTT Output on Known Data (Compare with Go)");
+    // ============================================================
+    {
+        // Create known coefficient values and apply HEonGPU's NTT via encode.
+        // HEonGPU's encoder does: encode(values) → CKKS encoding → NTT → plaintext
+        // We can't directly call NTT on raw polys through the public API.
+        // BUT: we can create a plaintext from known values, extract its NTT coefficients,
+        // and compare with what Go's NTT produces.
+        //
+        // Even simpler: use the context's NTT roots to check.
+        // The context already generated roots. We can access them.
+
+        // Print the NTT roots that HEonGPU selected (same as what InitContext returns)
+        std::vector<Modulus64> prime_vector;
+        for (auto qi : q) prime_vector.push_back(Modulus64(qi));
+        for (auto pi : p) prime_vector.push_back(Modulus64(pi));
+
+        std::vector<uint64_t> psi_values =
+            generate_primitive_root_of_unity(N, prime_vector);
+
+        std::cout << "HEonGPU's psi values (primitive 2N-th roots):\n";
+        for (int i = 0; i < (int)psi_values.size(); i++) {
+            std::cout << "  Prime " << i << ": psi=" << psi_values[i] << "\n";
+        }
+
+        // Now: encode a simple vector, get the raw NTT coefficients, print them
+        // This is what Go needs to match when converting a plaintext.
+        std::vector<double> simple(slot_count, 0.0);
+        simple[0] = 1.0;  // Just slot 0 = 1, rest = 0
+        Plaintext<S> pt_simple(ctx);
+        encoder.encode(pt_simple, simple, scale);
+
+        pt_simple.store_in_host();
+        std::vector<uint64_t> pt_raw;
+        pt_simple.get_data(pt_raw);
+
+        // Get the raw data for level 0 only
+        std::cout << "\nPlaintext with slot[0]=1.0, encoded by HEonGPU:\n"
+                  << "  Total coeffs: " << pt_raw.size() << "\n"
+                  << "  Level 0, first 10 coeffs:\n    ";
+        for (int i = 0; i < 10; i++) {
+            std::cout << pt_raw[i] << " ";
+        }
+        std::cout << "\n  Level 0, last 5 coeffs:\n    ";
+        for (int i = N-5; i < N; i++) {
+            std::cout << pt_raw[i] << " ";
+        }
+        std::cout << "\n";
+
+        // Also check: encrypt the simple vector and get ct raw data
+        Plaintext<S> pt_enc_input(ctx);
+        encoder.encode(pt_enc_input, simple, scale);
+        Ciphertext<S> ct_simple(ctx);
+        encryptor.encrypt(ct_simple, pt_enc_input);
+
+        ct_simple.store_in_host();
+        std::vector<uint64_t> ct_raw_simple;
+        ct_simple.get_data(ct_raw_simple);
+
+        std::cout << "\nCiphertext with slot[0]=1.0 (poly 0, level 0 first 10):\n    ";
+        for (int i = 0; i < 10; i++) {
+            std::cout << ct_raw_simple[i] << " ";
+        }
+        std::cout << "\n";
+    }
+
+    // ============================================================
+    print_separator("TEST 8: Direct NTT Comparison — Known Input");
+    // ============================================================
+    {
+        // Create a simple coefficient vector [1, 2, 3, ..., 16]
+        // Apply HEonGPU's native encoding+NTT and print output.
+        // Go test will compute the same and compare.
+        //
+        // To get a clean NTT comparison, we can abuse the plaintext:
+        // 1. Encode zeros as plaintext → get NTT(zeros) = all zeros
+        // 2. Write known coefficients to the plaintext (bypassing NTT)
+        // 3. This gives us raw coefficients in "coefficient domain"
+        // 4. Then encode will NTT them for us
+        //
+        // But we can't bypass NTT easily. Instead, let's use multiply_const_plain:
+        // encode(1.0) gives us NTT(1.0_encoded). Not useful for comparison.
+        //
+        // Best approach: just print the raw root table values so Go can compare.
+        std::vector<Modulus64> primes_all;
+        for (auto qi : q) primes_all.push_back(Modulus64(qi));
+        for (auto pi : p) primes_all.push_back(Modulus64(pi));
+
+        auto psi_all = generate_primitive_root_of_unity(N, primes_all);
+
+        // For prime 0, compute what the root table should be
+        uint64_t psi0 = psi_all[0];
+        uint64_t p0 = q[0];
+
+        // Compute psi^0, psi^1, ..., psi^15 for comparison with Go
+        std::cout << "First 16 powers of psi for Q[0] (p=" << p0 << ", psi=" << psi0 << "):\n";
+        uint64_t power = 1;
+        for (int j = 0; j < 16; j++) {
+            std::cout << "  psi^" << j << " = " << power << "\n";
+            // Compute power = power * psi0 mod p0
+            __uint128_t tmp = (__uint128_t)power * psi0;
+            power = (uint64_t)(tmp % p0);
+        }
+
+            // CRITICAL TEST: Apply HEonGPU's NTT to [0, 1, 0, ..., 0] and print output.
+        // For standard-order output: NTT([0,1,0,...0])[k] = psi^k
+        // For bit-reversed output:   NTT([0,1,0,...0])[k] = psi^bitrev(k)
+        // Go will print its output for the same input — compare to detect ordering.
+
+        std::vector<double> unit_at_1(slot_count, 0.0);
+        unit_at_1[1] = 1.0;  // Slot 1 = 1, rest = 0
+        Plaintext<S> pt_unit1(ctx);
+        encoder.encode(pt_unit1, unit_at_1, scale);
+
+        pt_unit1.store_in_host();
+        std::vector<uint64_t> unit1_raw;
+        pt_unit1.get_data(unit1_raw);
+
+        // Also do same with slot 0 = 1
+        std::vector<double> unit_at_0(slot_count, 0.0);
+        unit_at_0[0] = 1.0;
+        Plaintext<S> pt_unit0(ctx);
+        encoder.encode(pt_unit0, unit_at_0, scale);
+        pt_unit0.store_in_host();
+        std::vector<uint64_t> unit0_raw;
+        pt_unit0.get_data(unit0_raw);
+
+        std::cout << "\nHEonGPU NTT output (encoding slot[0]=1, level 0 first 8):\n    ";
+        for (int i = 0; i < 8; i++) std::cout << unit0_raw[i] << " ";
+        std::cout << "\nHEonGPU NTT output (encoding slot[1]=1, level 0 first 8):\n    ";
+        for (int i = 0; i < 8; i++) std::cout << unit1_raw[i] << " ";
+        std::cout << "\n";
+
+        std::cout << "\nGo should produce the SAME psi powers for the same prime.\n"
+                  << "If they match, the root table is correct.\n"
+                  << "If the GO NTT still gives different output, the butterfly loop differs.\n";
+    }
+
     std::cout << "\n========================================\n"
               << "  DIAGNOSTIC COMPLETE\n"
               << "========================================\n";

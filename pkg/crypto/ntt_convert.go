@@ -126,7 +126,7 @@ func (c *NTTConverter) ConvertToCoeffDomain(coeffs []uint64, modulusIdx int) {
 
 // ConvertToHEonGPUDomain converts coefficients from Lattigo's NTT domain
 // to HEonGPU's NTT domain. This is the full conversion:
-// Lattigo INTT → standard coefficient domain → HEonGPU NTT
+// Lattigo INTT → standard coefficient domain → HEonGPU NTT → bit-reverse
 //
 // IMPORTANT: Lattigo stores data in Montgomery form (IsMontgomery=true).
 // After INTT, coefficients are still Montgomery-scaled (coeff * R mod Q).
@@ -134,37 +134,55 @@ func (c *NTTConverter) ConvertToCoeffDomain(coeffs []uint64, modulusIdx int) {
 // which expects standard (non-Montgomery) coefficients.
 //
 // The HEonGPU NTT is done entirely in Go using the server-provided psi values.
-// This is verified to produce byte-identical output to HEonGPU's GPU NTT.
+// Our CT DIT NTT produces bit-reversed output, but HEonGPU stores data in
+// natural order, so we apply a bit-reverse permutation after the NTT.
 func (c *NTTConverter) ConvertToHEonGPUDomain(coeffs []uint64, modulusIdx int) {
 	// Step 1: Lattigo INTT → Montgomery-form coefficient domain
 	c.ConvertToCoeffDomain(coeffs, modulusIdx)
 
 	// Step 2: Remove Montgomery factor
-	// coeff_real = coeff_mont * R^{-1} mod Q
 	p := c.allModuli[modulusIdx]
 	pBig := new(big.Int).SetUint64(p)
-	R := new(big.Int).Lsh(big.NewInt(1), 64)       // R = 2^64
-	R.Mod(R, pBig)                                   // R mod Q
-	RInv := new(big.Int).ModInverse(R, pBig)         // R^{-1} mod Q
+	R := new(big.Int).Lsh(big.NewInt(1), 64)
+	R.Mod(R, pBig)
+	RInv := new(big.Int).ModInverse(R, pBig)
 	rInv := RInv.Uint64()
 
 	for i := range coeffs {
 		coeffs[i] = mulModBig(coeffs[i], rInv, p, pBig)
 	}
 
-	// Step 3: HEonGPU NTT → HEonGPU NTT domain (standard, non-Montgomery)
+	// Step 3: HEonGPU NTT (CT DIT → bit-reversed output)
 	c.nttCooleyTukeyInPlace(coeffs, p, c.heongpuNTTRoots[modulusIdx])
+
+	// Step 4: Bit-reverse permutation → natural order (HEonGPU's format)
+	bitReversePermute(coeffs, c.logN)
 }
 
-// ConvertToHEonGPUDomainNonMontgomery converts NON-Montgomery NTT coefficients
-// (like Galois key data which is already non-Montgomery in the GadgetCiphertext).
+// ConvertToHEonGPUDomainNonMontgomery converts NON-Montgomery NTT coefficients.
+// Used for ciphertexts (IsMontgomery=false) and plaintexts.
 func (c *NTTConverter) ConvertToHEonGPUDomainNonMontgomery(coeffs []uint64, modulusIdx int) {
-	// Step 1: Lattigo INTT → coefficient domain (INTT handles Montgomery roots internally)
+	// Step 1: Lattigo INTT → coefficient domain
 	c.ConvertToCoeffDomain(coeffs, modulusIdx)
 
-	// Step 2: HEonGPU NTT (no Montgomery removal needed)
+	// Step 2: HEonGPU NTT (CT DIT → bit-reversed output)
 	p := c.allModuli[modulusIdx]
 	c.nttCooleyTukeyInPlace(coeffs, p, c.heongpuNTTRoots[modulusIdx])
+
+	// Step 3: Bit-reverse permutation → natural order (HEonGPU's format)
+	bitReversePermute(coeffs, c.logN)
+}
+
+// bitReversePermute applies an in-place bit-reverse permutation.
+// Converts CT DIT NTT output (bit-reversed order) to natural order.
+func bitReversePermute(data []uint64, logN int) {
+	N := len(data)
+	for i := 0; i < N; i++ {
+		j := bitReverse(i, logN)
+		if i < j {
+			data[i], data[j] = data[j], data[i]
+		}
+	}
 }
 
 // nttCooleyTukeyInPlace applies Cooley-Tukey NTT in-place using standard arithmetic.

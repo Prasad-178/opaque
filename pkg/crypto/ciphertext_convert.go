@@ -149,16 +149,20 @@ func CiphertextFromHEonGPU(raw *pb.RawCiphertext, params hefloat.Parameters, con
 // to Lattigo's non-Montgomery NTT domain. This is the REVERSE of ConvertToHEonGPUDomainNonMontgomery.
 //
 // Steps:
-// 1. HEonGPU INTT → standard coefficients
-// 2. Lattigo NTT → Lattigo NTT domain (non-Montgomery)
+// 1. Bit-reverse permutation (HEonGPU natural order → bit-reversed for our INTT)
+// 2. HEonGPU INTT → standard coefficients
+// 3. Lattigo NTT → Lattigo NTT domain (non-Montgomery)
 func convertFromHEonGPUDomainNonMontgomery(coeffs []uint64, modulusIdx int, params hefloat.Parameters, conv *NTTConverter) {
 	N := conv.N
 	p := conv.allModuli[modulusIdx]
 
-	// Step 1: HEonGPU INTT → standard coefficients
+	// Step 1: Bit-reverse (HEonGPU natural order → bit-reversed for our GS INTT)
+	bitReversePermute(coeffs, conv.logN)
+
+	// Step 2: HEonGPU INTT → standard coefficients
 	inttHEonGPU(coeffs, N, p, conv.heongpuNTTRoots[modulusIdx])
 
-	// Step 2: Lattigo NTT (non-Montgomery) → Lattigo NTT domain
+	// Step 3: Lattigo NTT → Lattigo NTT domain
 	var subRing *ring.SubRing
 	if modulusIdx <= params.MaxLevelQ() {
 		subRing = params.RingQ().SubRings[modulusIdx]
