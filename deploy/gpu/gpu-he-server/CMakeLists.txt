@@ -61,6 +61,7 @@ target_include_directories(gpu-he-server PRIVATE
     ${PROTO_OUT}
     ${HEONGPU_DIR}/src/include
     ${HEONGPU_DIR}/thirdparty/GPU-NTT/src/include
+    ${HEONGPU_DIR}/thirdparty/GPU-FFT/src/include
     ${HEONGPU_DIR}/thirdparty/RNGonGPU/src/include
     ${HEONGPU_BUILD_DIR}/_deps/gpu-ntt-src/src/include
     ${HEONGPU_BUILD_DIR}/_deps/rmm-src/include
@@ -69,6 +70,11 @@ target_include_directories(gpu-he-server PRIVATE
     ${HEONGPU_BUILD_DIR}/_deps/spdlog-src/include
     ${HEONGPU_BUILD_DIR}/_deps/rapids_logger-src/include
     ${HEONGPU_BUILD_DIR}/_deps/nvtx3-src/c/include
+)
+
+# RMM requires this define
+target_compile_definitions(gpu-he-server PRIVATE
+    LIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE
 )
 
 # Add pkg-config include dirs if using pkg-config
