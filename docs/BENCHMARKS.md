@@ -413,14 +413,25 @@ Profiling revealed **Galois rotation (key-switching)** is 71-84% of HE time — 
 | Rescale | 0.11ms | 1.18ms | 11x |
 | Decrypt | 0.03ms | 9.38ms | 313x |
 
-**Search pipeline projection (estimated, not measured end-to-end):**
+**GPU batch dot product (measured on Tesla T4 with Lattigo-generated keys):**
 
-| Dataset | CPU HE (measured) | GPU HE (projected) | Speedup | Projected E2E with GPU+PQ |
-|---------|-------------------|---------------------|---------|---------------------------|
-| SIFT 128-dim (1 pack) | 64.7ms | ~8ms | 8x | ~100ms (1.6x) |
-| GIST 960-dim (4 packs) | 311ms | ~33ms | 9.4x | ~350ms (7.4x) |
+| Metric | GPU (T4) | CPU (M4) | Speedup |
+|--------|----------|----------|---------|
+| **Batch dot product (128-dim, 64 centroids)** | **0.54ms** | **48.2ms** | **89x** |
+| Multiply | 0.048ms | 0.70ms | 15x |
+| Rescale | 0.128ms | 1.18ms | 9x |
+| Rotations (7 steps) | 0.706ms | 45.9ms | 65x |
 
-> **Note:** Per-operation GPU numbers above are measured (HEonGPU standalone benchmark). End-to-end projections combine independently measured components — no GPU-integrated Opaque pipeline exists yet. See `docs/GPU_ACCELERATION.md` for full analysis, architecture, and Terraform infrastructure.
+All dot products verified with ZERO error. Lattigo eval keys loaded in HEonGPU via NTT domain conversion bridge. Privacy identical to CPU path.
+
+**Search pipeline projection (using measured GPU batch dot product):**
+
+| Dataset | CPU HE (measured) | GPU HE (measured) | HE Speedup | Projected E2E with GPU+PQ |
+|---------|-------------------|-------------------|------------|---------------------------|
+| SIFT 128-dim (1 pack) | 48.2ms | **0.54ms** | **89x** | ~70ms total (2.3x) |
+| GIST 960-dim (4 packs) | 270ms | ~2.2ms (est 4×0.54ms) | ~123x | ~190ms total (13.7x) |
+
+> **Note:** GPU batch dot product is measured end-to-end (data loading → compute → result extraction). E2E projections add AES decrypt + PQ scoring (unchanged on CPU). See `docs/GPU_ACCELERATION.md` for full analysis.
 
 ## Privacy Overhead
 

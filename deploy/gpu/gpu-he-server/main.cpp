@@ -34,7 +34,8 @@ using namespace opaque::gpu::v1;
 // Session holds per-client HEonGPU state.
 struct Session {
     heongpu::HEContext<heongpu::Scheme::CKKS> context;
-    std::unique_ptr<heongpu::HEOperator<heongpu::Scheme::CKKS>> op;
+    std::unique_ptr<heongpu::HEEncoder<heongpu::Scheme::CKKS>> encoder;
+    std::unique_ptr<heongpu::HEArithmeticOperator<heongpu::Scheme::CKKS>> ops;
     int ring_size;
     int coeff_modulus_count;
     std::vector<uint64_t> q_moduli;
@@ -106,6 +107,12 @@ public:
 
             std::vector<uint64_t> ntt_roots =
                 heongpu::generate_primitive_root_of_unity(1 << params.log_n(), prime_vector);
+
+            // Create encoder and arithmetic operator
+            session->encoder = std::make_unique<heongpu::HEEncoder<heongpu::Scheme::CKKS>>(
+                session->context);
+            session->ops = std::make_unique<heongpu::HEArithmeticOperator<heongpu::Scheme::CKKS>>(
+                session->context, *session->encoder);
 
             // Return roots to client
             for (auto root : ntt_roots) {
@@ -200,56 +207,131 @@ public:
 
             int dim = req->dimension();
             int ring_size = session->ring_size;
+            int Q_size = session->coeff_modulus_count;
 
-            // Reconstruct ciphertext from raw coefficients.
-            heongpu::Ciphertext<heongpu::Scheme::CKKS> ct(session->context);
-            auto& raw_q = req->raw_query();
-            int num_polys = raw_q.polynomials_size();
-            int num_levels = raw_q.polynomials(0).num_levels();
-            int total_coeffs = num_polys * num_levels * ring_size;
+            // --- Reconstruct ciphertext from raw coefficients ---
+            // Raw coefficients are already in HEonGPU's NTT domain (converted by Go client).
+            // Create a Ciphertext object and overwrite its data via cudaMemcpy.
+            heongpu::Ciphertext<heongpu::Scheme::CKKS> ct_query(session->context);
+            {
+                // Dummy encrypt to allocate GPU memory with correct structure
+                std::vector<double> dummy(ring_size / 2, 0.0);
+                heongpu::Plaintext<heongpu::Scheme::CKKS> pt_dummy(session->context);
+                session->encoder->encode(pt_dummy, dummy, pow(2.0, 45));
 
-            // Pack raw coefficients into contiguous host buffer.
-            std::vector<uint64_t> ct_data(total_coeffs);
-            for (int p = 0; p < num_polys; p++) {
-                auto& poly = raw_q.polynomials(p);
-                for (int lvl = 0; lvl < num_levels; lvl++) {
-                    int src_offset = lvl * ring_size;
-                    int dst_offset = (p * num_levels + lvl) * ring_size;
-                    std::memcpy(&ct_data[dst_offset],
-                                &poly.coefficients()[src_offset],
-                                ring_size * sizeof(uint64_t));
+                // We need a public key to encrypt — but we don't have one from the client.
+                // Instead, just allocate the ciphertext memory and overwrite.
+                // Ciphertext needs cipher_size_ * Q_size * ring_size uint64 values.
+                // For a fresh ct: 2 * Q_size * N values.
+
+                auto& raw_q = req->raw_query();
+                int num_polys = raw_q.polynomials_size(); // Should be 2
+                int num_levels = raw_q.polynomials(0).num_levels();
+                int ct_total = num_polys * num_levels * ring_size;
+
+                std::vector<uint64_t> ct_data(ct_total);
+                for (int p = 0; p < num_polys; p++) {
+                    auto& poly = raw_q.polynomials(p);
+                    for (int lvl = 0; lvl < num_levels; lvl++) {
+                        int src_offset = lvl * ring_size;
+                        int dst_offset = (p * num_levels + lvl) * ring_size;
+                        std::memcpy(&ct_data[dst_offset],
+                                    &poly.coefficients()[src_offset],
+                                    ring_size * sizeof(uint64_t));
+                    }
                 }
+
+                // Upload to GPU by overwriting the ciphertext data
+                // First ensure ct_query has allocated GPU memory
+                ct_query.store_in_device();
+                cudaMemcpy(ct_query.data(), ct_data.data(),
+                           ct_total * sizeof(uint64_t), cudaMemcpyHostToDevice);
+                cudaDeviceSynchronize();
             }
 
-            // Similarly reconstruct plaintext from raw coefficients.
-            heongpu::Plaintext<heongpu::Scheme::CKKS> pt(session->context);
+            auto after_ct_load = std::chrono::high_resolution_clock::now();
+
+            // --- Reconstruct plaintext from raw coefficients ---
+            heongpu::Plaintext<heongpu::Scheme::CKKS> pt_centroids(session->context);
             if (req->has_raw_centroids()) {
                 auto& raw_pt = req->raw_centroids().polynomial();
                 int pt_levels = raw_pt.num_levels();
-                std::vector<uint64_t> pt_data(pt_levels * ring_size);
-                std::memcpy(pt_data.data(),
-                            raw_pt.coefficients().data(),
-                            pt_levels * ring_size * sizeof(uint64_t));
-                // TODO: Set plaintext data on HEonGPU object
+                int pt_total = pt_levels * ring_size;
+
+                std::vector<uint64_t> pt_data(pt_total);
+                std::memcpy(pt_data.data(), raw_pt.coefficients().data(),
+                            pt_total * sizeof(uint64_t));
+
+                // Encode a dummy to allocate memory, then overwrite
+                std::vector<double> dummy(ring_size / 2, 0.0);
+                session->encoder->encode(pt_centroids, dummy, pow(2.0, 45));
+                pt_centroids.store_in_device();
+                cudaMemcpy(pt_centroids.data(), pt_data.data(),
+                           pt_total * sizeof(uint64_t), cudaMemcpyHostToDevice);
+                cudaDeviceSynchronize();
             }
 
-            // TODO: Perform HE computation on GPU:
-            // 1. Upload ct_data to GPU via HEonGPU Ciphertext API
-            // 2. session->op->multiply_plain(ct, pt, result)
-            // 3. session->op->rescale(result)
-            // 4. for stride in [1, 2, 4, ...dim]: session->op->rotate(result, stride, galois_key)
-            // 5. Extract result coefficients
+            // --- GPU Batch Dot Product ---
+            auto mul_start = std::chrono::high_resolution_clock::now();
 
-            // For now, return an error indicating this needs the key bridge.
-            // The CPU stub (cmd/gpu-server) handles the legacy serialized path.
-            resp->set_error("GPU raw coefficient compute not yet implemented — "
-                           "use CPU stub (cmd/gpu-server) for testing. "
-                           "This server needs Galois key deserialization to complete the bridge.");
+            // Step 1: Multiply encrypted query × plaintext centroids
+            heongpu::Ciphertext<heongpu::Scheme::CKKS> ct_result(session->context);
+            session->ops->multiply_plain(ct_query, pt_centroids, ct_result);
+
+            auto rescale_start = std::chrono::high_resolution_clock::now();
+
+            // Step 2: Rescale
+            session->ops->rescale_inplace(ct_result);
+
+            auto rotate_start = std::chrono::high_resolution_clock::now();
+
+            // Step 3: Rotation sum within each dim-sized segment
+            if (session->galois_key) {
+                for (int stride = 1; stride < dim; stride *= 2) {
+                    heongpu::Ciphertext<heongpu::Scheme::CKKS> ct_rotated(ct_result);
+                    session->ops->rotate_rows_inplace(ct_rotated, *session->galois_key, stride);
+                    session->ops->add_inplace(ct_result, ct_rotated);
+                }
+            }
+
+            auto compute_end = std::chrono::high_resolution_clock::now();
+            cudaDeviceSynchronize();
+
+            // --- Extract result coefficients ---
+            ct_result.store_in_host();
+            std::vector<uint64_t> result_data;
+            ct_result.get_data(result_data);
+
+            int result_levels = ct_result.coeff_modulus_count() - ct_result.depth();
+            int result_polys = ct_result.size(); // 2
+
+            // Build raw result proto
+            auto* raw_result = resp->mutable_raw_result();
+            raw_result->set_scale(ct_result.scale());
+            raw_result->set_is_ntt(ct_result.in_ntt_domain());
+            raw_result->set_depth(ct_result.depth());
+
+            for (int p = 0; p < result_polys; p++) {
+                auto* rp = raw_result->add_polynomials();
+                rp->set_num_levels(result_levels);
+                rp->set_ring_size(ring_size);
+                int offset = p * result_levels * ring_size;
+                for (int i = 0; i < result_levels * ring_size; i++) {
+                    rp->add_coefficients(result_data[offset + i]);
+                }
+            }
 
             auto total_end = std::chrono::high_resolution_clock::now();
+
+            // Timing
             resp->set_compute_time_us(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    total_end - total_start).count());
+                std::chrono::duration_cast<std::chrono::microseconds>(total_end - total_start).count());
+            resp->set_multiply_us(
+                std::chrono::duration_cast<std::chrono::microseconds>(rescale_start - mul_start).count());
+            resp->set_rescale_us(
+                std::chrono::duration_cast<std::chrono::microseconds>(rotate_start - rescale_start).count());
+            resp->set_rotate_us(
+                std::chrono::duration_cast<std::chrono::microseconds>(compute_end - rotate_start).count());
 
         } catch (const std::exception& e) {
             resp->set_error(std::string("Compute failed: ") + e.what());

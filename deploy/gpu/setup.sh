@@ -75,6 +75,25 @@ mkdir -p build && cd build
 cmake .. -DCMAKE_CUDA_ARCHITECTURES=75 2>/dev/null || echo "HEonGPU cmake failed (non-blocking)"
 make -j$(nproc) 2>/dev/null || echo "HEonGPU build failed (non-blocking)"
 
+# --- Build GPU HE server examples (batch_dot_product, bridge tests) ---
+echo "Building GPU HE server examples..."
+cd /home/ubuntu/HEonGPU
+# Copy test programs from opaque repo
+for f in batch_dot_product.cpp bridge_final.cpp bridge_matching_keys.cpp; do
+  if [ -f /home/ubuntu/opaque/deploy/gpu/gpu-he-server/$f ]; then
+    cp /home/ubuntu/opaque/deploy/gpu/gpu-he-server/$f example/basic/
+    name=$(basename $f .cpp)
+    if ! grep -q "$name" example/basic/CMakeLists.txt 2>/dev/null; then
+      echo "add_executable($name $f)
+target_link_libraries($name PRIVATE heongpu)
+set_target_properties($name PROPERTIES CUDA_ARCHITECTURES 75)" >> example/basic/CMakeLists.txt
+    fi
+  fi
+done
+cd build
+cmake .. -DCMAKE_CUDA_ARCHITECTURES=75 -DHEonGPU_BUILD_EXAMPLES=ON 2>/dev/null || true
+make -j$(nproc) 2>/dev/null || echo "Example build failed (non-blocking)"
+
 # --- Fix permissions ---
 chown -R ubuntu:ubuntu /home/ubuntu/opaque /home/ubuntu/GPU-NTT /home/ubuntu/HEonGPU 2>/dev/null || true
 chown -R ubuntu:ubuntu /home/ubuntu/go 2>/dev/null || true
