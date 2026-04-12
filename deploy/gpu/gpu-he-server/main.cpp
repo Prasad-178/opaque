@@ -23,7 +23,7 @@
 #include "gpuhe.grpc.pb.h"
 
 // HEonGPU headers
-#include <heongpu/heongpu.cuh>
+#include <heongpu/heongpu.hpp>
 
 using grpc::Server;
 using grpc::ServerBuilder;
