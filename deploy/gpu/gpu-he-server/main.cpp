@@ -242,11 +242,14 @@ public:
                 }
 
                 // Upload to GPU by overwriting the ciphertext data
-                // First ensure ct_query has allocated GPU memory
                 ct_query.store_in_device();
                 cudaMemcpy(ct_query.data(), ct_data.data(),
                            ct_total * sizeof(uint64_t), cudaMemcpyHostToDevice);
                 cudaDeviceSynchronize();
+
+                // Set metadata that the default constructor left at 0
+                ct_query.set_scale(req->raw_query().scale());
+                ct_query.set_depth(0); // Fresh ciphertext from client
             }
 
             auto after_ct_load = std::chrono::high_resolution_clock::now();

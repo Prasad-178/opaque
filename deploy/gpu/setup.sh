@@ -73,6 +73,22 @@ fi
 
 echo "Building HEonGPU..."
 cd HEonGPU
+
+# Patch: add public setters for cross-library ciphertext reconstruction
+python3 -c "
+with open('src/include/heongpu/host/ckks/ciphertext.cuh', 'r') as f:
+    c = f.read()
+marker = 'inline double scale() const noexcept { return scale_; }'
+if 'set_scale' not in c:
+    patch = marker + '\\n\\n        // Public setters for cross-library ciphertext reconstruction\\n        inline void set_scale(double s) noexcept { scale_ = s; }\\n        inline void set_depth(int d) noexcept { depth_ = d; }'
+    c = c.replace(marker, patch, 1)
+    with open('src/include/heongpu/host/ckks/ciphertext.cuh', 'w') as f:
+        f.write(c)
+    print('HEonGPU patched with set_scale/set_depth')
+else:
+    print('HEonGPU already patched')
+" || echo "HEonGPU patch failed (non-blocking)"
+
 mkdir -p build && cd build
 cmake .. -DCMAKE_CUDA_ARCHITECTURES=75 2>/dev/null || echo "HEonGPU cmake failed (non-blocking)"
 make -j$(nproc) 2>/dev/null || echo "HEonGPU build failed (non-blocking)"
