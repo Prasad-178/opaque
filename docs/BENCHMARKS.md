@@ -429,9 +429,31 @@ All dot products verified with ZERO error. Lattigo eval keys loaded in HEonGPU v
 | Dataset | CPU HE (measured) | GPU HE (measured) | HE Speedup | Projected E2E with GPU+PQ |
 |---------|-------------------|-------------------|------------|---------------------------|
 | SIFT 128-dim (1 pack) | 48.2ms | **0.54ms** | **89x** | ~70ms total (2.3x) |
-| GIST 960-dim (4 packs) | 270ms | ~2.2ms (est 4×0.54ms) | ~123x | ~190ms total (13.7x) |
+| GIST 960-dim (4 packs) | 270ms | ~2.2ms (est 4x0.54ms) | ~123x | ~190ms total (13.7x) |
 
-> **Note:** GPU batch dot product is measured end-to-end (data loading → compute → result extraction). E2E projections add AES decrypt + PQ scoring (unchanged on CPU). See `docs/GPU_ACCELERATION.md` for full analysis.
+> **Note:** GPU batch dot product is measured end-to-end (data loading -> compute -> result extraction). E2E projections add AES decrypt + PQ scoring (unchanged on CPU). See `docs/GPU_ACCELERATION.md` for full analysis.
+
+### End-to-End GPU Search Results (SIFT 100K, Tesla T4)
+
+Full Opaque search pipeline running through the GPU gRPC bridge on AWS g4dn.xlarge (Tesla T4, 4 vCPUs). The GPU path uses the coefficient-domain approach (Lattigo encrypts, sends raw coefficients via gRPC, HEonGPU applies NTT and computes on GPU, results sent back to Lattigo for decryption).
+
+> **WARNING: GPU recall is broken.** The NTT domain conversion between Lattigo and HEonGPU produces incorrect computation results, causing recall to drop to ~14%. The latency numbers are accurate but the search results are not usable. See `GPU_ACCELERATION.md` for full analysis.
+
+**CPU baseline (Lattigo, g4dn.xlarge 4 vCPUs):**
+
+| Config | Recall@1 | Recall@10 | Avg Latency |
+|--------|----------|-----------|-------------|
+| cpu-strict8 | 100% | 98.3% | 244ms |
+| cpu-probe16 | 100% | 100% | 260ms |
+
+**GPU path (coefficient-domain, recall broken):**
+
+| Config | Recall@1 | Recall@10 | Avg Latency | Latency Speedup |
+|--------|----------|-----------|-------------|-----------------|
+| gpu-strict8 | 13.3% | 14.3% | 144ms | **1.7x** |
+| gpu-probe16 | 26.7% | 24.7% | 176ms | **1.5x** |
+
+**Interpretation:** The GPU path achieves meaningful latency improvement (1.5-1.7x), confirming that the HEonGPU operations themselves are fast. However, the computation results are incorrect, causing recall to be approximately random. The 5 bugs listed in `GPU_ACCELERATION.md` were all found and fixed during this effort; one remaining NTT normalization issue prevents correct results.
 
 ## Privacy Overhead
 

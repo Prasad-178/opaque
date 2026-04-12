@@ -2,9 +2,80 @@
 
 ## Executive Summary
 
-Profiling reveals that **Galois rotation (key-switching)** — not NTT — is the dominant bottleneck in HE operations, consuming 71-84% of total HE time. GPU acceleration of key-switching could yield **3.2-5.1x speedup** on HE operations, with the impact scaling with vector dimensionality.
+We attempted to GPU-accelerate CKKS homomorphic encryption for privacy-preserving vector search by bridging Lattigo (Go, CPU) with HEonGPU (C++/CUDA, GPU) via gRPC. The effort produced valuable infrastructure and identified 5 critical bugs, but **the end-to-end recall is broken** due to an unresolved NTT domain conversion issue between the two libraries.
 
-**Critical finding:** At 960-dim (GIST), HE takes 311ms per query (86.8% is batch computation). GPU could reduce this to ~61ms. At 128-dim (SIFT), HE takes 65ms (74.4% is batch computation). GPU could reduce this to ~20ms.
+**Bottom line:** GPU path achieves **1.7x latency improvement** (144ms vs 244ms on SIFT 100K) but recall drops from 100% to ~14%, making it unusable for production. The recommended path forward is either CPU scale-out (simple, 1-2 weeks) or OpenFHE + FIDESlib (eliminates the bridge problem entirely, 4-6 weeks).
+
+### Status at a Glance
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Profiling (bottleneck identification) | DONE | Galois rotation = 71-84% of HE time |
+| HEonGPU per-operation benchmarks | DONE | 8-313x faster per op on Tesla T4 |
+| Eval key bridge (format + NTT conversion) | DONE | Verified correct: rotation [10,20,30,40] -> [20,30,40,0] |
+| GPU batch dot product (isolated) | DONE | 0.54ms vs 48ms CPU = 89x speedup, ZERO error |
+| End-to-end pipeline (SIFT 100K) | DONE | 1.7x faster but recall broken (~14%) |
+| NTT domain conversion debugging | BLOCKED | Go round-trip perfect, GPU computation wrong |
+
+## End-to-End GPU Benchmark Results (SIFT 100K, Tesla T4)
+
+These are measured end-to-end results on AWS g4dn.xlarge (Tesla T4, 4 vCPUs) running the full Opaque search pipeline through the GPU gRPC bridge.
+
+### CPU Baseline (Lattigo, g4dn.xlarge 4 vCPUs)
+
+| Config | Recall@1 | Recall@10 | Avg Latency |
+|--------|----------|-----------|-------------|
+| cpu-strict8 | 100% | 98.3% | 244ms |
+| cpu-probe16 | 100% | 100% | 260ms |
+
+### GPU Path (coefficient-domain approach, latest)
+
+| Config | Recall@1 | Recall@10 | Avg Latency | Speedup |
+|--------|----------|-----------|-------------|---------|
+| gpu-strict8 | 13.3% | 14.3% | 144ms | **1.7x** |
+| gpu-probe16 | 26.7% | 24.7% | 176ms | **1.5x** |
+
+**Key finding:** The GPU path is 1.5-1.7x faster for latency, but recall is broken (13-27% vs 98-100%). The recall degradation is caused by NTT domain conversion issues between Lattigo and HEonGPU that corrupt ciphertext computation results on the GPU side.
+
+## Bugs Found and Fixed
+
+Over the course of this effort, we found and fixed 5 distinct bugs in the Lattigo-to-HEonGPU bridge. Each one was a subtle interop issue that produced silently wrong results.
+
+| # | Bug | Symptom | Root Cause | Fix |
+|---|-----|---------|------------|-----|
+| 1 | Montgomery removal on non-Montgomery data | Results off by factor of R=2^64 mod Q | Lattigo v5 ciphertexts have `IsMontgomery=false`. We were dividing by R when data was already in standard form. | Check `IsMontgomery` flag; only remove Montgomery when true |
+| 2 | Missing LogDimensions and IsBatched metadata | Decoder treats 8192-slot ciphertext as single value | Reconstructed ciphertexts had `Cols:0`, `IsBatched:false` | Set `LogDimensions={LogN-1, 1}` and `IsBatched=true` on reconstructed ciphertexts |
+| 3 | HEonGPU ciphertext `scale_=0` | `multiply_plain` computes `output.scale = 0 * pt_scale = 0` | HEonGPU default constructor sets `scale_=0`; after `cudaMemcpy`, scale remains zero | Explicitly set `scale_` after data loading |
+| 4 | Plaintext all zeros | GPU multiply produces zero output | Using `rlwe.NewPlaintext` (scale=0) instead of `hefloat.NewPlaintext` (sets scale from params) | Use `hefloat.NewPlaintext` which properly initializes scale |
+| 5 | Proto Depth field semantics mismatch | Fresh ciphertexts treated as nearly-exhausted | Go sends Lattigo `Level()` (7) as Depth, but HEonGPU expects `depth=0` for fresh ciphertext | Send `depth=0` for fresh ciphertexts; HEonGPU depth = max_level - lattigo_level |
+
+## Remaining Unsolved Issue: NTT Domain Conversion
+
+The NTT domain conversion between Lattigo and HEonGPU has an unresolved mismatch that causes recall to drop to ~14% in end-to-end search.
+
+### What works
+
+- **Go-side round-trip is PERFECT**: Lattigo coefficients -> INTT_Lattigo -> NTT_HEonGPU -> INTT_HEonGPU -> NTT_Lattigo produces zero error across all 8192 slots.
+- **HEonGPU native operations work**: `cudaMemcpy` bridge with HEonGPU-native data produces correct results.
+- **Eval key bridge works**: Rotation of `[10,20,30,40]` -> `[20,30,40,0]` verified correct on GPU.
+- **Isolated batch dot product works**: 0.54ms, ZERO error against expected values.
+
+### What doesn't work
+
+When Lattigo-converted ciphertext data goes through HEonGPU's `multiply_plain` + `rescale` + `rotate` pipeline in the full search path, results are incorrect. The recall drops to ~14%, which is approximately random performance.
+
+### What we tried
+
+| Approach | Result |
+|----------|--------|
+| Go NTT conversion (INTT_Lattigo -> NTT_HEonGPU) | Round-trip perfect in Go, but GPU produces wrong results |
+| Bit-reverse permutation | No effect (both libraries use same ordering) |
+| Coefficient-domain approach (skip Go NTT, let GPU apply HEonGPU's NTT) | GPU is faster (1.7x) but recall still ~14% |
+| Native plaintext encoding (send float64 values, HEonGPU encodes) | Works for plaintexts but doesn't fix ciphertext issue |
+
+### Hypothesis
+
+There is likely a normalization factor difference between Lattigo's INTT output and HEonGPU's expected coefficient-domain format. Specifically, the N^{-1} factor that INTT applies may differ, or there may be a missing/extra scaling in one library's NTT convention.
 
 ## Profiling Results
 
@@ -133,11 +204,15 @@ For development on Apple Silicon without a CUDA GPU:
 - All dot products verified with ZERO error against expected values
 - C++ server BatchDotProduct handler fully implemented with cudaMemcpy data loading
 
-**Remaining:**
-- Full Opaque pipeline integration test (SIFT 100K end-to-end through GPU)
-- GPU memory usage and concurrent query throughput measurements
+**End-to-end pipeline: COMPLETED but recall broken**
+- Full SIFT 100K pipeline runs through GPU gRPC bridge
+- GPU is 1.7x faster for latency (144ms vs 244ms)
+- Recall drops from 100% to ~14% due to NTT domain conversion issue
+- See "End-to-End GPU Benchmark Results" and "Remaining Unsolved Issue" sections above
 
-### Projected End-to-End Impact
+### Projected End-to-End Impact (Pre-Integration Estimates)
+
+> **Note:** These projections were made before end-to-end integration. Actual measured results (see top of this document) show 1.7x latency improvement but with broken recall (~14%). The projections below assumed correct computation, which was not achieved.
 
 **SIFT 100K (128-dim, probe-16, current: ~160ms):**
 
@@ -172,6 +247,105 @@ PQ-M32 probe-8 is **measured** at 497ms on CPU (see BENCHMARKS.md). The breakdow
 | **Total** | **497ms (measured)** | **~307ms (projected)** | **1.6x** |
 
 **Key finding:** PQ alone already delivers the massive win (19.2x vs standard). GPU HE would provide an additional ~1.6x on top of PQ by reducing the HE scoring phase. The combined projection is ~307ms — but PQ at 497ms is already sub-second and may be sufficient without GPU complexity.
+
+## If Picking Up Again -- Start Here
+
+If someone (including future us) wants to resume the GPU acceleration work, here is the shortest path to progress.
+
+### 1. The coefficient-domain approach is closest to working
+
+The GPU is already 1.7x faster for latency. The only problem is recall. All infrastructure is built and working.
+
+### 2. Write a C++ diagnostic for NTT normalization
+
+Create a test in `deploy/gpu/gpu-he-server/` that:
+1. Takes `[1, 0, 0, ..., 0]` in coefficient domain
+2. Applies HEonGPU's forward NTT
+3. Applies HEonGPU's inverse NTT
+4. Checks if you get `[1, 0, 0, ..., 0]` back
+
+This verifies whether HEonGPU's NTT includes the N^{-1} normalization factor in INTT (standard convention) or distributes it differently.
+
+### 3. Compare Lattigo's INTT output with HEonGPU's expectations
+
+For a known NTT input (e.g., the NTT of `[1, 0, ..., 0]`):
+- Compute Lattigo's INTT output
+- Compute HEonGPU's INTT output
+- If they differ by a factor of N (or N^{-1} mod Q), that confirms the normalization mismatch
+
+### 4. Key files
+
+| File | Purpose |
+|------|---------|
+| `go/pkg/crypto/ntt_convert.go` | Go-side NTT domain conversion (Lattigo <-> HEonGPU) |
+| `go/pkg/crypto/ciphertext_convert.go` | Ciphertext format conversion for the gRPC bridge |
+| `deploy/gpu/gpu-he-server/main.cpp` | C++ GPU server (gRPC handlers, HEonGPU integration) |
+| `go/pkg/crypto/bridge_diagnostic_test.go` | Go diagnostic tests (12 tests, all pass) |
+| `deploy/gpu/gpu-he-server/bridge_diagnostic.cpp` | C++ diagnostic tests (all pass) |
+
+### 5. Key tests
+
+- **Go diagnostics**: `go test -v -run TestBridge ./pkg/crypto/` -- 12 tests covering NTT round-trip, Montgomery handling, coefficient ordering, metadata reconstruction. All pass.
+- **C++ diagnostics**: `bridge_diagnostic.cpp` -- verifies HEonGPU-side data loading, NTT operations, key reconstruction. All pass.
+- **End-to-end GPU**: requires running the GPU server on a CUDA instance and the Go client pointing at it via gRPC.
+
+## Future Alternatives
+
+### Option A: OpenFHE + FIDESlib (Recommended for GPU path)
+
+| Attribute | Value |
+|-----------|-------|
+| Feasibility | 6/10 |
+| Effort | 4-6 weeks |
+| Key advantage | Eliminates NTT bridge entirely |
+
+[FIDESlib](https://github.com/CAPS-UMU/FIDESlib) is a purpose-built GPU backend for OpenFHE with full CKKS support, achieving 70-228x speedup over CPU OpenFHE. Since both client and server would use OpenFHE's internal representation, there is no NTT domain conversion problem -- the exact issue that blocked our HEonGPU bridge.
+
+**What it requires:**
+- Rewrite the Go crypto layer (`pkg/crypto/`) to call OpenFHE via C bindings or a gRPC C++ service
+- Client-side encryption/decryption moves to C++/OpenFHE (could be wrapped as a Go library via cgo)
+- Server-side computation uses FIDESlib's GPU backend
+- Privacy model is identical: same client/server split, secret key stays on client
+
+**Why it solves our problem:** The NTT domain mismatch exists because Lattigo and HEonGPU are independent implementations with different NTT conventions. Using a single library (OpenFHE) on both sides eliminates this class of bug entirely.
+
+### Option B: CPU Scale-Out (Recommended for production)
+
+| Attribute | Value |
+|-----------|-------|
+| Feasibility | 9/10 |
+| Effort | 1-2 weeks |
+| Key advantage | No new code, just configuration |
+
+Deploy the existing Go/Lattigo gRPC server on a high-core-count instance (e.g., AWS c7i.48xlarge with 96 vCPUs). The gRPC server already supports parallel engine pools -- scaling to 96 cores gives ~10x throughput improvement with zero code changes.
+
+**Combined with PQ (19x on GIST)**, this may be sufficient for production:
+- GIST 960-dim: 497ms with PQ on current hardware, potentially ~50ms with 10x parallel throughput
+- SIFT 128-dim: 127ms with PQ-probe16, already fast enough for most use cases
+
+**Cost:** ~$3/hr spot for c7i.48xlarge. No GPU complexity, no format bridges, no CUDA dependencies.
+
+### Option C: Continue HEonGPU Bridge (If GPU latency is critical)
+
+| Attribute | Value |
+|-----------|-------|
+| Feasibility | 4/10 |
+| Effort | 1-3 weeks (if NTT issue is solved) |
+| Key advantage | Infrastructure already built |
+
+The coefficient-domain approach already achieves 1.7x latency improvement. One remaining normalization issue needs to be resolved. All diagnostic infrastructure exists (`bridge_diagnostic_test.go`, `bridge_diagnostic.cpp`), and the "If Picking Up Again" section above describes the exact next steps.
+
+**Risk:** The NTT normalization issue may be deeper than expected (e.g., HEonGPU may use a non-standard NTT convention internally that isn't exposed in its API).
+
+### Comparison
+
+| Criterion | OpenFHE + FIDESlib | CPU Scale-Out | Continue HEonGPU |
+|-----------|-------------------|---------------|-------------------|
+| Latency improvement | 70-228x on HE ops | ~10x throughput | 1.7x measured |
+| Recall risk | None (same library) | None (proven path) | High (unresolved bug) |
+| New code required | Significant (crypto rewrite) | None | Minimal |
+| Production readiness | Months | Days | Weeks (if bug fixed) |
+| Cost | GPU instance | High-CPU instance (~$3/hr) | GPU instance |
 
 ## Hardware Requirements
 
@@ -229,7 +403,7 @@ Benchmarked HEonGPU (CKKS) on AWS g4dn.xlarge (Tesla T4, 16GB VRAM, CUDA 12.9) a
 
 ### End-to-End Impact (Projected, Not Measured)
 
-> **Note:** The numbers below are projections based on combining independently measured components (Lattigo CPU profiling + HEonGPU GPU benchmarks + PQ synthetic benchmarks). No end-to-end GPU pipeline has been built yet — this requires Go ↔ HEonGPU integration. Actual results may differ due to data transfer overhead, memory layout differences, and parameter compatibility.
+> **Note:** The numbers below were projections made before end-to-end integration was completed. The end-to-end pipeline was subsequently built and tested (see "End-to-End GPU Benchmark Results" at the top). Actual results showed 1.7x latency improvement but with broken recall (~14%) due to NTT domain conversion issues. The per-operation speedups are real, but the full pipeline does not yet produce correct search results.
 
 | Dataset | Standard CPU | PQ CPU (measured) | GPU HE + PQ (projected) |
 |---------|-------------|-------------------|-------------------------|

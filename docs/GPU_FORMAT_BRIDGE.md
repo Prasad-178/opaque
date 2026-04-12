@@ -1,4 +1,12 @@
-# GPU Format Bridge: Lattigo ↔ HEonGPU Ciphertext Interop
+# GPU Format Bridge: Lattigo <-> HEonGPU Ciphertext Interop
+
+## Current Status (2026-04-12)
+
+**Bridge status: NTT conversion verified correct in Go (zero-error round-trip), but GPU computation still produces incorrect results in end-to-end search.**
+
+The coefficient-domain approach (sending coefficients without NTT conversion and letting HEonGPU apply its own NTT) is the current best path. It achieves 1.7x latency improvement but recall is ~14% (should be ~100%).
+
+See `GPU_ACCELERATION.md` for full end-to-end benchmark results and the "If Picking Up Again" guide.
 
 ## Problem
 
@@ -170,16 +178,41 @@ This is O(N log N) per polynomial, done once during key setup (~2 min for all 14
 
 | Component | Status |
 |-----------|--------|
-| File format header | ✅ Correct (scheme uint8, keyswitching uint8, storage uint8, d=0, group_order=5) |
-| File size | ✅ Matches HEonGPU native (283,115,733 bytes) |
-| Key loading | ✅ HEonGPU loads without crash |
-| NTT root analysis | ✅ Root cause identified (different ψ values) |
-| NTT root exchange | 🔲 Need proto update + server-side root extraction |
-| NTT domain conversion | 🔲 Need server's ψ values to apply correct conversion |
-| NTT table generation fix | ✅ Fixed: was using wrong formula, now uses simple `table[bitrev(j)] = psi^j` |
-| Montgomery removal | ✅ Fixed: Lattigo stores data in Montgomery form, must divide by R before HEonGPU NTT |
-| Rotation verification | ✅ **VERIFIED ON GPU** — `[10,20,30,40]` → rotate → `[20,30,40,0]` CORRECT |
-| End-to-end benchmark | 🔲 Next: full Opaque pipeline through GPU on SIFT 100K |
+| File format header | DONE -- Correct (scheme uint8, keyswitching uint8, storage uint8, d=0, group_order=5) |
+| File size | DONE -- Matches HEonGPU native (283,115,733 bytes) |
+| Key loading | DONE -- HEonGPU loads without crash |
+| NTT root analysis | DONE -- Root cause identified (different psi values per prime) |
+| NTT root exchange | DONE -- Server sends psi values to Go client during registration |
+| NTT domain conversion (Go) | DONE -- Go-side round-trip is zero-error across all 8192 slots |
+| NTT table generation fix | DONE -- Was using wrong formula, now uses simple `table[bitrev(j)] = psi^j` |
+| Montgomery removal | DONE -- Fixed: was dividing by R on non-Montgomery data (Lattigo v5 IsMontgomery=false) |
+| Rotation verification | DONE -- `[10,20,30,40]` -> rotate -> `[20,30,40,0]` correct on GPU |
+| Isolated batch dot product | DONE -- 0.54ms on T4, ZERO error against expected values |
+| End-to-end pipeline | DONE -- Runs, 1.7x faster, but recall broken (~14%) |
+| NTT normalization diagnosis | BLOCKED -- Suspected N^{-1} factor mismatch, not yet confirmed |
+
+### Bugs Found and Fixed During Bridge Development
+
+Five bugs were found and fixed during the bridge development. Each produced silently wrong results.
+
+1. **Montgomery removal on non-Montgomery data** -- Lattigo v5 ciphertexts/plaintexts have `IsMontgomery=false`. We were dividing by R=2^64 mod Q, corrupting the data. Fix: check the `IsMontgomery` flag.
+
+2. **Missing LogDimensions and IsBatched metadata** -- Reconstructed ciphertexts from GPU had `Cols:0` and `IsBatched:false`, causing Lattigo's decoder to treat 8192-slot data as a single scalar. Fix: set `LogDimensions={LogN-1, 1}` and `IsBatched=true`.
+
+3. **HEonGPU ciphertext scale_=0** -- HEonGPU's default constructor sets `scale_=0`. After `cudaMemcpy` data loading, `multiply_plain` computes `output.scale = 0 * pt_scale = 0`, producing a zero-scale result. Fix: explicitly set `scale_` after loading data.
+
+4. **Plaintext all zeros** -- Using `rlwe.NewPlaintext` (which sets scale=0) instead of `hefloat.NewPlaintext` (which initializes scale from params). The plaintext coefficients were all zero. Fix: use `hefloat.NewPlaintext`.
+
+5. **Proto Depth field semantics mismatch** -- Go sends Lattigo's `Level()` (7 for fresh ciphertext with 8 levels) as Depth, but HEonGPU expects `depth=0` for fresh ciphertexts (depth = number of levels consumed). Fix: send `depth=0` for fresh ciphertexts.
+
+### Approaches Tried for NTT Conversion
+
+| Approach | Description | Result |
+|----------|-------------|--------|
+| Go NTT conversion | INTT_Lattigo -> NTT_HEonGPU in Go | Round-trip perfect in Go; GPU produces wrong results |
+| Bit-reverse permutation | Apply bit-reversal to coefficients before transfer | No effect (both libraries use same ordering) |
+| Coefficient-domain | Skip Go-side NTT, send raw coefficients, let GPU apply its own NTT | **Current best**: 1.7x faster but recall still ~14% |
+| Native plaintext encoding | Send float64 values, let HEonGPU encode plaintexts | Works for plaintexts but doesn't address ciphertext issue |
 
 ### Bridge Verified (Tesla T4, AWS g4dn.xlarge)
 
@@ -198,11 +231,15 @@ The full conversion pipeline (done entirely in Go, no GPU-side NTT needed):
 
 Privacy: evaluation keys are public data. Secret key never leaves client in production.
 
-## Verification Plan
+## Verification Status
 
-Before building the full pipeline, verify format compatibility:
-1. Create a ciphertext in Lattigo with known values
-2. Extract raw coefficients
-3. Reconstruct in HEonGPU
-4. Decrypt in HEonGPU (using same secret key raw data)
-5. Compare plaintext — if it matches, the bridge works
+The original verification plan has been executed. Results:
+
+1. **Ciphertext creation in Lattigo with known values** -- DONE
+2. **Raw coefficient extraction** -- DONE
+3. **Reconstruction in HEonGPU** -- DONE (data loads correctly)
+4. **Simple operations (rotation)** -- VERIFIED CORRECT (`[10,20,30,40]` -> `[20,30,40,0]`)
+5. **Isolated batch dot product** -- VERIFIED CORRECT (0.54ms, zero error)
+6. **Full search pipeline** -- RUNS but recall broken (~14%)
+
+The bridge works for isolated operations but something breaks in the full multiply_plain + rescale + rotate pipeline used during search. The coefficient-domain approach (sending raw coefficients and letting HEonGPU apply its own NTT) is the current best path forward. See `GPU_ACCELERATION.md` for the detailed pickup guide.
