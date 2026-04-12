@@ -54,6 +54,7 @@ type GPUHEProvider struct {
 
 	// Track whether eval keys have been registered with the server.
 	keysRegistered bool
+	nttConverter   *NTTConverter // For ciphertext conversion (set after InitContext)
 	mu             sync.Mutex
 }
 
@@ -209,6 +210,9 @@ func (p *GPUHEProvider) RegisterEvalKeys() error {
 		return fmt.Errorf("RegisterEvalKeys failed: %s", resp.Error)
 	}
 
+	// Store the converter for ciphertext conversion during search
+	p.nttConverter = NewNTTConverterWithRoots(engine.params, serverRoots)
+
 	p.keysRegistered = true
 	return nil
 }
@@ -250,8 +254,14 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 		return nil, fmt.Errorf("serialize centroids: %w", err)
 	}
 
-	// Also extract raw coefficients (for HEonGPU GPU backend).
-	rawQuery := extractRawCiphertext(encQuery)
+	// Extract raw coefficients with NTT domain conversion for HEonGPU.
+	var rawQuery *pb.RawCiphertext
+	if p.nttConverter != nil {
+		// Convert ciphertext to HEonGPU's NTT domain (Montgomery removal + NTT conversion)
+		rawQuery = CiphertextToHEonGPU(encQuery, p.nttConverter)
+	} else {
+		rawQuery = extractRawCiphertext(encQuery)
+	}
 	rawCentroids := extractRawPlaintext(packedCentroids)
 
 	// Send to GPU server.
@@ -274,10 +284,16 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 		return nil, fmt.Errorf("BatchDotProduct server error: %s", resp.Error)
 	}
 
-	// Reconstruct result — prefer raw coefficients (GPU), fall back to serialized (CPU stub).
+	// Reconstruct result — convert from HEonGPU domain back to Lattigo domain.
 	engine := p.localPool.GetPrimaryEngine()
 	var result *rlwe.Ciphertext
-	if resp.RawResult != nil && len(resp.RawResult.Polynomials) > 0 {
+	if resp.RawResult != nil && len(resp.RawResult.Polynomials) > 0 && p.nttConverter != nil {
+		// Convert from HEonGPU NTT domain back to Lattigo Montgomery-NTT domain
+		result, err = CiphertextFromHEonGPU(resp.RawResult, engine.params, p.nttConverter)
+		if err != nil {
+			return nil, fmt.Errorf("convert HEonGPU result to Lattigo: %w", err)
+		}
+	} else if resp.RawResult != nil && len(resp.RawResult.Polynomials) > 0 {
 		result, err = reconstructCiphertext(engine.params, resp.RawResult)
 		if err != nil {
 			return nil, fmt.Errorf("reconstruct raw result: %w", err)
