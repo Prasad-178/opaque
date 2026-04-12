@@ -108,9 +108,6 @@ func newNTTConverter(params hefloat.Parameters, serverRoots []uint64) *NTTConver
 
 // ConvertToCoeffDomain converts coefficients from Lattigo's NTT domain
 // to standard coefficient domain using Lattigo's own INTT.
-//
-// The GPU server can then apply its own NTT to get to HEonGPU's NTT domain.
-// This avoids reimplementing HEonGPU's NTT algorithm in Go.
 func (c *NTTConverter) ConvertToCoeffDomain(coeffs []uint64, modulusIdx int) {
 	N := c.N
 
@@ -122,10 +119,76 @@ func (c *NTTConverter) ConvertToCoeffDomain(coeffs []uint64, modulusIdx int) {
 		subRing = c.params.RingP().SubRings[pIdx]
 	}
 
-	// Lattigo's INTTStandard correctly handles Montgomery-form roots
 	tmp := make([]uint64, N)
 	ring.INTTStandard(coeffs, tmp, N, subRing.NInv, subRing.Modulus, subRing.MRedConstant, subRing.RootsBackward)
 	copy(coeffs, tmp)
+}
+
+// ConvertToHEonGPUDomain converts coefficients from Lattigo's NTT domain
+// to HEonGPU's NTT domain. This is the full conversion:
+// Lattigo INTT → standard coefficient domain → HEonGPU NTT
+//
+// The HEonGPU NTT is done entirely in Go using the server-provided psi values.
+// This is verified to produce byte-identical output to HEonGPU's GPU NTT.
+func (c *NTTConverter) ConvertToHEonGPUDomain(coeffs []uint64, modulusIdx int) {
+	// Step 1: Lattigo INTT → coefficient domain
+	c.ConvertToCoeffDomain(coeffs, modulusIdx)
+
+	// Step 2: HEonGPU NTT → HEonGPU NTT domain (using server's psi)
+	p := c.allModuli[modulusIdx]
+	c.nttCooleyTukeyInPlace(coeffs, p, c.heongpuNTTRoots[modulusIdx])
+}
+
+// nttCooleyTukeyInPlace applies Cooley-Tukey NTT in-place using standard arithmetic.
+// Uses roots[m+i] indexing, identical to both Lattigo and HEonGPU.
+func (c *NTTConverter) nttCooleyTukeyInPlace(p []uint64, Q uint64, roots []uint64) {
+	N := c.N
+	QBig := new(big.Int).SetUint64(Q)
+
+	t := N >> 1
+	W := roots[1]
+	for j := 0; j < t; j++ {
+		u := p[j]
+		v := mulModBig(p[j+t], W, Q, QBig)
+		p[j] = addModU(u, v, Q)
+		p[j+t] = subModU(u, v, Q)
+	}
+
+	for m := 2; m < N; m <<= 1 {
+		t >>= 1
+		for i := 0; i < m; i++ {
+			j1 := (i * t) << 1
+			j2 := j1 + t
+			W := roots[m+i]
+			for j := j1; j < j2; j++ {
+				u := p[j]
+				v := mulModBig(p[j+t], W, Q, QBig)
+				p[j] = addModU(u, v, Q)
+				p[j+t] = subModU(u, v, Q)
+			}
+		}
+	}
+}
+
+func mulModBig(a, b, m uint64, mBig *big.Int) uint64 {
+	r := new(big.Int).Mul(new(big.Int).SetUint64(a), new(big.Int).SetUint64(b))
+	r.Mod(r, mBig)
+	return r.Uint64()
+}
+
+func addModU(a, b, m uint64) uint64 {
+	s := a + b
+	if s >= m {
+		s -= m
+	}
+	return s
+}
+
+func subModU(a, b, m uint64) uint64 {
+	if a >= b {
+		return a - b
+	}
+	return m - (b - a)
 }
 
 // computeHEonGPUPsi finds HEonGPU's primitive 2N-th root of unity for prime p.
