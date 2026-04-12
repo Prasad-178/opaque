@@ -176,8 +176,27 @@ This is O(N log N) per polynomial, done once during key setup (~2 min for all 14
 | NTT root analysis | ✅ Root cause identified (different ψ values) |
 | NTT root exchange | 🔲 Need proto update + server-side root extraction |
 | NTT domain conversion | 🔲 Need server's ψ values to apply correct conversion |
-| Rotation verification | 🔲 Pending conversion fix |
-| End-to-end benchmark | 🔲 Pending rotation verification |
+| NTT table generation fix | ✅ Fixed: was using wrong formula, now uses simple `table[bitrev(j)] = psi^j` |
+| Montgomery removal | ✅ Fixed: Lattigo stores data in Montgomery form, must divide by R before HEonGPU NTT |
+| Rotation verification | ✅ **VERIFIED ON GPU** — `[10,20,30,40]` → rotate → `[20,30,40,0]` CORRECT |
+| End-to-end benchmark | 🔲 Next: full Opaque pipeline through GPU on SIFT 100K |
+
+### Bridge Verified (Tesla T4, AWS g4dn.xlarge)
+
+```
+Decrypt (no rotation): [10.00, 20.00, 30.00, 40.00] ✓
+Rotated by 1:           [20.00, 30.00, 40.00, 0.00]  ✓
+GPU rotation speed:     66-630 us per rotation
+```
+
+The full conversion pipeline (done entirely in Go, no GPU-side NTT needed):
+1. Extract raw uint64 coefficients from Lattigo's GadgetCiphertext
+2. Apply Lattigo's INTT (removes NTT evaluation, keeps Montgomery scaling)
+3. Remove Montgomery factor (divide by R = 2^64 mod Q per coefficient)
+4. Apply HEonGPU's NTT using server-provided psi roots
+5. Write to HEonGPU binary format → `load()` reads directly
+
+Privacy: evaluation keys are public data. Secret key never leaves client in production.
 
 ## Verification Plan
 

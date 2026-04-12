@@ -122,10 +122,14 @@ For development on Apple Silicon without a CUDA GPU:
 - Raw uint64 coefficient transfer for eval keys is now feasible
 - See `docs/GPU_FORMAT_BRIDGE.md` for full analysis
 
+**Eval key bridge: COMPLETE (verified on GPU)**
+- NTT domain conversion working: Lattigo INTT → Montgomery removal → HEonGPU NTT
+- Rotation verified correct on Tesla T4: `[10,20,30,40]` → `[20,30,40,0]` ✓
+- GPU rotation speed: 66-630 us per rotation
+- All conversion done in Go — no GPU-side NTT needed
+
 **Remaining:**
-- Verify coefficient ordering matches between libraries (byte-for-byte comparison on CUDA hardware)
-- C++ GPU server using HEonGPU with eval keys loaded from Lattigo's raw coefficients
-- End-to-end benchmarks through Opaque pipeline with GPU backend
+- End-to-end benchmarks through Opaque pipeline with GPU backend (SIFT 100K)
 - GPU memory usage and concurrent query throughput measurements
 
 ### Projected End-to-End Impact

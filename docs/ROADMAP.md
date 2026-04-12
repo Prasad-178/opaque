@@ -118,7 +118,8 @@ Profiling reveals Galois rotation (key-switching) is 71-84% of HE time, not NTT.
 - Config wiring (`GPUServerAddress`) — done
 - Tests (5 tests covering encrypt/decrypt, batch dot product, provider matching, pool, health) — done
 - Terraform infra for ephemeral GPU instances — done (`deploy/gpu/`)
-- **Remaining:** cgo bridge to HEonGPU C++ for real GPU execution
+- **Eval key bridge:** COMPLETE — Lattigo → HEonGPU key transfer verified on GPU (rotation correct)
+- **Remaining:** end-to-end benchmark through full Opaque pipeline with GPU
 
 See `docs/GPU_ACCELERATION.md` for profiling data, benchmark results, and architecture.
 
