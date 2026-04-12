@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v6.33.4
-// source: gpuhe.proto
+// source: api/proto/gpuhe.proto
 
 package gpuhe
 
@@ -275,5 +275,5 @@ var GPUHEService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "gpuhe.proto",
+	Metadata: "api/proto/gpuhe.proto",
 }

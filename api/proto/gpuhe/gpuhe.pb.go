@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v6.33.4
-// source: gpuhe.proto
+// source: api/proto/gpuhe.proto
 
 package gpuhe
 
@@ -54,11 +54,11 @@ func (x GPUHealthCheckResponse_Status) String() string {
 }
 
 func (GPUHealthCheckResponse_Status) Descriptor() protoreflect.EnumDescriptor {
-	return file_gpuhe_proto_enumTypes[0].Descriptor()
+	return file_api_proto_gpuhe_proto_enumTypes[0].Descriptor()
 }
 
 func (GPUHealthCheckResponse_Status) Type() protoreflect.EnumType {
-	return &file_gpuhe_proto_enumTypes[0]
+	return &file_api_proto_gpuhe_proto_enumTypes[0]
 }
 
 func (x GPUHealthCheckResponse_Status) Number() protoreflect.EnumNumber {
@@ -67,7 +67,7 @@ func (x GPUHealthCheckResponse_Status) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use GPUHealthCheckResponse_Status.Descriptor instead.
 func (GPUHealthCheckResponse_Status) EnumDescriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{11, 0}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{11, 0}
 }
 
 type GPUHealthCheckResponse_Backend int32
@@ -103,11 +103,11 @@ func (x GPUHealthCheckResponse_Backend) String() string {
 }
 
 func (GPUHealthCheckResponse_Backend) Descriptor() protoreflect.EnumDescriptor {
-	return file_gpuhe_proto_enumTypes[1].Descriptor()
+	return file_api_proto_gpuhe_proto_enumTypes[1].Descriptor()
 }
 
 func (GPUHealthCheckResponse_Backend) Type() protoreflect.EnumType {
-	return &file_gpuhe_proto_enumTypes[1]
+	return &file_api_proto_gpuhe_proto_enumTypes[1]
 }
 
 func (x GPUHealthCheckResponse_Backend) Number() protoreflect.EnumNumber {
@@ -116,7 +116,7 @@ func (x GPUHealthCheckResponse_Backend) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use GPUHealthCheckResponse_Backend.Descriptor instead.
 func (GPUHealthCheckResponse_Backend) EnumDescriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{11, 1}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{11, 1}
 }
 
 // RawPolynomial represents a single polynomial in RNS+NTT form.
@@ -137,7 +137,7 @@ type RawPolynomial struct {
 
 func (x *RawPolynomial) Reset() {
 	*x = RawPolynomial{}
-	mi := &file_gpuhe_proto_msgTypes[0]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -149,7 +149,7 @@ func (x *RawPolynomial) String() string {
 func (*RawPolynomial) ProtoMessage() {}
 
 func (x *RawPolynomial) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[0]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -162,7 +162,7 @@ func (x *RawPolynomial) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RawPolynomial.ProtoReflect.Descriptor instead.
 func (*RawPolynomial) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{0}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *RawPolynomial) GetCoefficients() []uint64 {
@@ -204,7 +204,7 @@ type RawCiphertext struct {
 
 func (x *RawCiphertext) Reset() {
 	*x = RawCiphertext{}
-	mi := &file_gpuhe_proto_msgTypes[1]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -216,7 +216,7 @@ func (x *RawCiphertext) String() string {
 func (*RawCiphertext) ProtoMessage() {}
 
 func (x *RawCiphertext) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[1]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -229,7 +229,7 @@ func (x *RawCiphertext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RawCiphertext.ProtoReflect.Descriptor instead.
 func (*RawCiphertext) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{1}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *RawCiphertext) GetPolynomials() []*RawPolynomial {
@@ -272,7 +272,7 @@ type RawPlaintext struct {
 
 func (x *RawPlaintext) Reset() {
 	*x = RawPlaintext{}
-	mi := &file_gpuhe_proto_msgTypes[2]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -284,7 +284,7 @@ func (x *RawPlaintext) String() string {
 func (*RawPlaintext) ProtoMessage() {}
 
 func (x *RawPlaintext) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[2]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -297,7 +297,7 @@ func (x *RawPlaintext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RawPlaintext.ProtoReflect.Descriptor instead.
 func (*RawPlaintext) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{2}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RawPlaintext) GetPolynomial() *RawPolynomial {
@@ -339,7 +339,7 @@ type CKKSParams struct {
 
 func (x *CKKSParams) Reset() {
 	*x = CKKSParams{}
-	mi := &file_gpuhe_proto_msgTypes[3]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -351,7 +351,7 @@ func (x *CKKSParams) String() string {
 func (*CKKSParams) ProtoMessage() {}
 
 func (x *CKKSParams) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[3]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -364,7 +364,7 @@ func (x *CKKSParams) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CKKSParams.ProtoReflect.Descriptor instead.
 func (*CKKSParams) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{3}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *CKKSParams) GetLogN() int32 {
@@ -407,7 +407,7 @@ type InitContextRequest struct {
 
 func (x *InitContextRequest) Reset() {
 	*x = InitContextRequest{}
-	mi := &file_gpuhe_proto_msgTypes[4]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -419,7 +419,7 @@ func (x *InitContextRequest) String() string {
 func (*InitContextRequest) ProtoMessage() {}
 
 func (x *InitContextRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[4]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -432,7 +432,7 @@ func (x *InitContextRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitContextRequest.ProtoReflect.Descriptor instead.
 func (*InitContextRequest) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{4}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *InitContextRequest) GetSessionId() string {
@@ -466,7 +466,7 @@ type InitContextResponse struct {
 
 func (x *InitContextResponse) Reset() {
 	*x = InitContextResponse{}
-	mi := &file_gpuhe_proto_msgTypes[5]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -478,7 +478,7 @@ func (x *InitContextResponse) String() string {
 func (*InitContextResponse) ProtoMessage() {}
 
 func (x *InitContextResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[5]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -491,7 +491,7 @@ func (x *InitContextResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitContextResponse.ProtoReflect.Descriptor instead.
 func (*InitContextResponse) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{5}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *InitContextResponse) GetSuccess() bool {
@@ -539,7 +539,7 @@ type RegisterEvalKeysRequest struct {
 
 func (x *RegisterEvalKeysRequest) Reset() {
 	*x = RegisterEvalKeysRequest{}
-	mi := &file_gpuhe_proto_msgTypes[6]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -551,7 +551,7 @@ func (x *RegisterEvalKeysRequest) String() string {
 func (*RegisterEvalKeysRequest) ProtoMessage() {}
 
 func (x *RegisterEvalKeysRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[6]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -564,7 +564,7 @@ func (x *RegisterEvalKeysRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterEvalKeysRequest.ProtoReflect.Descriptor instead.
 func (*RegisterEvalKeysRequest) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{6}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *RegisterEvalKeysRequest) GetSessionId() string {
@@ -627,7 +627,7 @@ type RegisterEvalKeysResponse struct {
 
 func (x *RegisterEvalKeysResponse) Reset() {
 	*x = RegisterEvalKeysResponse{}
-	mi := &file_gpuhe_proto_msgTypes[7]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -639,7 +639,7 @@ func (x *RegisterEvalKeysResponse) String() string {
 func (*RegisterEvalKeysResponse) ProtoMessage() {}
 
 func (x *RegisterEvalKeysResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[7]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -652,7 +652,7 @@ func (x *RegisterEvalKeysResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterEvalKeysResponse.ProtoReflect.Descriptor instead.
 func (*RegisterEvalKeysResponse) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{7}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RegisterEvalKeysResponse) GetSuccess() bool {
@@ -687,15 +687,20 @@ type BatchDotProductRequest struct {
 	EncryptedQuery  []byte `protobuf:"bytes,4,opt,name=encrypted_query,json=encryptedQuery,proto3" json:"encrypted_query,omitempty"`
 	PackedCentroids []byte `protobuf:"bytes,5,opt,name=packed_centroids,json=packedCentroids,proto3" json:"packed_centroids,omitempty"`
 	// Computation parameters.
-	NumCentroids  int32 `protobuf:"varint,6,opt,name=num_centroids,json=numCentroids,proto3" json:"num_centroids,omitempty"`
-	Dimension     int32 `protobuf:"varint,7,opt,name=dimension,proto3" json:"dimension,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	NumCentroids int32 `protobuf:"varint,6,opt,name=num_centroids,json=numCentroids,proto3" json:"num_centroids,omitempty"`
+	Dimension    int32 `protobuf:"varint,7,opt,name=dimension,proto3" json:"dimension,omitempty"`
+	// Raw float64 plaintext values — server encodes natively with HEonGPU encoder.
+	// This avoids NTT domain conversion for the plaintext entirely.
+	PlaintextValues []float64 `protobuf:"fixed64,8,rep,packed,name=plaintext_values,json=plaintextValues,proto3" json:"plaintext_values,omitempty"`
+	// Scale for encoding (e.g., 2^45). Required when plaintext_values is used.
+	PlaintextScale float64 `protobuf:"fixed64,9,opt,name=plaintext_scale,json=plaintextScale,proto3" json:"plaintext_scale,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *BatchDotProductRequest) Reset() {
 	*x = BatchDotProductRequest{}
-	mi := &file_gpuhe_proto_msgTypes[8]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -707,7 +712,7 @@ func (x *BatchDotProductRequest) String() string {
 func (*BatchDotProductRequest) ProtoMessage() {}
 
 func (x *BatchDotProductRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[8]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -720,7 +725,7 @@ func (x *BatchDotProductRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchDotProductRequest.ProtoReflect.Descriptor instead.
 func (*BatchDotProductRequest) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{8}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *BatchDotProductRequest) GetSessionId() string {
@@ -772,6 +777,20 @@ func (x *BatchDotProductRequest) GetDimension() int32 {
 	return 0
 }
 
+func (x *BatchDotProductRequest) GetPlaintextValues() []float64 {
+	if x != nil {
+		return x.PlaintextValues
+	}
+	return nil
+}
+
+func (x *BatchDotProductRequest) GetPlaintextScale() float64 {
+	if x != nil {
+		return x.PlaintextScale
+	}
+	return 0
+}
+
 type BatchDotProductResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Raw coefficient result (for HEonGPU GPU backend).
@@ -791,7 +810,7 @@ type BatchDotProductResponse struct {
 
 func (x *BatchDotProductResponse) Reset() {
 	*x = BatchDotProductResponse{}
-	mi := &file_gpuhe_proto_msgTypes[9]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -803,7 +822,7 @@ func (x *BatchDotProductResponse) String() string {
 func (*BatchDotProductResponse) ProtoMessage() {}
 
 func (x *BatchDotProductResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[9]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -816,7 +835,7 @@ func (x *BatchDotProductResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchDotProductResponse.ProtoReflect.Descriptor instead.
 func (*BatchDotProductResponse) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{9}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *BatchDotProductResponse) GetRawResult() *RawCiphertext {
@@ -884,7 +903,7 @@ type GPUHealthCheckRequest struct {
 
 func (x *GPUHealthCheckRequest) Reset() {
 	*x = GPUHealthCheckRequest{}
-	mi := &file_gpuhe_proto_msgTypes[10]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -896,7 +915,7 @@ func (x *GPUHealthCheckRequest) String() string {
 func (*GPUHealthCheckRequest) ProtoMessage() {}
 
 func (x *GPUHealthCheckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[10]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -909,7 +928,7 @@ func (x *GPUHealthCheckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GPUHealthCheckRequest.ProtoReflect.Descriptor instead.
 func (*GPUHealthCheckRequest) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{10}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{10}
 }
 
 type GPUHealthCheckResponse struct {
@@ -924,7 +943,7 @@ type GPUHealthCheckResponse struct {
 
 func (x *GPUHealthCheckResponse) Reset() {
 	*x = GPUHealthCheckResponse{}
-	mi := &file_gpuhe_proto_msgTypes[11]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -936,7 +955,7 @@ func (x *GPUHealthCheckResponse) String() string {
 func (*GPUHealthCheckResponse) ProtoMessage() {}
 
 func (x *GPUHealthCheckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gpuhe_proto_msgTypes[11]
+	mi := &file_api_proto_gpuhe_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -949,7 +968,7 @@ func (x *GPUHealthCheckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GPUHealthCheckResponse.ProtoReflect.Descriptor instead.
 func (*GPUHealthCheckResponse) Descriptor() ([]byte, []int) {
-	return file_gpuhe_proto_rawDescGZIP(), []int{11}
+	return file_api_proto_gpuhe_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GPUHealthCheckResponse) GetStatus() GPUHealthCheckResponse_Status {
@@ -980,11 +999,11 @@ func (x *GPUHealthCheckResponse) GetActiveSessions() int32 {
 	return 0
 }
 
-var File_gpuhe_proto protoreflect.FileDescriptor
+var File_api_proto_gpuhe_proto protoreflect.FileDescriptor
 
-const file_gpuhe_proto_rawDesc = "" +
+const file_api_proto_gpuhe_proto_rawDesc = "" +
 	"\n" +
-	"\vgpuhe.proto\x12\ropaque.gpu.v1\"s\n" +
+	"\x15api/proto/gpuhe.proto\x12\ropaque.gpu.v1\"s\n" +
 	"\rRawPolynomial\x12&\n" +
 	"\fcoefficients\x18\x01 \x03(\x04B\x02\x10\x01R\fcoefficients\x12\x1d\n" +
 	"\n" +
@@ -1027,7 +1046,7 @@ const file_gpuhe_proto_rawDesc = "" +
 	"\x18RegisterEvalKeysResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12(\n" +
-	"\x10gpu_memory_bytes\x18\x03 \x01(\x04R\x0egpuMemoryBytes\"\xcb\x02\n" +
+	"\x10gpu_memory_bytes\x18\x03 \x01(\x04R\x0egpuMemoryBytes\"\xa3\x03\n" +
 	"\x16BatchDotProductRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x129\n" +
@@ -1036,7 +1055,9 @@ const file_gpuhe_proto_rawDesc = "" +
 	"\x0fencrypted_query\x18\x04 \x01(\fR\x0eencryptedQuery\x12)\n" +
 	"\x10packed_centroids\x18\x05 \x01(\fR\x0fpackedCentroids\x12#\n" +
 	"\rnum_centroids\x18\x06 \x01(\x05R\fnumCentroids\x12\x1c\n" +
-	"\tdimension\x18\a \x01(\x05R\tdimension\"\xb3\x02\n" +
+	"\tdimension\x18\a \x01(\x05R\tdimension\x12-\n" +
+	"\x10plaintext_values\x18\b \x03(\x01B\x02\x10\x01R\x0fplaintextValues\x12'\n" +
+	"\x0fplaintext_scale\x18\t \x01(\x01R\x0eplaintextScale\"\xb3\x02\n" +
 	"\x17BatchDotProductResponse\x12;\n" +
 	"\n" +
 	"raw_result\x18\x01 \x01(\v2\x1c.opaque.gpu.v1.RawCiphertextR\trawResult\x12)\n" +
@@ -1071,20 +1092,20 @@ const file_gpuhe_proto_rawDesc = "" +
 	"\vHealthCheck\x12$.opaque.gpu.v1.GPUHealthCheckRequest\x1a%.opaque.gpu.v1.GPUHealthCheckResponseB4Z2github.com/Prasad-178/opaque/api/proto/gpuhe;gpuheb\x06proto3"
 
 var (
-	file_gpuhe_proto_rawDescOnce sync.Once
-	file_gpuhe_proto_rawDescData []byte
+	file_api_proto_gpuhe_proto_rawDescOnce sync.Once
+	file_api_proto_gpuhe_proto_rawDescData []byte
 )
 
-func file_gpuhe_proto_rawDescGZIP() []byte {
-	file_gpuhe_proto_rawDescOnce.Do(func() {
-		file_gpuhe_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_gpuhe_proto_rawDesc), len(file_gpuhe_proto_rawDesc)))
+func file_api_proto_gpuhe_proto_rawDescGZIP() []byte {
+	file_api_proto_gpuhe_proto_rawDescOnce.Do(func() {
+		file_api_proto_gpuhe_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_api_proto_gpuhe_proto_rawDesc), len(file_api_proto_gpuhe_proto_rawDesc)))
 	})
-	return file_gpuhe_proto_rawDescData
+	return file_api_proto_gpuhe_proto_rawDescData
 }
 
-var file_gpuhe_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_gpuhe_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
-var file_gpuhe_proto_goTypes = []any{
+var file_api_proto_gpuhe_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_api_proto_gpuhe_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_api_proto_gpuhe_proto_goTypes = []any{
 	(GPUHealthCheckResponse_Status)(0),  // 0: opaque.gpu.v1.GPUHealthCheckResponse.Status
 	(GPUHealthCheckResponse_Backend)(0), // 1: opaque.gpu.v1.GPUHealthCheckResponse.Backend
 	(*RawPolynomial)(nil),               // 2: opaque.gpu.v1.RawPolynomial
@@ -1100,7 +1121,7 @@ var file_gpuhe_proto_goTypes = []any{
 	(*GPUHealthCheckRequest)(nil),       // 12: opaque.gpu.v1.GPUHealthCheckRequest
 	(*GPUHealthCheckResponse)(nil),      // 13: opaque.gpu.v1.GPUHealthCheckResponse
 }
-var file_gpuhe_proto_depIdxs = []int32{
+var file_api_proto_gpuhe_proto_depIdxs = []int32{
 	2,  // 0: opaque.gpu.v1.RawCiphertext.polynomials:type_name -> opaque.gpu.v1.RawPolynomial
 	2,  // 1: opaque.gpu.v1.RawPlaintext.polynomial:type_name -> opaque.gpu.v1.RawPolynomial
 	5,  // 2: opaque.gpu.v1.InitContextRequest.params:type_name -> opaque.gpu.v1.CKKSParams
@@ -1125,27 +1146,27 @@ var file_gpuhe_proto_depIdxs = []int32{
 	0,  // [0:9] is the sub-list for field type_name
 }
 
-func init() { file_gpuhe_proto_init() }
-func file_gpuhe_proto_init() {
-	if File_gpuhe_proto != nil {
+func init() { file_api_proto_gpuhe_proto_init() }
+func file_api_proto_gpuhe_proto_init() {
+	if File_api_proto_gpuhe_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gpuhe_proto_rawDesc), len(file_gpuhe_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_gpuhe_proto_rawDesc), len(file_api_proto_gpuhe_proto_rawDesc)),
 			NumEnums:      2,
 			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_gpuhe_proto_goTypes,
-		DependencyIndexes: file_gpuhe_proto_depIdxs,
-		EnumInfos:         file_gpuhe_proto_enumTypes,
-		MessageInfos:      file_gpuhe_proto_msgTypes,
+		GoTypes:           file_api_proto_gpuhe_proto_goTypes,
+		DependencyIndexes: file_api_proto_gpuhe_proto_depIdxs,
+		EnumInfos:         file_api_proto_gpuhe_proto_enumTypes,
+		MessageInfos:      file_api_proto_gpuhe_proto_msgTypes,
 	}.Build()
-	File_gpuhe_proto = out.File
-	file_gpuhe_proto_goTypes = nil
-	file_gpuhe_proto_depIdxs = nil
+	File_api_proto_gpuhe_proto = out.File
+	file_api_proto_gpuhe_proto_goTypes = nil
+	file_api_proto_gpuhe_proto_depIdxs = nil
 }

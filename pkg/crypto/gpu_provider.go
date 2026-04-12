@@ -235,29 +235,21 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 		p.mu.Unlock()
 	}
 
-	// Serialize ciphertext and plaintext (legacy format for CPU stub).
-	queryBytes, err := serializeCiphertext(encQuery)
-	if err != nil {
-		return nil, fmt.Errorf("serialize query: %w", err)
-	}
-
-	centroidBytes, err := serializePlaintext(packedCentroids)
-	if err != nil {
-		return nil, fmt.Errorf("serialize centroids: %w", err)
-	}
-
-	// Extract raw coefficients with NTT domain conversion for HEonGPU.
-	// BOTH ciphertext AND plaintext must be in the same NTT domain,
-	// otherwise multiply_plain produces garbage.
+	// Convert ciphertext to HEonGPU NTT domain.
 	var rawQuery *pb.RawCiphertext
-	var rawCentroids *pb.RawPlaintext
 	if p.nttConverter != nil {
 		rawQuery = CiphertextToHEonGPU(encQuery, p.nttConverter)
-		rawCentroids = PlaintextToHEonGPU(packedCentroids, p.nttConverter)
 	} else {
 		rawQuery = extractRawCiphertext(encQuery)
-		rawCentroids = extractRawPlaintext(packedCentroids)
 	}
+
+	// For plaintext: send raw float64 values so the C++ server encodes
+	// them natively with HEonGPU's encoder. This avoids NTT domain conversion
+	// issues and guarantees correct HEonGPU metadata.
+	engine := p.localPool.GetPrimaryEngine()
+	slotCount := 1 << (engine.params.LogN() - 1) // N/2 CKKS slots
+	ptValues := make([]float64, slotCount)
+	engine.encoder.Decode(packedCentroids, ptValues)
 
 	// Send to GPU server.
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
@@ -266,9 +258,8 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 	resp, err := p.client.BatchDotProduct(ctx, &pb.BatchDotProductRequest{
 		SessionId:       p.sessionID,
 		RawQuery:        rawQuery,
-		RawCentroids:    rawCentroids,
-		EncryptedQuery:  queryBytes,
-		PackedCentroids: centroidBytes,
+		PlaintextValues: ptValues,
+		PlaintextScale:  packedCentroids.Scale.Float64(),
 		NumCentroids:    int32(numCentroids),
 		Dimension:       int32(dimension),
 	})
@@ -280,7 +271,6 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 	}
 
 	// Reconstruct result — convert from HEonGPU domain back to Lattigo domain.
-	engine := p.localPool.GetPrimaryEngine()
 	var result *rlwe.Ciphertext
 	if resp.RawResult != nil && len(resp.RawResult.Polynomials) > 0 && p.nttConverter != nil {
 		// Convert from HEonGPU NTT domain back to Lattigo Montgomery-NTT domain

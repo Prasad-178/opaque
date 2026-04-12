@@ -153,6 +153,13 @@ message BatchDotProductRequest {
   // Computation parameters.
   int32 num_centroids = 6;
   int32 dimension = 7;
+
+  // Raw float64 plaintext values — server encodes natively with HEonGPU encoder.
+  // This avoids NTT domain conversion for the plaintext entirely.
+  repeated double plaintext_values = 8 [packed = true];
+
+  // Scale for encoding (e.g., 2^45). Required when plaintext_values is used.
+  double plaintext_scale = 9;
 }
 
 message BatchDotProductResponse {

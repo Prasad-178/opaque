@@ -251,9 +251,17 @@ public:
 
             auto after_ct_load = std::chrono::high_resolution_clock::now();
 
-            // --- Reconstruct plaintext from raw coefficients ---
+            // --- Reconstruct plaintext ---
             heongpu::Plaintext<heongpu::Scheme::CKKS> pt_centroids(session->context);
-            if (req->has_raw_centroids()) {
+            if (req->plaintext_values_size() > 0) {
+                // Native encoding: receive raw float64 values, encode with HEonGPU encoder.
+                // This guarantees correct metadata and NTT domain.
+                std::vector<double> values(req->plaintext_values().begin(),
+                                           req->plaintext_values().end());
+                double scale = req->plaintext_scale() > 0 ? req->plaintext_scale() : pow(2.0, 45);
+                session->encoder->encode(pt_centroids, values, scale);
+            } else if (req->has_raw_centroids()) {
+                // Legacy: raw NTT-converted coefficients (may have metadata issues)
                 auto& raw_pt = req->raw_centroids().polynomial();
                 int pt_levels = raw_pt.num_levels();
                 int pt_total = pt_levels * ring_size;
@@ -262,7 +270,6 @@ public:
                 std::memcpy(pt_data.data(), raw_pt.coefficients().data(),
                             pt_total * sizeof(uint64_t));
 
-                // Encode a dummy to allocate memory, then overwrite
                 std::vector<double> dummy(ring_size / 2, 0.0);
                 session->encoder->encode(pt_centroids, dummy, pow(2.0, 45));
                 pt_centroids.store_in_device();
