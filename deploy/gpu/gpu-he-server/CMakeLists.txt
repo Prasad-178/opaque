@@ -48,6 +48,7 @@ add_custom_command(
 
 # Find CUDA toolkit for include paths (needed when CXX files include CUDA headers)
 find_package(CUDAToolkit REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # Server executable — main.cpp includes CUDA headers via HEonGPU, so compile as CUDA
 set_source_files_properties(main.cpp PROPERTIES LANGUAGE CUDA)
@@ -95,6 +96,7 @@ if(gRPC_FOUND)
         heongpu
         ${GRPC_LIBRARIES}
         protobuf::libprotobuf
+        OpenSSL::Crypto
         cudart
         gmp
         ntl
@@ -104,6 +106,7 @@ else()
         heongpu
         ${GRPC_LINK_LIBRARIES}
         protobuf::libprotobuf
+        OpenSSL::Crypto
         cudart
         gmp
         ntl
