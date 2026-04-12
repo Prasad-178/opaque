@@ -101,9 +101,9 @@ public:
 
             // Extract NTT roots (ψ per prime) using the same function
             // that the context uses internally during generate().
-            std::vector<heongpu::Modulus64> prime_vector;
-            for (auto q : q_moduli) prime_vector.push_back(heongpu::Modulus64(q));
-            for (auto p : p_moduli) prime_vector.push_back(heongpu::Modulus64(p));
+            std::vector<Modulus64> prime_vector;
+            for (auto q : q_moduli) prime_vector.push_back(Modulus64(q));
+            for (auto p : p_moduli) prime_vector.push_back(Modulus64(p));
 
             std::vector<uint64_t> ntt_roots =
                 heongpu::generate_primitive_root_of_unity(1 << params.log_n(), prime_vector);
@@ -165,7 +165,7 @@ public:
             // Load HEonGPU-format Galois keys (NTT-converted by Go client).
             if (!req->galois_keys_heongpu().empty()) {
                 std::istringstream gk_stream(req->galois_keys_heongpu());
-                session->galois_key = std::make_unique<Galoiskey<Scheme::CKKS>>();
+                session->galois_key = std::make_unique<heongpu::Galoiskey<heongpu::Scheme::CKKS>>();
                 session->galois_key->set_context(session->context);
                 session->galois_key->load(gk_stream);
                 std::cout << "[" << req->session_id() << "] Galois keys loaded" << std::endl;
