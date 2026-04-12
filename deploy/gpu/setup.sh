@@ -9,10 +9,10 @@ exec > >(tee -a "$LOG") 2>&1
 echo "=== Opaque GPU Bench Setup — $(date) ==="
 
 # --- Install Go ---
-GO_VERSION="1.24.1"
+GO_VERSION="1.24.4"
 echo "Installing Go $GO_VERSION..."
 cd /tmp
-curl -sL "https://go.dev/dl/go$GO_VERSION.tar.gz" -o go.tar.gz
+curl -fSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o go.tar.gz
 rm -rf /usr/local/go
 tar -C /usr/local -xzf go.tar.gz
 rm go.tar.gz

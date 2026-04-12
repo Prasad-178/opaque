@@ -6,12 +6,21 @@ set(CMAKE_CUDA_STANDARD 17)
 
 # Find dependencies
 find_package(Protobuf REQUIRED)
+
+# Try cmake config first, fall back to pkg-config
 find_package(gRPC CONFIG QUIET)
 
-# If gRPC not found via cmake, try pkg-config
-if(NOT gRPC_FOUND)
+if(gRPC_FOUND)
+    message(STATUS "Found gRPC via cmake config")
+    set(GRPC_LIBRARIES gRPC::grpc++)
+    set(GRPC_CPP_PLUGIN $<TARGET_FILE:gRPC::grpc_cpp_plugin>)
+else()
+    message(STATUS "gRPC cmake config not found, using pkg-config")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GRPC REQUIRED grpc++ grpc)
+    # Find grpc_cpp_plugin in PATH
+    find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
+    message(STATUS "grpc_cpp_plugin: ${GRPC_CPP_PLUGIN}")
 endif()
 
 # HEonGPU — assume it's built in /home/ubuntu/HEonGPU/build
@@ -31,7 +40,7 @@ add_custom_command(
     ARGS --grpc_out="${PROTO_OUT}"
          --cpp_out="${PROTO_OUT}"
          -I "${CMAKE_CURRENT_SOURCE_DIR}/../../../api/proto"
-         --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
+         --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
          "${PROTO_FILE}"
     DEPENDS "${PROTO_FILE}"
     COMMENT "Generating gRPC C++ code from gpuhe.proto"
@@ -53,6 +62,11 @@ target_include_directories(gpu-he-server PRIVATE
     ${HEONGPU_BUILD_DIR}/_deps/rapids_logger-src/include
 )
 
+# Add pkg-config include dirs if using pkg-config
+if(NOT gRPC_FOUND AND GRPC_INCLUDE_DIRS)
+    target_include_directories(gpu-he-server PRIVATE ${GRPC_INCLUDE_DIRS})
+endif()
+
 target_link_directories(gpu-he-server PRIVATE
     ${HEONGPU_BUILD_DIR}/src
     ${HEONGPU_BUILD_DIR}/thirdparty/GPU-NTT/src
@@ -61,11 +75,26 @@ target_link_directories(gpu-he-server PRIVATE
     ${HEONGPU_BUILD_DIR}/_deps/spdlog-build
 )
 
-target_link_libraries(gpu-he-server PRIVATE
-    heongpu
-    gRPC::grpc++
-    protobuf::libprotobuf
-    cudart
-    gmp
-    ntl
-)
+if(gRPC_FOUND)
+    target_link_libraries(gpu-he-server PRIVATE
+        heongpu
+        ${GRPC_LIBRARIES}
+        protobuf::libprotobuf
+        cudart
+        gmp
+        ntl
+    )
+else()
+    target_link_libraries(gpu-he-server PRIVATE
+        heongpu
+        ${GRPC_LINK_LIBRARIES}
+        protobuf::libprotobuf
+        cudart
+        gmp
+        ntl
+    )
+    # Add pkg-config link directories
+    if(GRPC_LIBRARY_DIRS)
+        target_link_directories(gpu-he-server PRIVATE ${GRPC_LIBRARY_DIRS})
+    endif()
+endif()
