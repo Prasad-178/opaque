@@ -118,8 +118,9 @@ int main(int argc, char** argv) {
     auto start = std::chrono::high_resolution_clock::now();
 
     // Step 1: Multiply encrypted query × plaintext centroids
+    // multiply_plain(input_ct, input_pt, output_ct)
     Ciphertext<S> ct_result(ctx);
-    ops.multiply_plain(ct_result, ct_query, pt_centroids);
+    ops.multiply_plain(ct_query, pt_centroids, ct_result);
 
     auto after_mul = std::chrono::high_resolution_clock::now();
 
@@ -182,7 +183,7 @@ int main(int argc, char** argv) {
         auto bench_start = std::chrono::high_resolution_clock::now();
         for (int iter = 0; iter < 10; iter++) {
             Ciphertext<S> ct_bench(ctx);
-            ops.multiply_plain(ct_bench, ct_query, pt_centroids);
+            ops.multiply_plain(ct_query, pt_centroids, ct_bench);
             ops.rescale_inplace(ct_bench);
             for (int stride = 1; stride < dim; stride *= 2) {
                 Ciphertext<S> ct_rot(ct_bench);
