@@ -73,6 +73,12 @@ target_include_directories(gpu-he-server PRIVATE
     ${HEONGPU_BUILD_DIR}/_deps/nvtx3-src/c/include
 )
 
+# CUDA device linking required for HEonGPU's static lib (has device code)
+set_target_properties(gpu-he-server PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+)
+
 # RMM requires this define
 target_compile_definitions(gpu-he-server PRIVATE
     LIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE
