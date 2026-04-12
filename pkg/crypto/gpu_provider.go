@@ -87,11 +87,14 @@ func NewGPUHEProvider(cfg GPUHEProviderConfig) (*GPUHEProvider, error) {
 	}
 
 	// Connect to GPU server.
-	// Use 256MB max message size for eval key registration (~200MB for Galois keys).
+	// Use 600MB max message size for eval key registration (~283MB HEonGPU + ~200MB Lattigo keys).
+	maxMsgSize := 600 * 1024 * 1024
 	conn, err := grpc.NewClient(cfg.ServerAddress,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(256*1024*1024)),
-		grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(256*1024*1024)),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(maxMsgSize),
+			grpc.MaxCallSendMsgSize(maxMsgSize),
+		),
 	)
 	if err != nil {
 		localPool.Close()
@@ -181,32 +184,16 @@ func (p *GPUHEProvider) RegisterEvalKeys() error {
 		return fmt.Errorf("SerializeGaloisKeysHEonGPU: %w", err)
 	}
 
-	// Also serialize Lattigo format for CPU stub fallback
-	paramsBytes, err := engine.params.MarshalBinary()
-	if err != nil {
-		return fmt.Errorf("failed to serialize params: %w", err)
-	}
-	galoisKeysLattigo, err := serializeGaloisKeys(engine, galoisElems)
-	if err != nil {
-		return fmt.Errorf("failed to serialize Lattigo Galois keys: %w", err)
-	}
-	relinBytes, err := serializeRelinKey(engine)
-	if err != nil {
-		return fmt.Errorf("failed to serialize relin key: %w", err)
-	}
-
 	// Step 3: Send eval keys to GPU server.
+	// Only send HEonGPU-format keys (saves ~200MB vs also sending Lattigo format).
 	regCtx, regCancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer regCancel()
 
 	resp, err := p.client.RegisterEvalKeys(regCtx, &pb.RegisterEvalKeysRequest{
 		SessionId:             p.sessionID,
 		Params:                ckksParams,
-		CkksParamsBinary:      paramsBytes,
-		RelinKeySerialized:    relinBytes,
-		GaloisKeysSerialized:  galoisKeysLattigo,
 		GaloisElements:        galoisElems,
-		GaloisKeysHeongpu:     galoisKeysHEonGPU, // HEonGPU-format keys with correct NTT domain
+		GaloisKeysHeongpu:     galoisKeysHEonGPU,
 	})
 	if err != nil {
 		return fmt.Errorf("RegisterEvalKeys RPC failed: %w", err)

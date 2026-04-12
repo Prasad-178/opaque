@@ -373,8 +373,8 @@ int main(int argc, char** argv) {
 
     ServerBuilder builder;
     builder.AddListeningPort(addr, grpc::InsecureServerCredentials());
-    builder.SetMaxReceiveMessageSize(256 * 1024 * 1024); // 256MB for eval keys
-    builder.SetMaxSendMessageSize(256 * 1024 * 1024);
+    builder.SetMaxReceiveMessageSize(600 * 1024 * 1024); // 600MB for eval keys
+    builder.SetMaxSendMessageSize(600 * 1024 * 1024);
     builder.RegisterService(&service);
 
     auto server = builder.BuildAndStart();
