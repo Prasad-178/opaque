@@ -128,13 +128,41 @@ func (c *NTTConverter) ConvertToCoeffDomain(coeffs []uint64, modulusIdx int) {
 // to HEonGPU's NTT domain. This is the full conversion:
 // Lattigo INTT → standard coefficient domain → HEonGPU NTT
 //
+// IMPORTANT: Lattigo stores data in Montgomery form (IsMontgomery=true).
+// After INTT, coefficients are still Montgomery-scaled (coeff * R mod Q).
+// We must remove the Montgomery factor before applying HEonGPU's NTT,
+// which expects standard (non-Montgomery) coefficients.
+//
 // The HEonGPU NTT is done entirely in Go using the server-provided psi values.
 // This is verified to produce byte-identical output to HEonGPU's GPU NTT.
 func (c *NTTConverter) ConvertToHEonGPUDomain(coeffs []uint64, modulusIdx int) {
-	// Step 1: Lattigo INTT → coefficient domain
+	// Step 1: Lattigo INTT → Montgomery-form coefficient domain
 	c.ConvertToCoeffDomain(coeffs, modulusIdx)
 
-	// Step 2: HEonGPU NTT → HEonGPU NTT domain (using server's psi)
+	// Step 2: Remove Montgomery factor
+	// coeff_real = coeff_mont * R^{-1} mod Q
+	p := c.allModuli[modulusIdx]
+	pBig := new(big.Int).SetUint64(p)
+	R := new(big.Int).Lsh(big.NewInt(1), 64)       // R = 2^64
+	R.Mod(R, pBig)                                   // R mod Q
+	RInv := new(big.Int).ModInverse(R, pBig)         // R^{-1} mod Q
+	rInv := RInv.Uint64()
+
+	for i := range coeffs {
+		coeffs[i] = mulModBig(coeffs[i], rInv, p, pBig)
+	}
+
+	// Step 3: HEonGPU NTT → HEonGPU NTT domain (standard, non-Montgomery)
+	c.nttCooleyTukeyInPlace(coeffs, p, c.heongpuNTTRoots[modulusIdx])
+}
+
+// ConvertToHEonGPUDomainNonMontgomery converts NON-Montgomery NTT coefficients
+// (like Galois key data which is already non-Montgomery in the GadgetCiphertext).
+func (c *NTTConverter) ConvertToHEonGPUDomainNonMontgomery(coeffs []uint64, modulusIdx int) {
+	// Step 1: Lattigo INTT → coefficient domain (INTT handles Montgomery roots internally)
+	c.ConvertToCoeffDomain(coeffs, modulusIdx)
+
+	// Step 2: HEonGPU NTT (no Montgomery removal needed)
 	p := c.allModuli[modulusIdx]
 	c.nttCooleyTukeyInPlace(coeffs, p, c.heongpuNTTRoots[modulusIdx])
 }
@@ -259,56 +287,35 @@ func isPrimitive2NthRoot(candidate *big.Int, degree uint64, p *big.Int) bool {
 }
 
 // generateNTTTable generates the forward NTT root table from psi.
-// Uses bit-reversed ordering (standard Cooley-Tukey).
+// Matches HEonGPU's GPU-NTT table generation exactly:
+//
+//	powers[j] = psi^j mod p for j=0..N-1
+//	table[bitrev(j, logN)] = powers[j]
+//
+// This is the standard format used by both Lattigo and HEonGPU.
 func generateNTTTable(psi, p uint64, N int) []uint64 {
-	table := make([]uint64, N)
-	pBig := new(big.Int).SetUint64(p)
-	psiBig := new(big.Int).SetUint64(psi)
-
-	// Compute powers of psi in bit-reversed order
-	// table[bitrev(i)] = psi^i mod p for i = 0..N-1
-	// Actually, the standard CT NTT table stores:
-	// table[0] = 1 (not used in some implementations)
-	// table[1] = psi
-	// table[i] = psi^(bitreverse(i, logN)) mod p (for butterfly lookup)
-	//
-	// Different libraries have slightly different table layouts.
-	// HEonGPU's GPU-NTT generates the table in its NTTParameters constructor.
-	// The key function: forward_root_of_unity_table_generator()
-	//
-	// From GPU-NTT source, the forward table is:
-	//   for m = N/2 down to 1 by halving:
-	//     for i = 0 to m-1:
-	//       table[m + i] = psi^(bitrev(i, logN-log2(m))) mod p
-	//
-	// This is the standard CT butterfly ordering.
-
 	logN := 0
 	for n := N; n > 1; n >>= 1 {
 		logN++
 	}
 
-	// Generate powers of psi: psi^0, psi^1, psi^2, ...
-	powers := make([]*big.Int, 2*N)
-	powers[0] = big.NewInt(1)
-	for i := 1; i < 2*N; i++ {
-		powers[i] = new(big.Int).Mul(powers[i-1], psiBig)
-		powers[i].Mod(powers[i], pBig)
+	pBig := new(big.Int).SetUint64(p)
+	psiBig := new(big.Int).SetUint64(psi)
+
+	// powers[j] = psi^j mod p
+	powers := make([]uint64, N)
+	powers[0] = 1
+	cur := big.NewInt(1)
+	for j := 1; j < N; j++ {
+		cur.Mul(cur, psiBig)
+		cur.Mod(cur, pBig)
+		powers[j] = cur.Uint64()
 	}
 
-	// Fill table in bit-reversed butterfly order
-	// table[1] = psi (used for the first butterfly layer)
-	// table[m+i] = psi^(bitrev(i, log2(m))) for butterfly at size m
-	for m := 1; m < N; m <<= 1 {
-		logM := 0
-		for x := m; x > 1; x >>= 1 {
-			logM++
-		}
-		step := N / m // = 2^(logN - logM)
-		for i := 0; i < m; i++ {
-			idx := bitReverse(i, logM)
-			table[m+i] = powers[idx*step].Uint64()
-		}
+	// Bit-reverse: table[bitrev(j)] = powers[j]
+	table := make([]uint64, N)
+	for j := 0; j < N; j++ {
+		table[bitReverse(j, logN)] = powers[j]
 	}
 
 	return table
