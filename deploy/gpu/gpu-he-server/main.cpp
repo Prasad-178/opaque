@@ -24,7 +24,7 @@
 
 // HEonGPU headers
 #include <heongpu/heongpu.hpp>
-#include <gpuntt/ntt.cuh>  // For GPU_NTT_Inplace
+#include <gpuntt/ntt_merge/ntt.cuh>  // For GPU_NTT_Inplace
 
 using grpc::Server;
 using grpc::ServerBuilder;
