@@ -24,6 +24,9 @@ import (
 
 // CiphertextToHEonGPU converts a Lattigo ciphertext to HEonGPU raw format.
 // The output coefficients are in HEonGPU's NTT domain (non-Montgomery).
+//
+// IMPORTANT: Checks IsMontgomery to determine conversion path.
+// Lattigo v5 ciphertexts typically have IsMontgomery=false.
 func CiphertextToHEonGPU(ct *rlwe.Ciphertext, conv *NTTConverter) *pb.RawCiphertext {
 	polys := make([]*pb.RawPolynomial, len(ct.Value))
 
@@ -36,8 +39,13 @@ func CiphertextToHEonGPU(ct *rlwe.Ciphertext, conv *NTTConverter) *pb.RawCiphert
 			coeffs := make([]uint64, ringSize)
 			copy(coeffs, poly.Coeffs[lvl])
 
-			// Convert: Lattigo Montgomery-NTT → standard coefficients → HEonGPU NTT
-			conv.ConvertToHEonGPUDomain(coeffs, lvl)
+			if ct.IsMontgomery {
+				// Montgomery-NTT → remove Montgomery → HEonGPU NTT
+				conv.ConvertToHEonGPUDomain(coeffs, lvl)
+			} else {
+				// Non-Montgomery NTT → HEonGPU NTT (skip Montgomery removal)
+				conv.ConvertToHEonGPUDomainNonMontgomery(coeffs, lvl)
+			}
 
 			flat = append(flat, coeffs...)
 		}
@@ -59,8 +67,10 @@ func CiphertextToHEonGPU(ct *rlwe.Ciphertext, conv *NTTConverter) *pb.RawCiphert
 
 // PlaintextToHEonGPU converts a Lattigo plaintext to HEonGPU raw format.
 // The output coefficients are in HEonGPU's NTT domain (non-Montgomery).
-// Plaintexts MUST be converted the same way as ciphertexts — otherwise
-// multiply_plain on the GPU operates on mismatched NTT domains = garbage.
+//
+// IMPORTANT: Lattigo plaintexts have IsMontgomery=false (unlike ciphertexts
+// which have IsMontgomery=true). This means we must NOT remove a Montgomery
+// factor during conversion. Use the non-Montgomery conversion path.
 func PlaintextToHEonGPU(pt *rlwe.Plaintext, conv *NTTConverter) *pb.RawPlaintext {
 	poly := pt.Value
 	numLevels := poly.Level() + 1
@@ -71,8 +81,13 @@ func PlaintextToHEonGPU(pt *rlwe.Plaintext, conv *NTTConverter) *pb.RawPlaintext
 		coeffs := make([]uint64, ringSize)
 		copy(coeffs, poly.Coeffs[lvl])
 
-		// Convert: Lattigo Montgomery-NTT → standard coefficients → HEonGPU NTT
-		conv.ConvertToHEonGPUDomain(coeffs, lvl)
+		if pt.IsMontgomery {
+			// Montgomery-NTT → remove Montgomery → HEonGPU NTT
+			conv.ConvertToHEonGPUDomain(coeffs, lvl)
+		} else {
+			// Non-Montgomery NTT → HEonGPU NTT (skip Montgomery removal)
+			conv.ConvertToHEonGPUDomainNonMontgomery(coeffs, lvl)
+		}
 
 		flat = append(flat, coeffs...)
 	}
@@ -90,7 +105,8 @@ func PlaintextToHEonGPU(pt *rlwe.Plaintext, conv *NTTConverter) *pb.RawPlaintext
 
 // CiphertextFromHEonGPU converts a HEonGPU raw ciphertext back to Lattigo format.
 // The input coefficients are in HEonGPU's NTT domain (non-Montgomery).
-// The output is in Lattigo's Montgomery-NTT domain.
+// The output is in Lattigo's non-Montgomery NTT domain (IsMontgomery=false),
+// matching Lattigo v5's default ciphertext format.
 func CiphertextFromHEonGPU(raw *pb.RawCiphertext, params hefloat.Parameters, conv *NTTConverter) (*rlwe.Ciphertext, error) {
 	if len(raw.Polynomials) < 2 {
 		return nil, fmt.Errorf("need at least 2 polynomials, got %d", len(raw.Polynomials))
@@ -102,8 +118,10 @@ func CiphertextFromHEonGPU(raw *pb.RawCiphertext, params hefloat.Parameters, con
 
 	ct := rlwe.NewCiphertext(params, len(raw.Polynomials)-1, level)
 	ct.IsNTT = true
-	ct.IsMontgomery = true
+	ct.IsMontgomery = false // Lattigo v5 ciphertexts are non-Montgomery
 	ct.Scale = rlwe.NewScale(raw.Scale)
+	ct.LogDimensions = ring.Dimensions{Rows: 0, Cols: params.LogN() - 1} // CKKS uses N/2 slots
+	ct.IsBatched = true
 
 	for i, rawPoly := range raw.Polynomials {
 		if len(rawPoly.Coefficients) != numLevels*ringSize {
@@ -116,14 +134,41 @@ func CiphertextFromHEonGPU(raw *pb.RawCiphertext, params hefloat.Parameters, con
 			coeffs := make([]uint64, ringSize)
 			copy(coeffs, rawPoly.Coefficients[start:start+ringSize])
 
-			// Convert: HEonGPU NTT → standard coefficients → add Montgomery → Lattigo NTT
-			convertFromHEonGPUDomain(coeffs, lvl, params, conv)
+			// Convert: HEonGPU NTT → standard coefficients → Lattigo NTT
+			// NO Montgomery addition (Lattigo v5 ciphertexts are non-Montgomery)
+			convertFromHEonGPUDomainNonMontgomery(coeffs, lvl, params, conv)
 
 			copy(ct.Value[i].Coeffs[lvl], coeffs)
 		}
 	}
 
 	return ct, nil
+}
+
+// convertFromHEonGPUDomainNonMontgomery converts coefficients from HEonGPU's NTT domain
+// to Lattigo's non-Montgomery NTT domain. This is the REVERSE of ConvertToHEonGPUDomainNonMontgomery.
+//
+// Steps:
+// 1. HEonGPU INTT → standard coefficients
+// 2. Lattigo NTT → Lattigo NTT domain (non-Montgomery)
+func convertFromHEonGPUDomainNonMontgomery(coeffs []uint64, modulusIdx int, params hefloat.Parameters, conv *NTTConverter) {
+	N := conv.N
+	p := conv.allModuli[modulusIdx]
+
+	// Step 1: HEonGPU INTT → standard coefficients
+	inttHEonGPU(coeffs, N, p, conv.heongpuNTTRoots[modulusIdx])
+
+	// Step 2: Lattigo NTT (non-Montgomery) → Lattigo NTT domain
+	var subRing *ring.SubRing
+	if modulusIdx <= params.MaxLevelQ() {
+		subRing = params.RingQ().SubRings[modulusIdx]
+	} else {
+		pIdx := modulusIdx - params.MaxLevelQ() - 1
+		subRing = params.RingP().SubRings[pIdx]
+	}
+	tmp := make([]uint64, N)
+	ring.NTTStandard(coeffs, tmp, N, subRing.Modulus, subRing.MRedConstant, subRing.BRedConstant, subRing.RootsForward)
+	copy(coeffs, tmp)
 }
 
 // convertFromHEonGPUDomain converts coefficients from HEonGPU's NTT domain
