@@ -46,7 +46,11 @@ add_custom_command(
     COMMENT "Generating gRPC C++ code from gpuhe.proto"
 )
 
-# Server executable
+# Find CUDA toolkit for include paths (needed when CXX files include CUDA headers)
+find_package(CUDAToolkit REQUIRED)
+
+# Server executable — main.cpp includes CUDA headers via HEonGPU, so compile as CUDA
+set_source_files_properties(main.cpp PROPERTIES LANGUAGE CUDA)
 add_executable(gpu-he-server
     main.cpp
     ${PROTO_OUT}/gpuhe.pb.cc
