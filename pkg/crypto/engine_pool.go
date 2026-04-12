@@ -15,16 +15,26 @@ type EnginePool struct {
 	free    chan *Engine
 }
 
-// NewEnginePool creates a pool of n HE engines.
+// NewEnginePool creates a pool of n HE engines with standard parameters.
 // All engines share the same keys but have independent evaluators.
 // Recommended: n = runtime.NumCPU() for optimal parallelism.
 func NewEnginePool(n int) (*EnginePool, error) {
+	params, err := NewParameters()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create parameters: %w", err)
+	}
+	return NewEnginePoolWithParams(n, params)
+}
+
+// NewEnginePoolWithParams creates a pool of n HE engines with the given parameters.
+// Use NewParametersGPU() for GPU-compatible params or NewParameters() for CPU.
+func NewEnginePoolWithParams(n int, params hefloat.Parameters) (*EnginePool, error) {
 	if n < 1 {
 		n = 1
 	}
 
 	// Create the first engine which generates the keys
-	primary, err := NewClientEngine()
+	primary, err := NewClientEngineWithParams(params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create primary engine: %w", err)
 	}

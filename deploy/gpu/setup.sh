@@ -31,7 +31,9 @@ echo "Go version: $(go version)"
 # --- Install build tools for GPU libraries ---
 echo "Installing build dependencies..."
 apt-get update -qq
-apt-get install -y -qq build-essential cmake git pkg-config
+apt-get install -y -qq build-essential cmake git pkg-config \
+    libprotobuf-dev protobuf-compiler libgrpc++-dev protobuf-compiler-grpc \
+    libgmp-dev libntl-dev
 
 # --- Clone Opaque ---
 echo "Cloning Opaque repo..."
@@ -94,6 +96,23 @@ cd build
 cmake .. -DCMAKE_CUDA_ARCHITECTURES=75 -DHEonGPU_BUILD_EXAMPLES=ON 2>/dev/null || true
 make -j$(nproc) 2>/dev/null || echo "Example build failed (non-blocking)"
 
+# --- Build C++ GPU HE gRPC server ---
+echo "Building GPU HE server..."
+cd /home/ubuntu/opaque/deploy/gpu/gpu-he-server
+mkdir -p build && cd build
+cmake .. -DCMAKE_CUDA_ARCHITECTURES=75 2>&1 || echo "GPU HE server cmake failed"
+make -j$(nproc) 2>&1 || echo "GPU HE server build failed (non-blocking)"
+if [ -f gpu-he-server ]; then
+  echo "GPU HE server built successfully"
+else
+  echo "GPU HE server binary not found after build"
+fi
+
+# --- Download SIFT1M dataset ---
+echo "Downloading SIFT1M dataset..."
+cd /home/ubuntu/opaque
+bash scripts/download_sift1m.sh || echo "SIFT download failed (non-blocking)"
+
 # --- Fix permissions ---
 chown -R ubuntu:ubuntu /home/ubuntu/opaque /home/ubuntu/GPU-NTT /home/ubuntu/HEonGPU 2>/dev/null || true
 chown -R ubuntu:ubuntu /home/ubuntu/go 2>/dev/null || true
@@ -101,4 +120,4 @@ chown -R ubuntu:ubuntu /home/ubuntu/go 2>/dev/null || true
 # --- Write ready marker ---
 touch /home/ubuntu/.setup-complete
 echo "=== Setup complete — $(date) ==="
-echo "Run benchmarks with: bash opaque/deploy/gpu/run_benchmarks.sh"
+echo "Run GPU E2E benchmark with: bash opaque/deploy/gpu/run_gpu_e2e.sh"

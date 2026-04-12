@@ -75,8 +75,13 @@ func NewGPUHEProvider(cfg GPUHEProviderConfig) (*GPUHEProvider, error) {
 		cfg.SessionID = fmt.Sprintf("gpu-client-%d", time.Now().UnixNano())
 	}
 
-	// Create local engine pool (for encrypt/decrypt only).
-	localPool, err := NewEnginePool(cfg.LocalPoolSize)
+	// Create local engine pool with GPU-compatible parameters (LogP=[61]).
+	// GPU path requires single P prime for eval key decomposition matching HEonGPU.
+	gpuParams, err := NewParametersGPU()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GPU parameters: %w", err)
+	}
+	localPool, err := NewEnginePoolWithParams(cfg.LocalPoolSize, gpuParams)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create local engine pool: %w", err)
 	}
