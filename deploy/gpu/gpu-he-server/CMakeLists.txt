@@ -86,30 +86,39 @@ endif()
 target_link_directories(gpu-he-server PRIVATE
     ${HEONGPU_BUILD_DIR}/src
     ${HEONGPU_BUILD_DIR}/thirdparty/GPU-NTT/src
+    ${HEONGPU_BUILD_DIR}/thirdparty/GPU-FFT/src
     ${HEONGPU_BUILD_DIR}/thirdparty/RNGonGPU/src
     ${HEONGPU_BUILD_DIR}/_deps/rmm-build
     ${HEONGPU_BUILD_DIR}/_deps/spdlog-build
+    ${HEONGPU_BUILD_DIR}/_deps/rapids_logger-build
+)
+
+# Common HEonGPU dependencies (order matters for static linking)
+set(HEONGPU_LIBS
+    heongpu
+    ntt-1.0
+    fft-1.0
+    rngongpu-1.0
+    rmm
+    spdlog
+    rapids_logger
+    OpenSSL::Crypto
+    CUDA::cudart
+    gmp
+    ntl
 )
 
 if(gRPC_FOUND)
     target_link_libraries(gpu-he-server PRIVATE
-        heongpu
+        ${HEONGPU_LIBS}
         ${GRPC_LIBRARIES}
         protobuf::libprotobuf
-        OpenSSL::Crypto
-        cudart
-        gmp
-        ntl
     )
 else()
     target_link_libraries(gpu-he-server PRIVATE
-        heongpu
+        ${HEONGPU_LIBS}
         ${GRPC_LINK_LIBRARIES}
         protobuf::libprotobuf
-        OpenSSL::Crypto
-        cudart
-        gmp
-        ntl
     )
     # Add pkg-config link directories
     if(GRPC_LIBRARY_DIRS)
