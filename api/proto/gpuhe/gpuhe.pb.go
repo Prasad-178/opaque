@@ -694,8 +694,12 @@ type BatchDotProductRequest struct {
 	PlaintextValues []float64 `protobuf:"fixed64,8,rep,packed,name=plaintext_values,json=plaintextValues,proto3" json:"plaintext_values,omitempty"`
 	// Scale for encoding (e.g., 2^45). Required when plaintext_values is used.
 	PlaintextScale float64 `protobuf:"fixed64,9,opt,name=plaintext_scale,json=plaintextScale,proto3" json:"plaintext_scale,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// If true, raw_query coefficients are in COEFFICIENT domain (not NTT).
+	// The server will apply its own NTT before computing.
+	// This avoids cross-library NTT conversion issues entirely.
+	QueryIsCoeffDomain bool `protobuf:"varint,10,opt,name=query_is_coeff_domain,json=queryIsCoeffDomain,proto3" json:"query_is_coeff_domain,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *BatchDotProductRequest) Reset() {
@@ -789,6 +793,13 @@ func (x *BatchDotProductRequest) GetPlaintextScale() float64 {
 		return x.PlaintextScale
 	}
 	return 0
+}
+
+func (x *BatchDotProductRequest) GetQueryIsCoeffDomain() bool {
+	if x != nil {
+		return x.QueryIsCoeffDomain
+	}
+	return false
 }
 
 type BatchDotProductResponse struct {
@@ -1046,7 +1057,7 @@ const file_api_proto_gpuhe_proto_rawDesc = "" +
 	"\x18RegisterEvalKeysResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12(\n" +
-	"\x10gpu_memory_bytes\x18\x03 \x01(\x04R\x0egpuMemoryBytes\"\xa3\x03\n" +
+	"\x10gpu_memory_bytes\x18\x03 \x01(\x04R\x0egpuMemoryBytes\"\xd6\x03\n" +
 	"\x16BatchDotProductRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x129\n" +
@@ -1057,7 +1068,9 @@ const file_api_proto_gpuhe_proto_rawDesc = "" +
 	"\rnum_centroids\x18\x06 \x01(\x05R\fnumCentroids\x12\x1c\n" +
 	"\tdimension\x18\a \x01(\x05R\tdimension\x12-\n" +
 	"\x10plaintext_values\x18\b \x03(\x01B\x02\x10\x01R\x0fplaintextValues\x12'\n" +
-	"\x0fplaintext_scale\x18\t \x01(\x01R\x0eplaintextScale\"\xb3\x02\n" +
+	"\x0fplaintext_scale\x18\t \x01(\x01R\x0eplaintextScale\x121\n" +
+	"\x15query_is_coeff_domain\x18\n" +
+	" \x01(\bR\x12queryIsCoeffDomain\"\xb3\x02\n" +
 	"\x17BatchDotProductResponse\x12;\n" +
 	"\n" +
 	"raw_result\x18\x01 \x01(\v2\x1c.opaque.gpu.v1.RawCiphertextR\trawResult\x12)\n" +

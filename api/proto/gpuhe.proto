@@ -160,6 +160,11 @@ message BatchDotProductRequest {
 
   // Scale for encoding (e.g., 2^45). Required when plaintext_values is used.
   double plaintext_scale = 9;
+
+  // If true, raw_query coefficients are in COEFFICIENT domain (not NTT).
+  // The server will apply its own NTT before computing.
+  // This avoids cross-library NTT conversion issues entirely.
+  bool query_is_coeff_domain = 10;
 }
 
 message BatchDotProductResponse {

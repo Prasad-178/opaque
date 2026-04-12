@@ -103,6 +103,56 @@ func PlaintextToHEonGPU(pt *rlwe.Plaintext, conv *NTTConverter) *pb.RawPlaintext
 	}
 }
 
+// ciphertextToCoeffDomain converts a Lattigo ciphertext to coefficient domain.
+// The output coefficients are standard (non-Montgomery, non-NTT) polynomial coefficients.
+// The C++ server will apply HEonGPU's own NTT to put them in the right domain.
+// This avoids the cross-library NTT conversion entirely.
+func ciphertextToCoeffDomain(ct *rlwe.Ciphertext, conv *NTTConverter) *pb.RawCiphertext {
+	polys := make([]*pb.RawPolynomial, len(ct.Value))
+
+	for i, poly := range ct.Value {
+		numLevels := poly.Level() + 1
+		ringSize := poly.N()
+		flat := make([]uint64, 0, numLevels*ringSize)
+
+		for lvl := 0; lvl < numLevels; lvl++ {
+			coeffs := make([]uint64, ringSize)
+			copy(coeffs, poly.Coeffs[lvl])
+
+			// Step 1: Lattigo INTT → coefficient domain
+			conv.ConvertToCoeffDomain(coeffs, lvl)
+
+			// Step 2: Remove Montgomery factor if present
+			if ct.IsMontgomery {
+				p := conv.allModuli[lvl]
+				pBig := new(big.Int).SetUint64(p)
+				R := new(big.Int).Lsh(big.NewInt(1), 64)
+				R.Mod(R, pBig)
+				RInv := new(big.Int).ModInverse(R, pBig)
+				rInv := RInv.Uint64()
+				for j := range coeffs {
+					coeffs[j] = mulModBig(coeffs[j], rInv, p, pBig)
+				}
+			}
+
+			flat = append(flat, coeffs...)
+		}
+
+		polys[i] = &pb.RawPolynomial{
+			Coefficients: flat,
+			NumLevels:    int32(numLevels),
+			RingSize:     int32(ringSize),
+		}
+	}
+
+	return &pb.RawCiphertext{
+		Polynomials: polys,
+		Scale:       ct.Scale.Float64(),
+		IsNtt:       false, // Coefficient domain, NOT NTT
+		Depth:       int32(ct.Value[0].Level()),
+	}
+}
+
 // CiphertextFromHEonGPU converts a HEonGPU raw ciphertext back to Lattigo format.
 // The input coefficients are in HEonGPU's NTT domain (non-Montgomery).
 // The output is in Lattigo's non-Montgomery NTT domain (IsMontgomery=false),
@@ -139,6 +189,48 @@ func CiphertextFromHEonGPU(raw *pb.RawCiphertext, params hefloat.Parameters, con
 			convertFromHEonGPUDomainNonMontgomery(coeffs, lvl, params, conv)
 
 			copy(ct.Value[i].Coeffs[lvl], coeffs)
+		}
+	}
+
+	return ct, nil
+}
+
+// coeffDomainToLattigo converts coefficient-domain data to Lattigo's NTT domain.
+// The server applied HEonGPU's INTT, giving us standard coefficient-domain polynomials.
+// We just need to apply Lattigo's forward NTT to get back to Lattigo's domain.
+// This completely avoids the cross-library NTT conversion problem.
+func coeffDomainToLattigo(raw *pb.RawCiphertext, params hefloat.Parameters) (*rlwe.Ciphertext, error) {
+	if len(raw.Polynomials) < 2 {
+		return nil, fmt.Errorf("need at least 2 polynomials, got %d", len(raw.Polynomials))
+	}
+
+	numLevels := int(raw.Polynomials[0].NumLevels)
+	ringSize := int(raw.Polynomials[0].RingSize)
+	level := numLevels - 1
+
+	ct := rlwe.NewCiphertext(params, len(raw.Polynomials)-1, level)
+	ct.IsNTT = true
+	ct.IsMontgomery = false
+	ct.Scale = rlwe.NewScale(raw.Scale)
+	ct.LogDimensions = ring.Dimensions{Rows: 0, Cols: params.LogN() - 1}
+	ct.IsBatched = true
+
+	for i, rawPoly := range raw.Polynomials {
+		if len(rawPoly.Coefficients) != numLevels*ringSize {
+			return nil, fmt.Errorf("poly %d: expected %d coeffs, got %d",
+				i, numLevels*ringSize, len(rawPoly.Coefficients))
+		}
+
+		for lvl := 0; lvl < numLevels; lvl++ {
+			start := lvl * ringSize
+			coeffs := make([]uint64, ringSize)
+			copy(coeffs, rawPoly.Coefficients[start:start+ringSize])
+
+			// Apply Lattigo's forward NTT (coefficient domain → Lattigo NTT domain)
+			subRing := params.RingQ().SubRings[lvl]
+			tmp := make([]uint64, ringSize)
+			ring.NTTStandard(coeffs, tmp, ringSize, subRing.Modulus, subRing.MRedConstant, subRing.BRedConstant, subRing.RootsForward)
+			copy(ct.Value[i].Coeffs[lvl], tmp)
 		}
 	}
 

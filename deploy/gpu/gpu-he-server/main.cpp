@@ -24,6 +24,7 @@
 
 // HEonGPU headers
 #include <heongpu/heongpu.hpp>
+#include <gpuntt/ntt.cuh>  // For GPU_NTT_Inplace
 
 using grpc::Server;
 using grpc::ServerBuilder;
@@ -210,20 +211,8 @@ public:
             int Q_size = session->coeff_modulus_count;
 
             // --- Reconstruct ciphertext from raw coefficients ---
-            // Raw coefficients are already in HEonGPU's NTT domain (converted by Go client).
-            // Create a Ciphertext object and overwrite its data via cudaMemcpy.
             heongpu::Ciphertext<heongpu::Scheme::CKKS> ct_query(session->context);
             {
-                // Dummy encrypt to allocate GPU memory with correct structure
-                std::vector<double> dummy(ring_size / 2, 0.0);
-                heongpu::Plaintext<heongpu::Scheme::CKKS> pt_dummy(session->context);
-                session->encoder->encode(pt_dummy, dummy, pow(2.0, 45));
-
-                // We need a public key to encrypt — but we don't have one from the client.
-                // Instead, just allocate the ciphertext memory and overwrite.
-                // Ciphertext needs cipher_size_ * Q_size * ring_size uint64 values.
-                // For a fresh ct: 2 * Q_size * N values.
-
                 auto& raw_q = req->raw_query();
                 int num_polys = raw_q.polynomials_size(); // Should be 2
                 int num_levels = raw_q.polynomials(0).num_levels();
@@ -241,15 +230,44 @@ public:
                     }
                 }
 
-                // Upload to GPU by overwriting the ciphertext data
+                // Upload to GPU
                 ct_query.store_in_device();
                 cudaMemcpy(ct_query.data(), ct_data.data(),
                            ct_total * sizeof(uint64_t), cudaMemcpyHostToDevice);
                 cudaDeviceSynchronize();
 
-                // Set metadata that the default constructor left at 0
+                // If coefficients are in coefficient domain (not NTT),
+                // apply HEonGPU's own forward NTT on GPU.
+                // This avoids cross-library NTT conversion issues entirely.
+                if (req->query_is_coeff_domain()) {
+                    gpuntt::ntt_rns_configuration<uint64_t> ntt_cfg = {
+                        .n_power = session->context->n_power,
+                        .ntt_type = gpuntt::FORWARD,
+                        .ntt_layout = gpuntt::PerPolynomial,
+                        .reduction_poly = gpuntt::ReductionPolynomial::X_N_plus,
+                        .zero_padding = false,
+                        .stream = cudaStreamDefault
+                    };
+
+                    auto* ntt_table = session->context->get_ntt_table().data();
+                    auto* moduli = session->context->get_modulus().data();
+
+                    // Apply forward NTT to all polynomials in the ciphertext
+                    // Each polynomial has Q_size RNS components of ring_size coefficients
+                    gpuntt::GPU_NTT_Inplace(
+                        ct_query.data(), ntt_table, moduli, ntt_cfg,
+                        num_polys,  // 2 polynomials (c0, c1)
+                        Q_size      // 8 RNS moduli per polynomial
+                    );
+                    cudaDeviceSynchronize();
+
+                    std::cout << "[" << req->session_id()
+                              << "] Applied GPU NTT to coefficient-domain ciphertext" << std::endl;
+                }
+
+                // Set metadata
                 ct_query.set_scale(req->raw_query().scale());
-                ct_query.set_depth(0); // Fresh ciphertext from client
+                ct_query.set_depth(0);
             }
 
             auto after_ct_load = std::chrono::high_resolution_clock::now();
@@ -308,6 +326,29 @@ public:
             cudaDeviceSynchronize();
 
             // --- Extract result coefficients ---
+            // If input was coefficient-domain, apply INTT to result before sending
+            // so Go can apply Lattigo NTT directly (avoids cross-library NTT issues)
+            if (req->query_is_coeff_domain()) {
+                int res_levels = session->coeff_modulus_count - ct_result.depth();
+                gpuntt::ntt_rns_configuration<uint64_t> intt_cfg = {
+                    .n_power = session->context->n_power,
+                    .ntt_type = gpuntt::INVERSE,
+                    .ntt_layout = gpuntt::PerPolynomial,
+                    .reduction_poly = gpuntt::ReductionPolynomial::X_N_plus,
+                    .zero_padding = false,
+                    .stream = cudaStreamDefault
+                };
+                auto* intt_table = session->context->get_intt_table().data();
+                auto* moduli = session->context->get_modulus().data();
+
+                gpuntt::GPU_NTT_Inplace(
+                    ct_result.data(), intt_table, moduli, intt_cfg,
+                    ct_result.size(),  // 2 polynomials
+                    res_levels         // active RNS levels
+                );
+                cudaDeviceSynchronize();
+            }
+
             ct_result.store_in_host();
             std::vector<uint64_t> result_data;
             ct_result.get_data(result_data);
@@ -318,7 +359,7 @@ public:
             // Build raw result proto
             auto* raw_result = resp->mutable_raw_result();
             raw_result->set_scale(ct_result.scale());
-            raw_result->set_is_ntt(ct_result.in_ntt_domain());
+            raw_result->set_is_ntt(!req->query_is_coeff_domain()); // false if we applied INTT
             raw_result->set_depth(ct_result.depth());
 
             for (int p = 0; p < result_polys; p++) {

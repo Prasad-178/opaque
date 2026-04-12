@@ -75,19 +75,32 @@ echo "Building HEonGPU..."
 cd HEonGPU
 
 # Patch: add public setters for cross-library ciphertext reconstruction
-python3 -c "
+python3 << 'PATCHEOF'
+# Patch 1: Ciphertext set_scale/set_depth
 with open('src/include/heongpu/host/ckks/ciphertext.cuh', 'r') as f:
     c = f.read()
 marker = 'inline double scale() const noexcept { return scale_; }'
 if 'set_scale' not in c:
-    patch = marker + '\\n\\n        // Public setters for cross-library ciphertext reconstruction\\n        inline void set_scale(double s) noexcept { scale_ = s; }\\n        inline void set_depth(int d) noexcept { depth_ = d; }'
-    c = c.replace(marker, patch, 1)
+    c = c.replace(marker, marker + '\n\n        inline void set_scale(double s) noexcept { scale_ = s; }\n        inline void set_depth(int d) noexcept { depth_ = d; }', 1)
     with open('src/include/heongpu/host/ckks/ciphertext.cuh', 'w') as f:
         f.write(c)
-    print('HEonGPU patched with set_scale/set_depth')
-else:
-    print('HEonGPU already patched')
-" || echo "HEonGPU patch failed (non-blocking)"
+    print('Patched ciphertext with set_scale/set_depth')
+
+# Patch 2: Context public accessors for NTT table and modulus
+for ctx_file in ['src/include/heongpu/host/ckks/context.cuh', 'src/include/heongpu/host/bfv/context.cuh']:
+    try:
+        with open(ctx_file, 'r') as f:
+            c = f.read()
+        if 'get_ntt_table' not in c and 'ntt_table_' in c:
+            # Add public getters before the first 'private:' or at end of public section
+            c = c.replace('bool context_generated_', 'bool context_generated_;\n\n        auto& get_ntt_table() { return *ntt_table_; }\n        auto& get_intt_table() { return *intt_table_; }\n        auto& get_modulus() { return *modulus_; }', 1)
+            with open(ctx_file, 'w') as f:
+                f.write(c)
+            print(f'Patched {ctx_file} with NTT/modulus getters')
+    except FileNotFoundError:
+        pass
+PATCHEOF
+echo "HEonGPU patches applied" || echo "HEonGPU patch failed (non-blocking)"
 
 mkdir -p build && cd build
 cmake .. -DCMAKE_CUDA_ARCHITECTURES=75 2>/dev/null || echo "HEonGPU cmake failed (non-blocking)"

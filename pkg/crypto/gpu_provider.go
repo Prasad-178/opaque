@@ -235,18 +235,15 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 		p.mu.Unlock()
 	}
 
-	// Convert ciphertext to HEonGPU NTT domain.
-	var rawQuery *pb.RawCiphertext
-	if p.nttConverter != nil {
-		rawQuery = CiphertextToHEonGPU(encQuery, p.nttConverter)
-	} else {
-		rawQuery = extractRawCiphertext(encQuery)
-	}
+	// Send ciphertext in COEFFICIENT domain (after Lattigo INTT).
+	// The C++ server will apply HEonGPU's own NTT — this avoids cross-library
+	// NTT conversion entirely. The coefficients are still ENCRYPTED — this is
+	// just a different representation, not a security change.
+	engine := p.localPool.GetPrimaryEngine()
+	rawQuery := ciphertextToCoeffDomain(encQuery, p.nttConverter)
 
 	// For plaintext: send raw float64 values so the C++ server encodes
-	// them natively with HEonGPU's encoder. This avoids NTT domain conversion
-	// issues and guarantees correct HEonGPU metadata.
-	engine := p.localPool.GetPrimaryEngine()
+	// them natively with HEonGPU's encoder.
 	slotCount := 1 << (engine.params.LogN() - 1) // N/2 CKKS slots
 	ptValues := make([]float64, slotCount)
 	engine.encoder.Decode(packedCentroids, ptValues)
@@ -256,12 +253,13 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 	defer cancel()
 
 	resp, err := p.client.BatchDotProduct(ctx, &pb.BatchDotProductRequest{
-		SessionId:       p.sessionID,
-		RawQuery:        rawQuery,
-		PlaintextValues: ptValues,
-		PlaintextScale:  packedCentroids.Scale.Float64(),
-		NumCentroids:    int32(numCentroids),
-		Dimension:       int32(dimension),
+		SessionId:          p.sessionID,
+		RawQuery:           rawQuery,
+		PlaintextValues:    ptValues,
+		PlaintextScale:     packedCentroids.Scale.Float64(),
+		NumCentroids:       int32(numCentroids),
+		Dimension:          int32(dimension),
+		QueryIsCoeffDomain: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("BatchDotProduct RPC failed: %w", err)
@@ -270,18 +268,22 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 		return nil, fmt.Errorf("BatchDotProduct server error: %s", resp.Error)
 	}
 
-	// Reconstruct result — convert from HEonGPU domain back to Lattigo domain.
+	// Reconstruct result.
+	// The server applied INTT, so result is in coefficient domain.
+	// We just need to apply Lattigo NTT to get back to Lattigo's domain.
 	var result *rlwe.Ciphertext
-	if resp.RawResult != nil && len(resp.RawResult.Polynomials) > 0 && p.nttConverter != nil {
-		// Convert from HEonGPU NTT domain back to Lattigo Montgomery-NTT domain
-		result, err = CiphertextFromHEonGPU(resp.RawResult, engine.params, p.nttConverter)
-		if err != nil {
-			return nil, fmt.Errorf("convert HEonGPU result to Lattigo: %w", err)
+	if resp.RawResult != nil && len(resp.RawResult.Polynomials) > 0 {
+		if !resp.RawResult.IsNtt {
+			// Result is in coefficient domain — apply Lattigo NTT directly
+			result, err = coeffDomainToLattigo(resp.RawResult, engine.params)
+		} else if p.nttConverter != nil {
+			// Result is in HEonGPU NTT domain — convert via INTT + NTT
+			result, err = CiphertextFromHEonGPU(resp.RawResult, engine.params, p.nttConverter)
+		} else {
+			result, err = reconstructCiphertext(engine.params, resp.RawResult)
 		}
-	} else if resp.RawResult != nil && len(resp.RawResult.Polynomials) > 0 {
-		result, err = reconstructCiphertext(engine.params, resp.RawResult)
 		if err != nil {
-			return nil, fmt.Errorf("reconstruct raw result: %w", err)
+			return nil, fmt.Errorf("reconstruct result: %w", err)
 		}
 	} else {
 		result, err = engine.DeserializeCiphertext(resp.EncryptedResult)
