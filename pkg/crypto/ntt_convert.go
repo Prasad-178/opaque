@@ -152,11 +152,8 @@ func (c *NTTConverter) ConvertToHEonGPUDomain(coeffs []uint64, modulusIdx int) {
 		coeffs[i] = mulModBig(coeffs[i], rInv, p, pBig)
 	}
 
-	// Step 3: HEonGPU NTT (CT DIT → bit-reversed output)
+	// Step 3: HEonGPU NTT → HEonGPU NTT domain (standard, non-Montgomery)
 	c.nttCooleyTukeyInPlace(coeffs, p, c.heongpuNTTRoots[modulusIdx])
-
-	// Step 4: Bit-reverse permutation → natural order (HEonGPU's format)
-	bitReversePermute(coeffs, c.logN)
 }
 
 // ConvertToHEonGPUDomainNonMontgomery converts NON-Montgomery NTT coefficients.
@@ -165,12 +162,9 @@ func (c *NTTConverter) ConvertToHEonGPUDomainNonMontgomery(coeffs []uint64, modu
 	// Step 1: Lattigo INTT → coefficient domain
 	c.ConvertToCoeffDomain(coeffs, modulusIdx)
 
-	// Step 2: HEonGPU NTT (CT DIT → bit-reversed output)
+	// Step 2: HEonGPU NTT
 	p := c.allModuli[modulusIdx]
 	c.nttCooleyTukeyInPlace(coeffs, p, c.heongpuNTTRoots[modulusIdx])
-
-	// Step 3: Bit-reverse permutation → natural order (HEonGPU's format)
-	bitReversePermute(coeffs, c.logN)
 }
 
 // bitReversePermute applies an in-place bit-reverse permutation.
