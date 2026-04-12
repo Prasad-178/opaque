@@ -375,6 +375,11 @@ func (e *Engine) GetEvalKeys() *rlwe.MemEvaluationKeySet {
 	return e.evalKeys
 }
 
+// GetSecretKey returns the secret key. FOR TESTING ONLY — never send to server in production.
+func (e *Engine) GetSecretKey() *rlwe.SecretKey {
+	return e.secretKey
+}
+
 // HomomorphicBatchDotProduct computes multiple dot products in a single HE operation.
 // The query should be packed (replicated across slot segments) to match packed centroids.
 // Returns encrypted result where each dimension-sized segment contains one dot product.
