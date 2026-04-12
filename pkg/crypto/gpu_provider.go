@@ -247,14 +247,17 @@ func (p *GPUHEProvider) HomomorphicBatchDotProduct(encQuery *rlwe.Ciphertext, pa
 	}
 
 	// Extract raw coefficients with NTT domain conversion for HEonGPU.
+	// BOTH ciphertext AND plaintext must be in the same NTT domain,
+	// otherwise multiply_plain produces garbage.
 	var rawQuery *pb.RawCiphertext
+	var rawCentroids *pb.RawPlaintext
 	if p.nttConverter != nil {
-		// Convert ciphertext to HEonGPU's NTT domain (Montgomery removal + NTT conversion)
 		rawQuery = CiphertextToHEonGPU(encQuery, p.nttConverter)
+		rawCentroids = PlaintextToHEonGPU(packedCentroids, p.nttConverter)
 	} else {
 		rawQuery = extractRawCiphertext(encQuery)
+		rawCentroids = extractRawPlaintext(packedCentroids)
 	}
-	rawCentroids := extractRawPlaintext(packedCentroids)
 
 	// Send to GPU server.
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
