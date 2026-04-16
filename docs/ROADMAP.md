@@ -108,20 +108,12 @@ Add split/merge logic when cluster sizes become skewed. These formulas are exact
 ### Incremental Indexing (Tier 3: HE-Native Centroid Updates)
 Perform centroid updates entirely in the homomorphic encryption domain — the server updates encrypted centroids without ever decrypting them. This eliminates the plaintext-during-rebuild window and provides end-to-end encrypted index maintenance. The incremental mean formula requires only one HE subtraction, one scalar multiplication, and one HE addition (depth-1 circuit).
 
-### GPU Acceleration — Profiled, Benchmarked, Integration Layer Built
-Profiling reveals Galois rotation (key-switching) is 71-84% of HE time, not NTT. Real benchmarks on AWS g4dn.xlarge (Tesla T4) confirm **8.6x speedup on rotation** (0.76ms GPU vs 6.55ms CPU, verified across 2 benchmark runs). Cross-degree scaling measured from 4096 to 32768.
+### GPU Acceleration — PAUSED
+Profiling confirmed Galois rotation (key-switching) is 71-84% of HE time, not NTT. Real benchmarks on AWS g4dn.xlarge (Tesla T4) measured **8.6x speedup on rotation** (0.76ms GPU vs 6.55ms CPU). The Lattigo ↔ HEonGPU bridge math was fully debugged: encoder polynomials match byte-for-byte, NTT batch shape is correct, and 20/20 layered in-process GPU tests pass at the CKKS noise floor.
 
-**Implementation status:**
-- `GPUHEProvider` implementing `HEProvider` interface — done (`pkg/crypto/gpu_provider.go`)
-- GPU HE gRPC proto + generated code — done (`api/proto/gpuhe.proto`)
-- GPU server with CPU stub backend — done (`cmd/gpu-server/main.go`)
-- Config wiring (`GPUServerAddress`) — done
-- Tests (5 tests covering encrypt/decrypt, batch dot product, provider matching, pool, health) — done
-- Terraform infra for ephemeral GPU instances — done (`deploy/gpu/`)
-- **Eval key bridge:** COMPLETE — Lattigo → HEonGPU key transfer verified on GPU (rotation correct)
-- **Remaining:** end-to-end benchmark through full Opaque pipeline with GPU
+The path is **paused on a stateful gRPC bug** — the production server returns correct results on the first BatchDotProduct request after a cold start, then returns ~10^87 garbage on every subsequent request. Likely cause: RMM memory-pool reuse aliasing a scratch buffer inside HEonGPU's operator or context. End-to-end SIFT 100K recall on the gRPC path sits at 10–22 %.
 
-See `docs/GPU_ACCELERATION.md` for profiling data, benchmark results, and architecture.
+Deferred indefinitely. If revisited, disabling HEonGPU's RMM pool (`MemoryPool::use_memory_pool(false)`) or serialising gRPC handlers is the shortest credible next step. Full reproducer in `test/bridge_grpc_test.go` + `deploy/gpu/gpu-he-server/bridge_suite.cpp`; write-up in `docs/GPU_ACCELERATION.md`.
 
 ### ~~Product Quantization (PQ)~~ (Done)
 Optional PQ via `Config.PQSubspaces`. Compresses vectors into compact M-byte codes and uses ADC lookup tables for fast approximate scoring. Two-phase search: PQ ADC for bulk scoring, exact re-ranking of top candidates with full vectors. Applied client-side before AES encryption — zero privacy impact.

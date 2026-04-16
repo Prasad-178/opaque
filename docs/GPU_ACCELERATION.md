@@ -2,9 +2,9 @@
 
 ## Executive Summary
 
-We attempted to GPU-accelerate CKKS homomorphic encryption for privacy-preserving vector search by bridging Lattigo (Go, CPU) with HEonGPU (C++/CUDA, GPU) via gRPC. The effort produced valuable infrastructure and identified 5 critical bugs, but **the end-to-end recall is broken** due to an unresolved NTT domain conversion issue between the two libraries.
+We attempted to GPU-accelerate CKKS homomorphic encryption for privacy-preserving vector search by bridging Lattigo (Go, CPU) with HEonGPU (C++/CUDA, GPU) via gRPC. Three rounds of deep debugging isolated every bridge bug we originally suspected, including a real NTT-batch-shape kernel bug. **The remaining failure is a gRPC-server statefulness issue inside HEonGPU**, not the bridge itself.
 
-**Bottom line:** GPU path achieves **1.7x latency improvement** (144ms vs 244ms on SIFT 100K) but recall drops from 100% to ~14%, making it unusable for production. The recommended path forward is either CPU scale-out (simple, 1-2 weeks) or OpenFHE + FIDESlib (eliminates the bridge problem entirely, 4-6 weeks).
+**Bottom line:** Bridge math is **provably correct** in-process (20/20 layered GPU tests pass with error on the CKKS noise floor, ~1e-8). The first gRPC call after a cold server decrypts correctly. Every subsequent call returns ~10^87 garbage — deterministic state leak between requests. Recall on SIFT 100K still ~10–20% through the gRPC path. Recommended path forward: CPU scale-out (simple, 1–2 weeks) or OpenFHE + FIDESlib (replaces the entire GPU library, 4–6 weeks).
 
 ### Status at a Glance
 
@@ -12,10 +12,13 @@ We attempted to GPU-accelerate CKKS homomorphic encryption for privacy-preservin
 |-----------|--------|-------|
 | Profiling (bottleneck identification) | DONE | Galois rotation = 71-84% of HE time |
 | HEonGPU per-operation benchmarks | DONE | 8-313x faster per op on Tesla T4 |
+| Encoder / plaintext bridge | DONE | Coefficient polynomials byte-identical between Lattigo and HEonGPU; canonical embedding verified compatible. |
 | Eval key bridge (format + NTT conversion) | DONE | Verified correct: rotation [10,20,30,40] -> [20,30,40,0] |
+| Ciphertext bridge (NTT batch shape) | FIXED | Forward NTT over bridged ct must use `(cipher_size × Q_size, Q_size)`, not `(cipher_size, Q_size)`. Previous shape silently skipped primes Q[1..7]. Same pattern needed for result INTT. |
 | GPU batch dot product (isolated) | DONE | 0.54ms vs 48ms CPU = 89x speedup, ZERO error |
-| End-to-end pipeline (SIFT 100K) | DONE | 1.7x faster but recall broken (~14%) |
-| NTT domain conversion debugging | BLOCKED | Go round-trip perfect, GPU computation wrong |
+| Layered bridge_suite (10 tests in-process) | DONE | 20/20 PASS, max_err ≈ 8.5e-9. Covers ct-bridge-only, pt-bridge-only, multiply combos, +rescale, +rotate, full dot-product loop, and INTT + host round-trip. |
+| gRPC server (multi-request) | BLOCKED | First call after server cold-start passes; every subsequent call returns 10^87 garbage. State leak in HEonGPU context / RMM pool / galois-key device memory. |
+| End-to-end pipeline (SIFT 100K) | BLOCKED on above | Recall@10 ~14–22 % through gRPC. |
 
 ## End-to-End GPU Benchmark Results (SIFT 100K, Tesla T4)
 
@@ -25,21 +28,48 @@ These are measured end-to-end results on AWS g4dn.xlarge (Tesla T4, 4 vCPUs) run
 
 | Config | Recall@1 | Recall@10 | Avg Latency |
 |--------|----------|-----------|-------------|
-| cpu-strict8 | 100% | 98.3% | 244ms |
-| cpu-probe16 | 100% | 100% | 260ms |
+| cpu-strict8 | 100% | 99.3% | 245ms |
+| cpu-probe16 | 100% | 100% | 262ms |
 
-### GPU Path (coefficient-domain approach, latest)
+### GPU Path (gRPC + multi-request, after NTT-batch fix + sync patches)
 
 | Config | Recall@1 | Recall@10 | Avg Latency | Speedup |
 |--------|----------|-----------|-------------|---------|
-| gpu-strict8 | 13.3% | 14.3% | 144ms | **1.7x** |
-| gpu-probe16 | 26.7% | 24.7% | 176ms | **1.5x** |
+| gpu-strict8 | 10.0% | 14.7% | 155ms | **1.58x** |
+| gpu-probe16 | 20.0% | 22.3% | 188ms | **1.39x** |
 
-**Key finding:** The GPU path is 1.5-1.7x faster for latency, but recall is broken (13-27% vs 98-100%). The recall degradation is caused by NTT domain conversion issues between Lattigo and HEonGPU that corrupt ciphertext computation results on the GPU side.
+**Key finding:** The GPU compute pipeline is provably correct (see `bridge_suite` below: 20/20 layered in-process tests pass with 10^-8 error), but the production gRPC server leaks state between requests. The **first** call after a cold server decrypts correctly (~1e-8 error in `bridge_grpc_test`). Every subsequent call returns ~10^87 garbage. This collapses end-to-end recall to near-random.
+
+### Layered in-process GPU tests (`bridge_suite.cpp`, Tesla T4)
+
+| # | Layer | Result |
+|---|------|--------|
+| T0 | HEonGPU native encrypt + decrypt with loaded Lattigo sk | PASS (5e-10) |
+| T1 | Lattigo ct coef → cudaMemcpy → NTT → decrypt | PASS (6e-10) |
+| T2 | Lattigo pt coef → cudaMemcpy → NTT → decode | PASS (4e-12) |
+| T3 | Native ct × bridged pt → decrypt | PASS (6e-11) |
+| T4 | Bridged ct × native pt → decrypt | PASS (8e-11) |
+| T5 | Bridged ct × bridged pt → decrypt | PASS (8e-11) |
+| T6 | T5 + rescale_inplace | PASS (4e-10) |
+| T7 | T6 + rotate_rows(1) | PASS (2e-8) |
+| T8 | Full dot-product loop (rotate 1,2,4,…,64 + add) | PASS (9e-9) |
+| T9 | Result INTT → host round-trip → NTT → decrypt | PASS (9e-9) |
+
+All 20/20 tests pass across two independent test cases. The bridge math, the Galois key conversion, the cudaMemcpy plumbing and the full dot-product + result-INTT round-trip are each correct when invoked in a single process.
+
+### gRPC round-trip test (`test/bridge_grpc_test.go`)
+
+Same compute, but driven through the production gRPC `GPUHEProvider` with Lattigo-side decrypt:
+
+| Run | Case 0 | Case 1 | Case 2 | Case 3 | Case 4 |
+|-----|--------|--------|--------|--------|--------|
+| err | 1e-8 (**PASS**) | 10^87 (FAIL) | 10^87 (FAIL) | 10^87 (FAIL) | 10^87 (FAIL) |
+
+Pattern is deterministic across restarts: exactly the first request after a cold server produces correct results. Identical inputs on subsequent requests still fail.
 
 ## Bugs Found and Fixed
 
-Over the course of this effort, we found and fixed 5 distinct bugs in the Lattigo-to-HEonGPU bridge. Each one was a subtle interop issue that produced silently wrong results.
+Over the course of this effort we found and fixed **6** distinct bugs in the Lattigo-to-HEonGPU bridge. Each was a subtle interop issue that produced silently wrong results.
 
 | # | Bug | Symptom | Root Cause | Fix |
 |---|-----|---------|------------|-----|
@@ -48,34 +78,44 @@ Over the course of this effort, we found and fixed 5 distinct bugs in the Lattig
 | 3 | HEonGPU ciphertext `scale_=0` | `multiply_plain` computes `output.scale = 0 * pt_scale = 0` | HEonGPU default constructor sets `scale_=0`; after `cudaMemcpy`, scale remains zero | Explicitly set `scale_` after data loading |
 | 4 | Plaintext all zeros | GPU multiply produces zero output | Using `rlwe.NewPlaintext` (scale=0) instead of `hefloat.NewPlaintext` (sets scale from params) | Use `hefloat.NewPlaintext` which properly initializes scale |
 | 5 | Proto Depth field semantics mismatch | Fresh ciphertexts treated as nearly-exhausted | Go sends Lattigo `Level()` (7) as Depth, but HEonGPU expects `depth=0` for fresh ciphertext | Send `depth=0` for fresh ciphertexts; HEonGPU depth = max_level - lattigo_level |
+| **6** | **HEonGPU RNS NTT batch shape** | **Forward NTT on bridged ct silently skipped primes Q[1..7]; recall collapsed to 14 %.** | **Used `GPU_NTT_Inplace(batch=cipher_size, mod_count=Q_size)`. HEonGPU's own `operator.cu` uses `batch_size = cipher_size × decomp_count, mod_count = decomp_count` for every ciphertext-level RNS NTT call. The kernel in `PerPolynomial` layout treats `batch_size` as the total number of polynomial-NTTs to issue, not the cipher-dimension. The smaller batch value we had made the kernel only launch work for mod 0.** | **Forward: `(num_polys × Q_size, Q_size)`. Result INTT: `(cipher_size × res_levels, res_levels)`, switch to the dedicated `GPU_INTT_Inplace` entry with `mod_inverse` set explicitly.** |
 
-## Remaining Unsolved Issue: NTT Domain Conversion
+## Remaining Unsolved Issue: gRPC Server State Leak
 
-The NTT domain conversion between Lattigo and HEonGPU has an unresolved mismatch that causes recall to drop to ~14% in end-to-end search.
+After bug #6 was fixed, every layer of the bridge works in-process (20/20 tests in `deploy/gpu/gpu-he-server/bridge_suite.cpp`). **But the production gRPC server still fails on every request after the first.**
 
-### What works
+### What we proved PASSES
 
-- **Go-side round-trip is PERFECT**: Lattigo coefficients -> INTT_Lattigo -> NTT_HEonGPU -> INTT_HEonGPU -> NTT_Lattigo produces zero error across all 8192 slots.
-- **HEonGPU native operations work**: `cudaMemcpy` bridge with HEonGPU-native data produces correct results.
-- **Eval key bridge works**: Rotation of `[10,20,30,40]` -> `[20,30,40,0]` verified correct on GPU.
-- **Isolated batch dot product works**: 0.54ms, ZERO error against expected values.
+- **Canonical embedding is compatible.** `encode_compare` dumps the coefficient polynomial of the same input vector from both libraries; Q[0..7] match byte-for-byte. Previous hypothesis that Lattigo and HEonGPU encoded vectors differently is disproved.
+- **Ciphertext bridge is correct.** Lattigo ct → INTT → coefficients → `cudaMemcpy` → HEonGPU NTT → decrypt (with loaded Lattigo sk) recovers the original vector with CKKS noise floor error. `bridge_suite` T1 proves it.
+- **Full GPU pipeline is correct.** Bridged ct × bridged pt → rescale → 7 rotations (powers of 2 up to 64) + add → slot 0 of each segment decrypts to the expected dot product. `bridge_suite` T8 passes with 9e-9 error.
+- **Return path is correct.** After the rotation loop, INTT on result + host round-trip + NTT + decrypt reproduces the expected values. `bridge_suite` T9 passes.
+- **First gRPC request is correct.** `test/bridge_grpc_test.go` with `nCases=1` passes with 5e-9 error — through the real `GPUHEProvider`, real gRPC transport, and real Lattigo-side decrypt.
 
-### What doesn't work
+### What FAILS
 
-When Lattigo-converted ciphertext data goes through HEonGPU's `multiply_plain` + `rescale` + `rotate` pipeline in the full search path, results are incorrect. The recall drops to ~14%, which is approximately random performance.
+Any BatchDotProduct request AFTER the first on a live gRPC server returns 10^87-order garbage, deterministically, with identical inputs. The failure is independent of:
 
-### What we tried
+- Query / centroid data (reproduced with fixed seed across cases)
+- NTT batch shape (already the fixed one)
+- Scale / depth metadata (server logs `depth=1 numLevels=7 scale=2^45` on every response)
+- Session-level state (session map keeps the same context, encoder, ops, galois_key across calls)
 
-| Approach | Result |
-|----------|--------|
-| Go NTT conversion (INTT_Lattigo -> NTT_HEonGPU) | Round-trip perfect in Go, but GPU produces wrong results |
-| Bit-reverse permutation | No effect (both libraries use same ordering) |
-| Coefficient-domain approach (skip Go NTT, let GPU apply HEonGPU's NTT) | GPU is faster (1.7x) but recall still ~14% |
-| Native plaintext encoding (send float64 values, HEonGPU encodes) | Works for plaintexts but doesn't fix ciphertext issue |
+Patches that did NOT fix the second-call bug:
+- Fresh `HEEncoder` / `HEArithmeticOperator` constructed inside each gRPC handler
+- `cudaSetDevice(0)` at handler entry
+- `cudaDeviceSynchronize` between every op, including around the Ciphertext copy constructor that `cudaMemcpyAsync`s the accumulator
+- `cudaMemset` zero-fill of `ct_query.data()` before the cudaMemcpy of bridged coefficients
 
 ### Hypothesis
 
-There is likely a normalization factor difference between Lattigo's INTT output and HEonGPU's expected coefficient-domain format. Specifically, the N^{-1} factor that INTT applies may differ, or there may be a missing/extra scaling in one library's NTT convention.
+The leak is below the HEonGPU op layer. Most likely suspects:
+
+1. **RMM memory pool.** HEonGPU's `DeviceVector<T>` extends `rmm::device_uvector<T>`. After the first request frees its temporaries, the pool reuses the same device addresses for subsequent allocations. Some scratch buffer (e.g. `new_prime_locations_` inside `HEArithmeticOperator`, or context-level `rescaled_*`) may be read while being overwritten by the concurrent request.
+2. **HEContext scratch buffers.** Fields like `rescaled_half_`, `rescaled_half_mod_`, `rescaled_last_q_modinv_` live on the context and are reused by every rescale. If they require some initialization that only happens during the first rescale or the first NTT forward pass, the second call reads stale values.
+3. **Galois key device memory corruption.** `apply_galois_ckks_method_I` performs an in-place GPU_NTT_Modulus_Ordered_Inplace on a temp buffer and reads `galois_key.device_location_[galoiselt]`. If any in-place NTT clobbers its own input after the first run, subsequent rotations see corrupted keys. Inspection of the kernel code suggests read-only access, but the effect matches.
+
+None of these have been confirmed yet, but the stateful failure pattern — **cold server → first call works, every later call returns garbage of magnitude ~10^87** — is a fingerprint of an in-place op on a buffer that's aliased by a subsequent allocation.
 
 ## Profiling Results
 
@@ -250,44 +290,53 @@ PQ-M32 probe-8 is **measured** at 497ms on CPU (see BENCHMARKS.md). The breakdow
 
 ## If Picking Up Again -- Start Here
 
-If someone (including future us) wants to resume the GPU acceleration work, here is the shortest path to progress.
+If someone (including future us) wants to resume the GPU acceleration work, the compute path is solved — focus entirely on the gRPC server state leak.
 
-### 1. The coefficient-domain approach is closest to working
+### 1. Reproduce the failure quickly
 
-The GPU is already 1.7x faster for latency. The only problem is recall. All infrastructure is built and working.
+```
+cd deploy/gpu
+terraform apply -var="enabled=true" -var="aws_profile=personal" -var="use_spot=false"
+# wait for setup, then:
+bash deploy/gpu/run_encode_compare.sh   # encoder match: expected PASS
+# bridge_suite in-process:
+ssh ... 'cd opaque/deploy/gpu/gpu-he-server/build && ./bridge_suite \
+  /tmp/bridge_sk.bin /tmp/bridge_galois.bin /tmp/bridge_test.bin'    # 20/20 PASS
+# gRPC round-trip:
+GPU_HE_SERVER=localhost:50052 go test -tags sift1m -count=1 -v \
+  -run TestBridge_GPURoundTrip ./test/ -timeout 5m                   # case 0 PASS, rest FAIL
+```
 
-### 2. Write a C++ diagnostic for NTT normalization
+### 2. First investigation — RMM pool behaviour
 
-Create a test in `deploy/gpu/gpu-he-server/` that:
-1. Takes `[1, 0, 0, ..., 0]` in coefficient domain
-2. Applies HEonGPU's forward NTT
-3. Applies HEonGPU's inverse NTT
-4. Checks if you get `[1, 0, 0, ..., 0]` back
+HEonGPU uses RMM. Our best guess is its pool reuses device memory between gRPC calls in a way that aliases an in-flight scratch buffer. Concrete next step: call
+`heongpu::MemoryPool::use_memory_pool(false)` (defined in `src/lib/util/memorypool.cu`) during `InitContext` and re-run `TestBridge_GPURoundTrip` with 5 cases. If they all pass, the pool is the culprit and the fix is either disabling the pool globally or isolating per-request allocations.
 
-This verifies whether HEonGPU's NTT includes the N^{-1} normalization factor in INTT (standard convention) or distributes it differently.
+### 3. Second investigation — serialise BatchDotProduct
 
-### 3. Compare Lattigo's INTT output with HEonGPU's expectations
+Set gRPC server's `thread_pool` size to 1 via `ServerBuilder::SetSyncServerOption(NUM_CQS, 1); SetSyncServerOption(MIN_POLLERS, 1); SetSyncServerOption(MAX_POLLERS, 1);`. If passing on all 5 cases, the bug is thread-bound CUDA context re-entry. The fix is to either pin the server to a single worker or call `cudaSetDevice(0)` + `cudaStreamSynchronize(cudaStreamDefault)` at handler entry.
 
-For a known NTT input (e.g., the NTT of `[1, 0, ..., 0]`):
-- Compute Lattigo's INTT output
-- Compute HEonGPU's INTT output
-- If they differ by a factor of N (or N^{-1} mod Q), that confirms the normalization mismatch
+### 4. Third investigation — galois key immutability
 
-### 4. Key files
+Before each `rotate_rows_inplace`, checksum the galois key's device memory (or the specific key selected for `shift`). If the checksum differs between the first request and the second, a prior op is writing back into the galois key. The fix would be to reload galois keys between requests (expensive — 280 MB per session) or file an upstream HEonGPU issue.
+
+### 5. Key files
 
 | File | Purpose |
 |------|---------|
-| `go/pkg/crypto/ntt_convert.go` | Go-side NTT domain conversion (Lattigo <-> HEonGPU) |
-| `go/pkg/crypto/ciphertext_convert.go` | Ciphertext format conversion for the gRPC bridge |
-| `deploy/gpu/gpu-he-server/main.cpp` | C++ GPU server (gRPC handlers, HEonGPU integration) |
-| `go/pkg/crypto/bridge_diagnostic_test.go` | Go diagnostic tests (12 tests, all pass) |
-| `deploy/gpu/gpu-he-server/bridge_diagnostic.cpp` | C++ diagnostic tests (all pass) |
+| `pkg/crypto/ntt_convert.go` | Go-side NTT domain conversion (Lattigo ↔ HEonGPU). Done. |
+| `pkg/crypto/ciphertext_convert.go` | Ciphertext format conversion for the gRPC bridge. Done. |
+| `deploy/gpu/gpu-he-server/main.cpp` | C++ GPU server. NTT batch shape fix is here. State leak is here. |
+| `deploy/gpu/gpu-he-server/bridge_suite.cpp` | 10-layer in-process GPU test. PASSES 20/20. |
+| `deploy/gpu/gpu-he-server/encode_compare.cpp` | Proves Lattigo and HEonGPU coefficients match byte-for-byte. |
+| `cmd/bridge-export/main.go` | Dumps the test fixture bridge_suite consumes. |
+| `test/bridge_grpc_test.go` | Production twin. First call PASS, rest FAIL — the remaining bug. |
 
-### 5. Key tests
+### 6. Key tests
 
-- **Go diagnostics**: `go test -v -run TestBridge ./pkg/crypto/` -- 12 tests covering NTT round-trip, Montgomery handling, coefficient ordering, metadata reconstruction. All pass.
-- **C++ diagnostics**: `bridge_diagnostic.cpp` -- verifies HEonGPU-side data loading, NTT operations, key reconstruction. All pass.
-- **End-to-end GPU**: requires running the GPU server on a CUDA instance and the Go client pointing at it via gRPC.
+- **In-process GPU**: `./bridge_suite` — 20/20 PASS. Gold standard.
+- **Production gRPC**: `TestBridge_GPURoundTrip` — 1/N PASS, N-1 FAIL. The bug to fix.
+- **End-to-end SIFT 100K**: `TestGPU_E2E_SIFT100K` — 10–22 % recall. Will fix itself once the gRPC state leak is resolved.
 
 ## Future Alternatives
 
