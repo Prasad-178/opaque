@@ -173,3 +173,48 @@ target_link_directories(encode_compare PRIVATE
 )
 
 target_link_libraries(encode_compare PRIVATE ${HEONGPU_LIBS})
+
+# -----------------------------------------------------------------------------
+# bridge_suite — layered bridge tests using Lattigo-exported sk, galois keys,
+# ciphertext/plaintext coefs, and expected results. Finds the layer at which
+# the ciphertext bridge diverges.
+# -----------------------------------------------------------------------------
+set_source_files_properties(bridge_suite.cpp PROPERTIES LANGUAGE CUDA)
+add_executable(bridge_suite bridge_suite.cpp)
+
+target_include_directories(bridge_suite PRIVATE
+    ${HEONGPU_DIR}/src/include
+    ${HEONGPU_DIR}/thirdparty/GPU-NTT/src/include
+    ${HEONGPU_DIR}/thirdparty/GPU-FFT/src/include
+    ${HEONGPU_DIR}/thirdparty/RNGonGPU/src/include
+    ${HEONGPU_BUILD_DIR}/_deps/gpu-ntt-src/src/include
+    ${HEONGPU_BUILD_DIR}/_deps/rmm-src/include
+    ${HEONGPU_BUILD_DIR}/_deps/rmm-src/cpp/include
+    ${HEONGPU_BUILD_DIR}/_deps/rmm-build/include
+    ${HEONGPU_BUILD_DIR}/_deps/spdlog-src/include
+    ${HEONGPU_BUILD_DIR}/_deps/rapids_logger-src/include
+    ${HEONGPU_BUILD_DIR}/_deps/nvtx3-src/c/include
+)
+
+set_target_properties(bridge_suite PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CUDA_STANDARD 20
+    CXX_STANDARD 20
+)
+
+target_compile_definitions(bridge_suite PRIVATE
+    LIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE
+)
+
+target_link_directories(bridge_suite PRIVATE
+    ${HEONGPU_BUILD_DIR}/src
+    ${HEONGPU_BUILD_DIR}/thirdparty/GPU-NTT/src
+    ${HEONGPU_BUILD_DIR}/thirdparty/GPU-FFT/src
+    ${HEONGPU_BUILD_DIR}/thirdparty/RNGonGPU/src
+    ${HEONGPU_BUILD_DIR}/_deps/rmm-build
+    ${HEONGPU_BUILD_DIR}/_deps/spdlog-build
+    ${HEONGPU_BUILD_DIR}/_deps/rapids_logger-build
+)
+
+target_link_libraries(bridge_suite PRIVATE ${HEONGPU_LIBS})

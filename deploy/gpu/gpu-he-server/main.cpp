@@ -230,8 +230,12 @@ public:
                     }
                 }
 
-                // Upload to GPU
+                // Upload to GPU — zero first so any stale residue in the RMM
+                // pool cannot leak into primes 1..7 on subsequent requests.
                 ct_query.store_in_device();
+                cudaMemset(ct_query.data(), 0,
+                           num_polys * Q_size * ring_size * sizeof(uint64_t));
+                cudaDeviceSynchronize();
                 cudaMemcpy(ct_query.data(), ct_data.data(),
                            ct_total * sizeof(uint64_t), cudaMemcpyHostToDevice);
                 cudaDeviceSynchronize();
@@ -284,7 +288,8 @@ public:
                 std::vector<double> values(req->plaintext_values().begin(),
                                            req->plaintext_values().end());
                 double scale = req->plaintext_scale() > 0 ? req->plaintext_scale() : pow(2.0, 45);
-                session->encoder->encode(pt_centroids, values, scale);
+                heongpu::HEEncoder<heongpu::Scheme::CKKS> pt_enc(session->context);
+                pt_enc.encode(pt_centroids, values, scale);
             } else if (req->has_raw_centroids()) {
                 // Legacy: raw NTT-converted coefficients (may have metadata issues)
                 auto& raw_pt = req->raw_centroids().polynomial();
@@ -306,14 +311,23 @@ public:
             // --- GPU Batch Dot Product ---
             auto mul_start = std::chrono::high_resolution_clock::now();
 
+            // Isolate per-request: the persistent session->ops / encoder
+            // carry state across calls that causes second-and-later requests
+            // to produce garbage ciphertexts. Rebuilding per call avoids it.
+            heongpu::HEEncoder<heongpu::Scheme::CKKS> local_enc(session->context);
+            heongpu::HEArithmeticOperator<heongpu::Scheme::CKKS> local_ops(
+                session->context, local_enc);
+
             // Step 1: Multiply encrypted query × plaintext centroids
             heongpu::Ciphertext<heongpu::Scheme::CKKS> ct_result(session->context);
-            session->ops->multiply_plain(ct_query, pt_centroids, ct_result);
+            local_ops.multiply_plain(ct_query, pt_centroids, ct_result);
+            cudaDeviceSynchronize();
 
             auto rescale_start = std::chrono::high_resolution_clock::now();
 
             // Step 2: Rescale
-            session->ops->rescale_inplace(ct_result);
+            local_ops.rescale_inplace(ct_result);
+            cudaDeviceSynchronize();
 
             auto rotate_start = std::chrono::high_resolution_clock::now();
 
@@ -321,13 +335,15 @@ public:
             if (session->galois_key) {
                 for (int stride = 1; stride < dim; stride *= 2) {
                     heongpu::Ciphertext<heongpu::Scheme::CKKS> ct_rotated(ct_result);
-                    session->ops->rotate_rows_inplace(ct_rotated, *session->galois_key, stride);
-                    session->ops->add_inplace(ct_result, ct_rotated);
+                    cudaDeviceSynchronize(); // copy ctor uses cudaMemcpyAsync
+                    local_ops.rotate_rows_inplace(ct_rotated, *session->galois_key, stride);
+                    cudaDeviceSynchronize();
+                    local_ops.add_inplace(ct_result, ct_rotated);
+                    cudaDeviceSynchronize();
                 }
             }
 
             auto compute_end = std::chrono::high_resolution_clock::now();
-            cudaDeviceSynchronize();
 
             // --- Extract result coefficients ---
             // If input was coefficient-domain, apply INTT to result before sending
