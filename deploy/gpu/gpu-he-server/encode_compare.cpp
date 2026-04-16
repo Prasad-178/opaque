@@ -188,8 +188,9 @@ int main(int argc, char** argv) {
         const auto& v = tests[5].values; // constant_0.5
         encoder.encode(pt_sanity, v, scale);
 
-        // INTT in place → coefficient domain
-        gpuntt::GPU_NTT_Inplace(
+        // INTT in place → coefficient domain (use dedicated INTT entry point,
+        // matching the decoder's path).
+        gpuntt::GPU_INTT_Inplace(
             pt_sanity.data(),
             ctx->get_intt_table().data(),
             ctx->get_modulus().data(),
@@ -222,17 +223,90 @@ int main(int argc, char** argv) {
             if (e > rt_err) rt_err = e;
         }
         std::cout << "  Self-test INTT→NTT max_err = " << std::scientific
-                  << std::setprecision(3) << rt_err << "\n\n";
+                  << std::setprecision(3) << rt_err << "\n";
+
+        // Second self-test: the bridge path on HEonGPU-native coefficients.
+        // Encode zeros to initialize pt_bridge, then copy HEonGPU's own
+        // coefficient polynomial, apply NTT, decode.
+        Plaintext<S> pt_bridge_native(ctx);
+        encoder.encode(pt_bridge_native, std::vector<double>(slot_count, 0.0), scale);
+        cudaMemcpy(pt_bridge_native.data(), coef_host.data(),
+                   (size_t)Q_size * N * sizeof(uint64_t),
+                   cudaMemcpyHostToDevice);
+        cudaDeviceSynchronize();
+        gpuntt::GPU_NTT_Inplace(
+            pt_bridge_native.data(),
+            ctx->get_ntt_table().data(),
+            ctx->get_modulus().data(),
+            cfg_ntt, 1, Q_size);
+        cudaDeviceSynchronize();
+        std::vector<double> decoded_bn(slot_count);
+        encoder.decode(decoded_bn, pt_bridge_native);
+        double bn_err = 0;
+        for (int i = 0; i < slot_count; i++) {
+            double e = std::abs(decoded_bn[i] - v[i]);
+            if (e > bn_err) bn_err = e;
+        }
+        std::cout << "  Self-test bridge (native coef → cudaMemcpy → NTT → decode) "
+                     "max_err = " << std::scientific << std::setprecision(3)
+                  << bn_err << "\n\n";
     }
 
     for (const auto& t : tests) {
         std::cout << "--- Test \"" << t.name << "\" ---\n";
+
+        // Debug: print Lattigo Q[0] first 8 coefficients for sanity check.
+        std::cout << "  Lattigo Q[0] first 8: ";
+        for (int i = 0; i < 8; i++) std::cout << t.lattigo_poly[i] << " ";
+        std::cout << "\n";
 
         // (a) Native HEonGPU encode → decode round-trip
         Plaintext<S> pt_native(ctx);
         encoder.encode(pt_native, t.values, scale);
         std::vector<double> decoded_native(slot_count);
         encoder.decode(decoded_native, pt_native);
+
+        // Debug: compare HEonGPU's own coefficient-domain polynomial to
+        // Lattigo's for all primes. If they match, the canonical embedding is
+        // identical and any decoder divergence points to a bridge plumbing bug.
+        {
+            Plaintext<S> pt_copy(ctx);
+            encoder.encode(pt_copy, t.values, scale);
+            gpuntt::GPU_INTT_Inplace(
+                pt_copy.data(),
+                ctx->get_intt_table().data(),
+                ctx->get_modulus().data(),
+                cfg_intt, Q_size, Q_size);
+            cudaDeviceSynchronize();
+            std::vector<uint64_t> h((size_t)Q_size * N);
+            cudaMemcpy(h.data(), pt_copy.data(),
+                       (size_t)Q_size * N * sizeof(uint64_t),
+                       cudaMemcpyDeviceToHost);
+            cudaDeviceSynchronize();
+
+            // Report per-prime matching status.
+            for (int p = 0; p < Q_size; p++) {
+                int diffs = 0;
+                for (int i = 0; i < N; i++) {
+                    if (h[(size_t)p * N + i] != t.lattigo_poly[(size_t)p * N + i]) {
+                        diffs++;
+                    }
+                }
+                std::cout << "  prime " << p << ": "
+                          << (diffs == 0 ? "MATCH" : std::to_string(diffs) + " diffs")
+                          << "  L[0..3]="
+                          << t.lattigo_poly[(size_t)p * N + 0] << " "
+                          << t.lattigo_poly[(size_t)p * N + 1] << " "
+                          << t.lattigo_poly[(size_t)p * N + 2] << " "
+                          << t.lattigo_poly[(size_t)p * N + 3]
+                          << "  H[0..3]="
+                          << h[(size_t)p * N + 0] << " "
+                          << h[(size_t)p * N + 1] << " "
+                          << h[(size_t)p * N + 2] << " "
+                          << h[(size_t)p * N + 3]
+                          << "\n";
+            }
+        }
 
         double native_err = 0.0;
         for (int i = 0; i < slot_count; i++) {
@@ -263,8 +337,8 @@ int main(int argc, char** argv) {
             ctx->get_ntt_table().data(),
             ctx->get_modulus().data(),
             cfg_ntt,
-            1,        // one polynomial per plaintext
-            Q_size    // Q_size RNS components
+            Q_size,   // batch: kernel actually processes batch×mod NTTs even for a
+            Q_size    // single plaintext, matching HEonGPU's own decoder call.
         );
         cudaDeviceSynchronize();
 

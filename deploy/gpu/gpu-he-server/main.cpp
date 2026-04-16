@@ -241,7 +241,7 @@ public:
                 // This avoids cross-library NTT conversion issues entirely.
                 if (req->query_is_coeff_domain()) {
                     gpuntt::ntt_rns_configuration<uint64_t> ntt_cfg = {
-                        .n_power = session->context->get_n_power(),
+                        .n_power = session->context->get_log_poly_modulus_degree(),
                         .ntt_type = gpuntt::FORWARD,
                         .ntt_layout = gpuntt::PerPolynomial,
                         .reduction_poly = gpuntt::ReductionPolynomial::X_N_plus,
@@ -252,13 +252,17 @@ public:
                     auto* ntt_table = session->context->get_ntt_table().data();
                     auto* moduli = session->context->get_modulus().data();
 
-                    // Apply forward NTT to all polynomials in the ciphertext
-                    // Each polynomial has Q_size RNS components of ring_size coefficients
+                    // Apply forward NTT to all polynomials in the ciphertext.
+                    // HEonGPU's own operator.cu uses batch_size = cipher_size *
+                    // decomp_count, mod_count = decomp_count for ciphertext RNS
+                    // NTTs (see e.g. rescale_inplace_ckks_leveled). The previous
+                    // call used (num_polys=2, Q_size), which silently no-op'd
+                    // every prime after Q[0] and was the root cause of the
+                    // 14 % recall on the coefficient-domain bridge.
                     gpuntt::GPU_NTT_Inplace(
                         ct_query.data(), ntt_table, moduli, ntt_cfg,
-                        num_polys,  // 2 polynomials (c0, c1)
-                        Q_size      // 8 RNS moduli per polynomial
-                    );
+                        num_polys * Q_size,
+                        Q_size);
                     cudaDeviceSynchronize();
 
                     std::cout << "[" << req->session_id()
@@ -331,21 +335,25 @@ public:
             if (req->query_is_coeff_domain()) {
                 int res_levels = session->coeff_modulus_count - ct_result.depth();
                 gpuntt::ntt_rns_configuration<uint64_t> intt_cfg = {
-                    .n_power = session->context->get_n_power(),
+                    .n_power = session->context->get_log_poly_modulus_degree(),
                     .ntt_type = gpuntt::INVERSE,
                     .ntt_layout = gpuntt::PerPolynomial,
                     .reduction_poly = gpuntt::ReductionPolynomial::X_N_plus,
                     .zero_padding = false,
+                    .mod_inverse = session->context->get_n_inverse().data(),
                     .stream = cudaStreamDefault
                 };
                 auto* intt_table = session->context->get_intt_table().data();
                 auto* moduli = session->context->get_modulus().data();
 
-                gpuntt::GPU_NTT_Inplace(
+                // Use dedicated INTT entry point; GPU_NTT_Inplace does NOT
+                // dispatch on cfg.ntt_type when called without an INVERSE-
+                // specific path. batch_size = cipher_size * active_levels,
+                // matching HEonGPU operator.cu's own ciphertext INTT pattern.
+                gpuntt::GPU_INTT_Inplace(
                     ct_result.data(), intt_table, moduli, intt_cfg,
-                    ct_result.size(),  // 2 polynomials
-                    res_levels         // active RNS levels
-                );
+                    ct_result.size() * res_levels,
+                    res_levels);
                 cudaDeviceSynchronize();
             }
 
