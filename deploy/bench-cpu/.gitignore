@@ -3,4 +3,5 @@
 .terraform/
 .terraform.lock.hcl
 bench-cpu-key.pem
-results/
+results/*/
+
