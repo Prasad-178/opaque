@@ -4,10 +4,17 @@
 
 **Opaque achieves the fastest published results for private vector search at million-scale:**
 
-| System | Year/Venue | Approach | Scale | Recall@10 | Latency | Security |
-|--------|-----------|----------|-------|-----------|---------|----------|
-| **Opaque (PQ)** | **2026** | **CKKS HE + PQ + AES + decoys** | **1M, 128d** | **99.6%** | **415ms** | **HE + AES + access pattern hiding** |
-| **Opaque (PQ)** | **2026** | **CKKS HE + PQ + AES + decoys** | **100K, 960d** | **98.0%** | **497ms** | **HE + AES + access pattern hiding** |
+Hardware context matters for this table. Where possible we report the
+competitor's published hardware inline. Opaque rows are from AWS
+`c6i.2xlarge` (8 vCPU Intel Ice Lake) — the commodity production tier
+(Pinecone `p1.x1` / Qdrant 8-core pod). All Opaque numbers are
+reproducible via `bash deploy/bench-cpu/run_bench.sh c6i.2xlarge`.
+
+| System | Year/Venue | Approach | Scale | Recall@10 | Latency | Hardware | Security |
+|--------|-----------|----------|-------|-----------|---------|----------|----------|
+| **Opaque (probe-8)** | **2026** | **CKKS HE + AES + decoys** | **1M, 128d** | **99.8%** | **345ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + access-pattern hiding** |
+| **Opaque (PQ-M8-probe32)** | **2026** | **CKKS HE + PQ + AES + decoys** | **1M, 128d** | **100.0%** | **497ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + access-pattern hiding** |
+| **Opaque (PQ, GIST)** | **2026** | **CKKS HE + PQ + AES + decoys** | **100K, 960d** | **98.0%** | **497ms** | **M4 Pro (10 vCPU)** | **HE + AES + access-pattern hiding** |
 | Compass | OSDI 2025 | ORAM + HNSW | ~1M | high | ~1s | Full server compromise |
 | PPMI | arXiv 2025 | CKKS + AES-256 | 1M | >99% | 951ms | 128-bit IND-CPA |
 | RemoteRAG | ACL 2025 | PHE + DP | 1M | 100% | 670ms | Differential privacy + PHE |

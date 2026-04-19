@@ -38,3 +38,6 @@ notes.txt
 GUY_MEETING_NOTES.md
 *.out
 third_party/
+
+# Terraform state
+terraform.tfstate

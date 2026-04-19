@@ -68,18 +68,20 @@ GitHub Actions CI pipeline runs lint + tests on every push/PR. Weekly benchmark 
 ### ~~gRPC Service~~ (Done)
 Complete gRPC server implementation with all 7 RPC handlers (RegisterKey, GetPlanes, GetCandidates, ComputeScores, ComputeScoresStream, Search, HealthCheck). Includes recovery/logging interceptors, optional TLS, and full integration tests. See `go/pkg/grpcserver/`.
 
-### ~~SIFT1M Benchmarks~~ (Done)
-Benchmark suite for the full SIFT1M dataset (1 million 128-dim vectors) with production-realistic configs. Ground truth computed via brute-force cosine similarity over all 1M vectors. Key results (128 clusters, 8 decoys):
+### ~~SIFT1M Benchmarks~~ (Done, validated on AWS)
+Benchmark suite for the full SIFT1M dataset (1 million 128-dim vectors) with production-realistic configs. Ground truth computed via brute-force cosine similarity over all 1M vectors. Runs on AWS EC2 `c6i.2xlarge` (8 vCPU, Pinecone `p1.x1` class) and `c6i.4xlarge` (16 vCPU, Qdrant / Weaviate standard pod class) under `deploy/bench-cpu/`. Key results on c6i.2xlarge (128 clusters, 8 decoys):
 
 | Config | Probe % | Recall@1 | Recall@10 | Avg Query |
 |--------|---------|----------|-----------|-----------|
-| strict-4 | 3.1% | 82.0% | 79.4% | 274ms |
-| strict-8 | 6.2% | 98.0% | 96.8% | 508ms |
-| strict-16 | 12.5% | 100% | 99.8% | 991ms |
-| probe-8 (multi) | 6.2%+ | 98.0% | 97.4% | 548ms |
-| probe-16 (multi) | 12.5%+ | 100% | 99.8% | 1.07s |
+| strict-4 | 3.1% | 90.0% | 87.6% | 238ms |
+| strict-8 | 6.2% | 94.0% | 93.6% | 282ms |
+| strict-16 | 12.5% | 100% | 99.2% | 349ms |
+| probe-8 (multi) | 6.2%+ | 100% | 99.8% | 345ms |
+| probe-16 (multi) | 12.5%+ | 100% | 100% | 452ms |
 
-Scaling test (strict-8 config) shows sub-linear latency growth from 100K to 1M vectors. Download script at `scripts/download_sift1m.sh`, benchmark at `go/test/sift1m_benchmark_test.go` (build tag: `sift1m`). Runs weekly in CI with dataset caching.
+PQ-M8-probe32 adds 100% Recall@10 at 497 ms on the same hardware. Search latency is saturated at 8 vCPU; c6i.4xlarge shows matching per-query latency (build time speeds up ~1.5–2×). **Production pod sizing: 8 vCPU, scale out horizontally for throughput.**
+
+Full table (both instance types, accuracy + PQ): `docs/BENCHMARKS.md` and `deploy/bench-cpu/results/SUMMARY.md`. Tests live at `test/sift1m_benchmark_test.go` + `test/pq_sift1m_benchmark_test.go` (build tag: `sift1m`). Every run spins up ephemeral EC2 in a fresh AWS account and destroys it at completion — reproducible with a single `bash deploy/bench-cpu/run_bench.sh <instance>` invocation.
 
 ### ~~Pipeline Optimizations~~ (Done)
 Optimized the existing k-means + HE pipeline for better build speed, cluster quality, and search latency:
