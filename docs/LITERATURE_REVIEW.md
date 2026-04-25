@@ -26,10 +26,10 @@ See `docs/THRESHOLD_SECURITY.md` for details.
 | PPMI | arXiv 2025 | CKKS + AES-256 | 1M | >99% | 951ms | 128-bit IND-CPA |
 | RemoteRAG | ACL 2025 | PHE + DP | 1M | 100% | 670ms | Differential privacy + PHE |
 | Pacmann | ICLR 2025 | PIR + graph ANN | 100M | ~90% | ~3,100ms | Single server PIR |
-| SecureRAG | NeurIPS 2025 | FHE + ABE | 1M | not reported | ~2,200ms | End-to-end FHE |
+| SecureRAG ⚠️ | NeurIPS GenAI4Health 2025 | FHE + KP-ABE | **16,384 docs** | not reported | 50ms (workshop bench) | End-to-end FHE + ABE; trusted reader required |
 | Panther | CCS 2025 | PIR+SS+GC+HE | 10M | not reported | ~18,000ms | Single server |
 | PRAG | PrivateNLP 2024 | MPC (CrypTen) | 100K | >99% | ~10,000ms | Multi-server MPC |
-| FedSQ | VLDB 2024 | MPC | 1M | not reported | 50-100ms | Server/DB/result privacy |
+| FedSQ ⚠️ | VLDB 2024 | MPC (federated) | 200K/owner × 5 | not reported | 50-100ms (aggregation only) | **Plaintext per owner**, MPC for cross-owner agg |
 | Tiptoe | SOSP 2023 | LHE + clustering | 360M pages | not reported | 2,700ms | Crypto only, single server |
 | Servan-Schreiber | S&P 2022 | LSH + DPF | 10M | not reported | 10-20s | Two non-colluding servers |
 | SANNS | USENIX Sec 2020 | HE+ORAM+GC | 10M, 96d | ~90% | ~31,000ms (1t) / ~1,400ms (72t) | Two-server 2PC |
@@ -42,7 +42,9 @@ See `docs/THRESHOLD_SECURITY.md` for details.
 
 **RemoteRAG (ACL 2025)** — Uses differential privacy + Paillier PHE. Claims 0.67s on 1M with 100% recall. Weaker security model (DP perturbation) but fast. Good baseline to compare against.
 
-**FedSQ (VLDB 2024)** — Claims 50-100ms on SIFT1M via MPC. If real, this would be faster than Opaque. Need to verify — their security model may be different (federated, not client-server).
+**FedSQ (VLDB 2024)** ⚠️ **Not a direct competitor — different threat model.** FedSQ is a *federated* multi-party system: each owner runs Milvus over its own **plaintext** data, and only cross-owner aggregation is via MPC. The "50–100 ms" headline is the aggregation phase across ~5 hospitals × ~200K rows each — not single-server private 1M. For an attacker that is one of the participating owners, the local query is in plaintext to that owner. Different problem (data sovereignty across distrustful organizations) than Opaque's HBC single-server-no-plaintext-anywhere. Demo-track paper.
+
+**SecureRAG (NeurIPS GenAI4Health Workshop 2025)** ⚠️ **Different scale and threat model than initially logged.** The workshop paper benchmarks "100 documents from a corpus of 16,384" at 0.05s on a single GPU — not 1M @ 2.2s as previously summarized. Threat model also differs: it is a 4-party system requiring a *trusted reader* (hospital admin role) — strictly stronger trust assumption than Opaque's HBC server. Genuinely novel contribution: KP-ABE for per-document access control (something Opaque doesn't currently provide).
 
 **Pacmann (ICLR 2025)** — Scales to 100M with PIR. Slower (3.1s) but at 100x our scale. If we can demonstrate 10M with reasonable latency, we close this gap.
 
