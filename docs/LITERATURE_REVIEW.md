@@ -10,6 +10,13 @@ competitor's published hardware inline. Opaque rows are from AWS
 (Pinecone `p1.x1` / Qdrant 8-core pod). All Opaque numbers are
 reproducible via `bash deploy/bench-cpu/run_bench.sh c6i.2xlarge`.
 
+**Post-mitigation note (2026-04):** σ noise flooding bumped from 2^20 → 2^30
+and `DecodePublic(logprec=10)` applied on all client-facing decryption sites
+(Li-Micciancio mitigation per Lattigo SECURITY.md, eprint 2020/1533). SIFT1M
+recall verified on M4 Pro: probe-8 hits 100% Recall@10 at 262.6 ms,
+probe-16 hits 100% Recall@10 at 455.7 ms. Zero recall regression.
+See `docs/THRESHOLD_SECURITY.md` for details.
+
 | System | Year/Venue | Approach | Scale | Recall@10 | Latency | Hardware | Security |
 |--------|-----------|----------|-------|-----------|---------|----------|----------|
 | **Opaque (probe-8)** | **2026** | **CKKS HE + AES + decoys** | **1M, 128d** | **99.8%** | **345ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + access-pattern hiding** |

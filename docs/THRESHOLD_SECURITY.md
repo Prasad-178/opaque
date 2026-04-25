@@ -59,17 +59,46 @@ From SECURITY.md:
 
 > "The countermeasures from [Mouchet et al. 2024] and [Colin de Verdiere et al.] are **not currently implemented** in Lattigo."
 
-## Opaque's Current Implementation
+## Opaque's Current Implementation (post-mitigation, 2026-04)
 
 **File:** `pkg/crypto/threshold/threshold.go`, line 237
 
 ```go
-noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 20, Bound: 6 * (1 << 20)}
+noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 30, Bound: 6 * (1 << 30)}
 ```
 
-**Sigma = 2^20 ≈ 1,048,576** (~20 bits of masking)
+**Sigma = 2^30 ≈ 1.07e9** (~30 bits of masking, +10 bits over the previous 2^20).
 
-### Is sigma=2^20 Sufficient?
+Composed with `DecodePublic(pt, values, 10)` on every client-facing decryption
+(see `pkg/crypto/crypto.go` and `pkg/crypto/threshold/threshold.go` `DecryptScalar` /
+`DecryptBatchScalars`). DecodePublic rounds output to 2^-10 ≈ 1e-3 precision per
+Lattigo SECURITY.md, sanitizing residual noise that the Li-Micciancio attack uses.
+
+### Why not sigma=2^45?
+
+Bergamaschi PKC 2025 (eprint 2024/424) recommends sigma~2^45 for provable 128-bit
+IND-CPA^D with tau<=2^20 decryptions. We tried this. **It catastrophically destroys
+signal in our parameter set**: CKKS plaintext scale per LogQ prime is 2^45, so
+flooding sigma=2^45 produces post-decode noise of magnitude ~1.0 on [-1, 1] scores
+(verified: TestThresholdDecryptScalar produced 10^88-magnitude garbage). Provable
+sigma=2^45 requires enlarging the LogQ chain so flooding stays << scale. **Deferred
+as a parameter-restructure task.**
+
+Sigma=2^30 is the highest value that preserves signal in the current parameter set:
+post-decode flooding noise ~ 2^30/2^45 = 2^-15 ≈ 3e-5, well below the 2^-10
+DecodePublic rounding precision (so the rounding masks it).
+
+### Is sigma=2^30 + DecodePublic Sufficient?
+
+**For provable 128-bit IND-CPA^D under Bergamaschi: No** — needs ~2^45 with bigger
+LogQ chain.
+
+**For Opaque's practical use case: Yes** — Li-Micciancio key recovery requires the
+attacker to recover the residual noise polynomial. DecodePublic destroys that
+information by rounding. Sigma=2^30 strictly dominates the previous 2^20 and is
+the maximum compatible with the current parameter set.
+
+### Was sigma=2^20 Sufficient? (historical)
 
 **For provable security: No.**
 
@@ -98,30 +127,37 @@ Opaque's CKKS parameter set:
 
 **Even sigma=2^45 would leave ~250 bits of headroom** — more than sufficient. The precision loss from 2^45 flooding would give ~8-16 bits of message precision, which is still enough for centroid scoring (we need ~4-5 bits).
 
-## Recommended Fixes (Prioritized)
+## Status of Recommended Fixes
 
-### 1. Use `DecodePublic` Instead of `Decode` (Easy, High Impact)
+### 1. Use `DecodePublic` Instead of `Decode` — **DONE 2026-04-24**
 
-**Current code** (`pkg/crypto/threshold/threshold.go`, ClientSession.DecryptScalar):
-```go
-s.encoder.Decode(pt, decoded)  // Leaks residual noise
-```
+Applied in 7 sites: `pkg/crypto/crypto.go` (3), `pkg/crypto/threshold/threshold.go`
+(2), `pkg/crypto/threshold_provider.go` (2). Logprec=10 (rounds to 2^-10 ≈ 1e-3).
+`decodeLogPrec` const declared in both `crypto` package and `threshold` subpackage.
 
-**Should be:**
-```go
-s.encoder.DecodePublic(pt, decoded, logprec)  // Sanitizes output
-```
+### 2. Increase Sigma to 2^30 — **DONE 2026-04-24**
 
-This rounds the output to a fixed precision, eliminating the residual noise that enables the Li-Micciancio attack. Zero performance impact.
+Applied at `pkg/crypto/threshold/threshold.go:237`.
 
-### 2. Increase Sigma to 2^30 (Easy, Moderate Impact)
-
-Change line 237:
 ```go
 noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 30, Bound: 6 * (1 << 30)}
 ```
 
-This provides ~30 bits of masking (vs current 20 bits). Still preserves sufficient precision for centroid scoring. The [Noah's Ark paper](https://eprint.iacr.org/2023/815) (WAHC/CCS 2023) shows that when both ciphertext noise and flooding noise are Gaussian, simulation security is achievable with smaller flooding than the worst-case analysis suggests.
+~30 bits of masking (+10 bits over previous 2^20). [Noah's Ark](https://eprint.iacr.org/2023/815) (WAHC/CCS 2023) shows that when both ciphertext noise and flooding noise are Gaussian, simulation security is achievable with smaller flooding than worst-case analysis suggests.
+
+### Post-mitigation SIFT1M verification (M4 Pro, 10 CPU)
+
+| Config | Recall@1 | Recall@10 | Avg Query |
+|---|---|---|---|
+| strict-4 (3% probe) | 82.0% | 87.8% | 152.7 ms |
+| strict-8 (6%) | 98.0% | 97.0% | 177.8 ms |
+| strict-16 (12%) | 100.0% | 99.8% | 333.5 ms |
+| probe-8 (6%, multi-probe) | 100.0% | 100.0% | 262.6 ms |
+| probe-16 (12%, multi-probe) | 100.0% | 100.0% | 455.7 ms |
+
+**Zero recall regression vs pre-mitigation baseline.** Latency unchanged within noise.
+
+## Remaining Recommended Fixes
 
 ### 3. Implement Key Rotation (Medium Effort, High Impact)
 

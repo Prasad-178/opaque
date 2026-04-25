@@ -46,8 +46,9 @@ func TestEncryptDecryptVector(t *testing.T) {
 		t.Fatalf("failed to decrypt: %v", err)
 	}
 
-	// Check values (with tolerance for fixed-point encoding)
-	tolerance := 1e-4
+	// Check values (with tolerance for fixed-point encoding + DecodePublic
+	// rounding at 2^-10 ≈ 1e-3 for Li-Micciancio mitigation).
+	tolerance := 2e-3
 	for i := range original {
 		if math.Abs(decrypted[i]-original[i]) > tolerance {
 			t.Errorf("value %d mismatch: got %.6f, want %.6f", i, decrypted[i], original[i])
@@ -88,7 +89,8 @@ func TestCiphertextSerialization(t *testing.T) {
 		t.Fatalf("failed to decrypt: %v", err)
 	}
 
-	tolerance := 1e-4
+	// 2e-3 tolerance accommodates DecodePublic 2^-10 rounding (Li-Micciancio mitigation).
+	tolerance := 2e-3
 	for i := range original {
 		if math.Abs(decrypted[i]-original[i]) > tolerance {
 			t.Errorf("value %d mismatch: got %.6f, want %.6f", i, decrypted[i], original[i])

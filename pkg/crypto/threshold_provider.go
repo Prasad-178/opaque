@@ -244,9 +244,10 @@ func (e *thresholdEvalEngine) DecryptScalar(ct *rlwe.Ciphertext) (float64, error
 		return 0, fmt.Errorf("threshold decrypt failed: %w", err)
 	}
 	// Use per-engine decryptor/encoder to avoid data races on shared session.
+	// DecodePublic sanitizes residual noise per Lattigo SECURITY.md (Li-Micciancio).
 	pt := e.clientDecryptor.DecryptNew(ctClient)
 	decoded := make([]float64, 1)
-	if err := e.clientEncoder.Decode(pt, decoded); err != nil {
+	if err := e.clientEncoder.DecodePublic(pt, decoded, decodeLogPrec); err != nil {
 		return 0, fmt.Errorf("failed to decode: %w", err)
 	}
 	return decoded[0], nil
@@ -260,7 +261,7 @@ func (e *thresholdEvalEngine) DecryptBatchScalars(ct *rlwe.Ciphertext, numCentro
 	pt := e.clientDecryptor.DecryptNew(ctClient)
 	maxSlots := e.params.MaxSlots()
 	decoded := make([]float64, maxSlots)
-	if err := e.clientEncoder.Decode(pt, decoded); err != nil {
+	if err := e.clientEncoder.DecodePublic(pt, decoded, decodeLogPrec); err != nil {
 		return nil, fmt.Errorf("failed to decode: %w", err)
 	}
 	results := make([]float64, numCentroids)

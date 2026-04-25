@@ -231,10 +231,15 @@ func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicK
 	// Concurrent calls are safe and simulate real distributed deployment
 	// where multiple ciphertexts are decrypted in parallel.
 
-	// Noise flooding: sigma must mask key share info but leave headroom
-	// after deep HE circuits (multiply + rescale + up to log2(maxSlots) rotations).
-	// 2^20 provides ~20 bits of masking while preserving precision after full inner-sum.
-	noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 20, Bound: 6 * (1 << 20)}
+	// Noise flooding sigma=2^30 (~30 bits masking, +10 bits over previous 2^20).
+	// Composes with DecodePublic(logprec=10) downstream for Li-Micciancio mitigation
+	// (Lattigo SECURITY.md, eprint 2020/1533). Sigma must stay below the CKKS
+	// scale (2^45 per LogQ prime) to preserve signal — sigma=2^30 leaves ~15 bits
+	// of margin, which post-decode is ~3e-5 noise on [-1,1] scores, invisible to
+	// the 2^-10 DecodePublic precision rounding.
+	// Provable 128-bit IND-CPA^D per Bergamaschi PKC 2025 (eprint 2024/424) would
+	// need sigma~2^45 with an enlarged LogQ chain — deferred to parameter restructure.
+	noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 30, Bound: 6 * (1 << 30)}
 
 	activeParticipants := c.Participants[:c.Threshold]
 
@@ -324,11 +329,17 @@ func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicK
 	return ctOut, nil
 }
 
+// decodeLogPrec rounds decrypted values to 2^-decodeLogPrec precision per
+// Lattigo SECURITY.md guidance for IND-CPA^D mitigation (Li-Micciancio attack).
+// Centroid similarity scores in [-1, 1] need ~5-7 bits precision to separate
+// top-K clusters; logprec=10 gives 2^-10 ≈ 1e-3 precision with safe margin.
+const decodeLogPrec = 10
+
 // DecryptScalar decrypts a scalar value from a ciphertext using the client's session key.
 func (s *ClientSession) DecryptScalar(ct *rlwe.Ciphertext) (float64, error) {
 	pt := s.decryptor.DecryptNew(ct)
 	decoded := make([]float64, 1)
-	if err := s.encoder.Decode(pt, decoded); err != nil {
+	if err := s.encoder.DecodePublic(pt, decoded, decodeLogPrec); err != nil {
 		return 0, fmt.Errorf("failed to decode: %w", err)
 	}
 	return decoded[0], nil
@@ -339,7 +350,7 @@ func (s *ClientSession) DecryptBatchScalars(ct *rlwe.Ciphertext, numCentroids, d
 	pt := s.decryptor.DecryptNew(ct)
 	maxSlots := s.params.MaxSlots()
 	decoded := make([]float64, maxSlots)
-	if err := s.encoder.Decode(pt, decoded); err != nil {
+	if err := s.encoder.DecodePublic(pt, decoded, decodeLogPrec); err != nil {
 		return nil, fmt.Errorf("failed to decode: %w", err)
 	}
 

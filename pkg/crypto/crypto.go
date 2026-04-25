@@ -14,6 +14,13 @@ import (
 	"github.com/tuneinsight/lattigo/v5/he/hefloat"
 )
 
+// decodeLogPrec rounds decrypted values to 2^-decodeLogPrec precision per
+// Lattigo SECURITY.md guidance for IND-CPA^D mitigation (Li-Micciancio attack
+// on CKKS, eprint 2020/1533). Centroid similarity scores in [-1, 1] need ~5-7
+// bits precision to separate top-K clusters; logprec=10 gives 2^-10 ≈ 1e-3
+// precision with safe margin for top-K ranking.
+const decodeLogPrec = 10
+
 // HEProfile contains sub-phase timing for a single HE batch operation.
 // Used for GPU acceleration analysis to identify which phases benefit from GPU.
 type HEProfile struct {
@@ -207,9 +214,9 @@ func (e *Engine) DecryptVector(ct *rlwe.Ciphertext, length int) ([]float64, erro
 	// Decrypt
 	pt := e.decryptor.DecryptNew(ct)
 
-	// Decode to float64 slice
+	// Decode to float64 slice (sanitized to mitigate Li-Micciancio).
 	decoded := make([]float64, length)
-	if err := e.encoder.Decode(pt, decoded); err != nil {
+	if err := e.encoder.DecodePublic(pt, decoded, decodeLogPrec); err != nil {
 		return nil, fmt.Errorf("failed to decode: %w", err)
 	}
 
@@ -228,9 +235,9 @@ func (e *Engine) DecryptScalar(ct *rlwe.Ciphertext) (float64, error) {
 	// Decrypt
 	pt := e.decryptor.DecryptNew(ct)
 
-	// Decode - the result is in the first slot
+	// Decode - the result is in the first slot (sanitized to mitigate Li-Micciancio).
 	decoded := make([]float64, 1)
-	if err := e.encoder.Decode(pt, decoded); err != nil {
+	if err := e.encoder.DecodePublic(pt, decoded, decodeLogPrec); err != nil {
 		return 0, fmt.Errorf("failed to decode: %w", err)
 	}
 
@@ -487,10 +494,10 @@ func (e *Engine) DecryptBatchScalars(ct *rlwe.Ciphertext, numCentroids, dimensio
 	// Decrypt
 	pt := e.decryptor.DecryptNew(ct)
 
-	// Decode all slots
+	// Decode all slots (sanitized to mitigate Li-Micciancio).
 	maxSlots := e.params.MaxSlots()
 	decoded := make([]float64, maxSlots)
-	if err := e.encoder.Decode(pt, decoded); err != nil {
+	if err := e.encoder.DecodePublic(pt, decoded, decodeLogPrec); err != nil {
 		return nil, fmt.Errorf("failed to decode: %w", err)
 	}
 
