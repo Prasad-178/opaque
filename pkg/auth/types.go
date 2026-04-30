@@ -91,6 +91,12 @@ type ClientCredentials struct {
 	// Centroids for local caching (used in HE scoring)
 	Centroids [][]float64
 
+	// BlobIDPermutation maps logical super-bucket IDs (used by HE scoring) to
+	// storage super-bucket IDs (used when fetching blobs). Hides the
+	// centroid-to-storage mapping from the server. Length = NumSuperBuckets,
+	// each entry unique in [0, NumSuperBuckets). nil = identity (legacy).
+	BlobIDPermutation []int
+
 	// EnterpriseID for reference
 	EnterpriseID string
 

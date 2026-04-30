@@ -38,6 +38,14 @@ type Config struct {
 	// These can be cached client-side after authentication
 	Centroids [][]float64
 
+	// BlobIDPermutation maps logical super-bucket IDs (used by HE scoring) to
+	// storage super-bucket IDs (used in blob storage). Length = NumSuperBuckets,
+	// each entry is unique in [0, NumSuperBuckets). Generated at build time and
+	// distributed to clients via credentials so the server cannot link a fetched
+	// storage ID back to its corresponding centroid coordinates. nil = identity
+	// (legacy behavior, used by indexes built before permutation was added).
+	BlobIDPermutation []int
+
 	// Dimension is the vector dimension
 	Dimension int
 
@@ -177,6 +185,15 @@ func (c *Config) SetCentroids(centroids [][]float64) {
 	c.Version++
 }
 
+// SetBlobIDPermutation updates the logical→storage super-bucket ID permutation
+// (called after index building). The slice must have length NumSuperBuckets
+// and contain a permutation of [0, NumSuperBuckets). Pass nil to clear.
+func (c *Config) SetBlobIDPermutation(permutation []int) {
+	c.BlobIDPermutation = permutation
+	c.UpdatedAt = time.Now()
+	c.Version++
+}
+
 // Clone creates a deep copy of the configuration.
 func (c *Config) Clone() *Config {
 	clone := &Config{
@@ -197,6 +214,10 @@ func (c *Config) Clone() *Config {
 	for i, centroid := range c.Centroids {
 		clone.Centroids[i] = make([]float64, len(centroid))
 		copy(clone.Centroids[i], centroid)
+	}
+	if c.BlobIDPermutation != nil {
+		clone.BlobIDPermutation = make([]int, len(c.BlobIDPermutation))
+		copy(clone.BlobIDPermutation, c.BlobIDPermutation)
 	}
 	return clone
 }

@@ -141,13 +141,14 @@ func (s *Service) Authenticate(ctx context.Context, userID string, password []by
 	return &ClientCredentials{
 		Token:           tokenID,
 		TokenExpiry:     token.ExpiresAt,
-		AESKey:          enterpriseCfg.AESKey,
-		LSHHyperplanes:  hyperplanes,
-		Centroids:       enterpriseCfg.Centroids,
-		EnterpriseID:    user.EnterpriseID,
-		Dimension:       enterpriseCfg.Dimension,
-		NumSuperBuckets: enterpriseCfg.NumSuperBuckets,
-		NumSubBuckets:   enterpriseCfg.NumSubBuckets,
+		AESKey:            enterpriseCfg.AESKey,
+		LSHHyperplanes:    hyperplanes,
+		Centroids:         enterpriseCfg.Centroids,
+		BlobIDPermutation: enterpriseCfg.BlobIDPermutation,
+		EnterpriseID:      user.EnterpriseID,
+		Dimension:         enterpriseCfg.Dimension,
+		NumSuperBuckets:   enterpriseCfg.NumSuperBuckets,
+		NumSubBuckets:     enterpriseCfg.NumSubBuckets,
 	}, nil
 }
 
@@ -228,15 +229,16 @@ func (s *Service) RefreshToken(ctx context.Context, tokenID string) (*ClientCred
 	)
 
 	return &ClientCredentials{
-		Token:           newTokenID,
-		TokenExpiry:     newToken.ExpiresAt,
-		AESKey:          enterpriseCfg.AESKey,
-		LSHHyperplanes:  hyperplanes,
-		Centroids:       enterpriseCfg.Centroids,
-		EnterpriseID:    token.EnterpriseID,
-		Dimension:       enterpriseCfg.Dimension,
-		NumSuperBuckets: enterpriseCfg.NumSuperBuckets,
-		NumSubBuckets:   enterpriseCfg.NumSubBuckets,
+		Token:             newTokenID,
+		TokenExpiry:       newToken.ExpiresAt,
+		AESKey:            enterpriseCfg.AESKey,
+		LSHHyperplanes:    hyperplanes,
+		Centroids:         enterpriseCfg.Centroids,
+		BlobIDPermutation: enterpriseCfg.BlobIDPermutation,
+		EnterpriseID:      token.EnterpriseID,
+		Dimension:         enterpriseCfg.Dimension,
+		NumSuperBuckets:   enterpriseCfg.NumSuperBuckets,
+		NumSubBuckets:     enterpriseCfg.NumSubBuckets,
 	}, nil
 }
 

@@ -339,21 +339,27 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 
 	startSelection := time.Now()
 
-	// Generate decoy super-buckets from non-selected super-buckets
+	// Generate decoy super-buckets from non-selected super-buckets (logical IDs).
 	decoySupers := c.generateDecoySupers(topSupers, c.config.NumDecoys)
 
-	// Combine real + decoy super-buckets and shuffle
+	// Combine real + decoy super-buckets (logical) and shuffle.
 	allSupers := append(append([]int{}, topSupers...), decoySupers...)
 	shuffleInts(allSupers)
 
+	// Translate logical → storage IDs via the per-tenant blob ID permutation.
+	// This is what the server sees in the fetch request, breaking the
+	// centroid-coordinate ↔ access-pattern link.
+	allSupersStorage := translateToStorage(allSupers, c.credentials.BlobIDPermutation)
+	realSupersStorage := translateToStorage(topSupers, c.credentials.BlobIDPermutation)
+
 	result.Stats.RealSubBuckets = len(topSupers)
 	result.Stats.DecoySubBuckets = len(decoySupers)
-	result.Stats.TotalSubBuckets = len(allSupers)
+	result.Stats.TotalSubBuckets = len(allSupersStorage)
 	result.Timing.BucketSelection = time.Since(startSelection)
 
 	// Fetch ALL vectors from selected super-buckets (server can't tell which are real)
 	startFetch := time.Now()
-	blobs, err := c.store.GetSuperBuckets(ctx, allSupers)
+	blobs, err := c.store.GetSuperBuckets(ctx, allSupersStorage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch buckets: %w", err)
 	}
@@ -367,7 +373,8 @@ func (c *EnterpriseHierarchicalClient) Search(ctx context.Context, query []float
 
 	// Filter to real clusters only — skip decoy blobs to avoid wasted decrypt/scoring.
 	// Privacy is preserved: the server already saw all bucket requests (real + decoy, shuffled).
-	realBlobs := filterRealBlobs(blobs, topSupers)
+	// Match against STORAGE IDs since blobs carry storage bucket keys.
+	realBlobs := filterRealBlobs(blobs, realSupersStorage)
 
 	startAES := time.Now()
 
@@ -529,13 +536,17 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 	allSupers := append(append([]int{}, topSupers...), decoySupers...)
 	shuffleInts(allSupers)
 
+	// Translate logical → storage IDs (see Search() for rationale).
+	allSupersStorage := translateToStorage(allSupers, c.credentials.BlobIDPermutation)
+	realSupersStorage := translateToStorage(topSupers, c.credentials.BlobIDPermutation)
+
 	result.Stats.RealSubBuckets = len(topSupers)
 	result.Stats.DecoySubBuckets = len(decoySupers)
-	result.Stats.TotalSubBuckets = len(allSupers)
+	result.Stats.TotalSubBuckets = len(allSupersStorage)
 	result.Timing.BucketSelection = time.Since(startSelection)
 
 	startFetch := time.Now()
-	blobs, err := c.store.GetSuperBuckets(ctx, allSupers)
+	blobs, err := c.store.GetSuperBuckets(ctx, allSupersStorage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch buckets: %w", err)
 	}
@@ -543,7 +554,8 @@ func (c *EnterpriseHierarchicalClient) SearchBatch(ctx context.Context, query []
 	result.Stats.BlobsFetched = len(blobs)
 
 	// Filter to real clusters only — skip decoy blobs to save AES decrypt + scoring time.
-	realBlobs := filterRealBlobs(blobs, topSupers)
+	// Match storage IDs since blobs carry storage bucket keys.
+	realBlobs := filterRealBlobs(blobs, realSupersStorage)
 
 	// ==========================================
 	// LEVEL 3: Local Scoring (PQ-accelerated or standard)
@@ -743,6 +755,25 @@ func (c *EnterpriseHierarchicalClient) pqAcceleratedScoring(
 	stats.VectorsScored = len(bestMap)
 
 	return results, stats, timing
+}
+
+// translateToStorage applies the logical→storage super-bucket ID permutation.
+// nil permutation = identity mapping (legacy indexes built before permutation
+// was added). Returns a fresh slice; never mutates the input.
+func translateToStorage(logicalIDs []int, permutation []int) []int {
+	storage := make([]int, len(logicalIDs))
+	if permutation == nil {
+		copy(storage, logicalIDs)
+		return storage
+	}
+	for i, id := range logicalIDs {
+		if id < 0 || id >= len(permutation) {
+			storage[i] = id // out-of-range: pass through (will fetch nothing)
+			continue
+		}
+		storage[i] = permutation[id]
+	}
+	return storage
 }
 
 // generateDecoySupers delegates to the shared package-level function in hierarchical.go.

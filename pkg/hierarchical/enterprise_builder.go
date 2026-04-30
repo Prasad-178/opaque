@@ -2,8 +2,10 @@ package hierarchical
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"math"
+	"math/big"
 	"time"
 
 	"github.com/Prasad-178/opaque/pkg/blob"
@@ -11,6 +13,26 @@ import (
 	"github.com/Prasad-178/opaque/pkg/enterprise"
 	"github.com/Prasad-178/opaque/pkg/lsh"
 )
+
+// generateBlobIDPermutation returns a uniform random permutation of [0, n) using
+// Fisher-Yates shuffle backed by crypto/rand. The mapping logical_id → π[logical_id]
+// is used as the storage super-bucket ID, hiding the centroid-to-storage link from
+// the server.
+func generateBlobIDPermutation(n int) ([]int, error) {
+	π := make([]int, n)
+	for i := range π {
+		π[i] = i
+	}
+	for i := n - 1; i > 0; i-- {
+		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate permutation: %w", err)
+		}
+		k := int(j.Int64())
+		π[i], π[k] = π[k], π[i]
+	}
+	return π, nil
+}
 
 // EnterpriseBuilder constructs a hierarchical index using enterprise configuration.
 // Unlike the standard Builder which uses explicit AES keys and LSH seeds,
@@ -114,6 +136,15 @@ func (b *EnterpriseBuilder) Build(ctx context.Context, ids []string, vectors [][
 		return nil, fmt.Errorf("ids and vectors length mismatch: %d vs %d", len(ids), len(vectors))
 	}
 
+	// Phase 0: Generate the logical→storage super-bucket ID permutation.
+	// Blobs are stored at storage IDs π[superID]; the server therefore cannot
+	// link a fetched storage ID back to its centroid coordinates without π,
+	// which lives only in client credentials.
+	perm, err := generateBlobIDPermutation(b.config.NumSuperBuckets)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate blob ID permutation: %w", err)
+	}
+
 	// Phase 1: Assign vectors to buckets and encrypt
 	blobs := make([]*blob.Blob, len(ids))
 	for i, id := range ids {
@@ -127,22 +158,23 @@ func (b *EnterpriseBuilder) Build(ctx context.Context, ids []string, vectors [][
 		// Determine bucket assignment using enterprise LSH
 		superID := b.lshSuper.HashToIndexFromVector(vec, b.config.NumSuperBuckets)
 		subID := b.lshSub.HashToIndexFromVector(vec, b.config.NumSubBuckets)
-		bucketKey := formatBucketKey(superID, subID)
+		// Storage uses permuted super-bucket ID; centroid scoring uses logical superID.
+		storageBucketKey := formatBucketKey(perm[superID], subID)
 
-		// Update centroid running sum
+		// Update centroid running sum (logical index — centroids[logical_id] used by HE)
 		super := b.superBuckets[superID]
 		super.VectorCount++
 		for j, v := range vec {
 			super.sum[j] += v
 		}
 
-		// Track counts and locations
-		b.subBucketCounts[bucketKey]++
+		// Track counts and locations using the storage bucket key (matches blob storage).
+		b.subBucketCounts[storageBucketKey]++
 		b.vectorLocs[id] = &VectorLocation{
 			ID:        id,
 			SuperID:   superID,
 			SubID:     subID,
-			BucketKey: bucketKey,
+			BucketKey: storageBucketKey,
 		}
 
 		// Encrypt with enterprise AES key
@@ -151,7 +183,7 @@ func (b *EnterpriseBuilder) Build(ctx context.Context, ids []string, vectors [][
 			return nil, fmt.Errorf("failed to encrypt vector %s: %w", id, err)
 		}
 
-		blobs[i] = blob.NewBlob(id, bucketKey, ciphertext, b.config.Dimension)
+		blobs[i] = blob.NewBlob(id, storageBucketKey, ciphertext, b.config.Dimension)
 	}
 
 	// Phase 2: Compute and normalize centroids
@@ -171,8 +203,9 @@ func (b *EnterpriseBuilder) Build(ctx context.Context, ids []string, vectors [][
 		copy(centroids[i], super.Centroid)
 	}
 
-	// Update enterprise config with computed centroids
+	// Update enterprise config with computed centroids and storage permutation.
 	b.enterpriseCfg.SetCentroids(centroids)
+	b.enterpriseCfg.SetBlobIDPermutation(perm)
 
 	// Phase 3: Store all encrypted blobs
 	if err := store.PutBatch(ctx, blobs); err != nil {
