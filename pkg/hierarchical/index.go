@@ -239,5 +239,27 @@ func ValidateConfig(cfg Config) error {
 	if cfg.NumDecoys < 0 {
 		return fmt.Errorf("NumDecoys cannot be negative")
 	}
+	if cfg.TargetEpsilon < 0 {
+		return fmt.Errorf("TargetEpsilon cannot be negative")
+	}
 	return nil
+}
+
+// ResolveDecoyCount returns the effective NumDecoys for a Config, applying
+// TargetEpsilon-derived sizing when configured. If TargetEpsilon > 0, the
+// derived value supersedes NumDecoys; otherwise NumDecoys is returned as-is.
+// Always clamped to [0, NumSuperBuckets-TopSuperBuckets].
+func ResolveDecoyCount(cfg Config) int {
+	count := cfg.NumDecoys
+	if cfg.TargetEpsilon > 0 {
+		count = ComputeDecoyCountForEpsilon(cfg.NumSuperBuckets, cfg.TopSuperBuckets, cfg.TargetEpsilon)
+	}
+	if count < 0 {
+		count = 0
+	}
+	maxPool := cfg.NumSuperBuckets - cfg.TopSuperBuckets
+	if count > maxPool {
+		count = maxPool
+	}
+	return count
 }

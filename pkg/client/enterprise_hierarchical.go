@@ -777,7 +777,13 @@ func translateToStorage(logicalIDs []int, permutation []int) []int {
 }
 
 // generateDecoySupers delegates to the shared package-level function in hierarchical.go.
+// `numDecoys` is the per-call requested count; this method first lets the
+// hierarchical config (TargetEpsilon vs NumDecoys) decide the effective count
+// via ResolveDecoyCount when the caller passes the config default.
 func (c *EnterpriseHierarchicalClient) generateDecoySupers(selectedSupers []int, numDecoys int) []int {
+	if numDecoys == c.config.NumDecoys { // caller used config default — apply TargetEpsilon override if set
+		numDecoys = hierarchical.ResolveDecoyCount(c.config)
+	}
 	return generateDecoySupers(selectedSupers, c.config.NumSuperBuckets, numDecoys)
 }
 

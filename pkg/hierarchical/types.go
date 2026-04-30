@@ -58,6 +58,19 @@ type Config struct {
 	// Default: 8
 	NumDecoys int
 
+	// TargetEpsilon, when > 0, overrides NumDecoys at index-build / search
+	// configuration time. The system derives NumDecoys from the requested
+	// (ε)-DP-style upper bound on cluster-identity distinguishability:
+	//   NumDecoys = ceil((NumSuperBuckets - TopSuperBuckets) * exp(-TargetEpsilon))
+	// Smaller ε ⇒ stronger privacy ⇒ larger NumDecoys ⇒ more bandwidth.
+	// Use ComputeDecoyCountForEpsilon to derive concrete NumDecoys values.
+	// Default: 0 (unused; NumDecoys takes effect directly).
+	//
+	// Note: this is an informal upper bound for the uniform-K-from-non-selected
+	// sampling scheme. A formal proof under the standard (ε,δ)-DP framework
+	// requires switching to Bernoulli sampling per cluster — planned future work.
+	TargetEpsilon float64
+
 	// Multi-probe configuration for improved recall
 	// Instead of hard top-K cutoff, use confidence-based selection
 
@@ -161,6 +174,54 @@ func HighRecallConfig() Config {
 		LSHSuperSeed:         42,
 		LSHSubSeed:           137,
 	}
+}
+
+// ComputeDecoyCountForEpsilon returns the NumDecoys value that approximately
+// satisfies an ε-DP-style upper bound on cluster-identity distinguishability
+// for the uniform-K-from-non-selected decoy scheme.
+//
+// Bound derivation (informal): an HBC server observing a fetched cluster set
+// S of size K_real + K_decoy cannot distinguish "real cluster is c" from
+// "real cluster is c' ∈ S" with probability ratio greater than
+//
+//   (N - K_real) / K_decoy
+//
+// where N is the total number of super-buckets. Setting this ratio ≤ e^ε
+// gives K_decoy ≥ (N - K_real) · e^(-ε), rounded up.
+//
+// Caller is responsible for checking that the result fits NumSuperBuckets.
+// Returns 0 for non-positive ε. Returns at least 1 when ε > 0 and pool > 0.
+//
+// This is NOT a formally tight (ε,δ)-DP bound; it is a useful scaling guide.
+// See SECURITY_MODEL.md §5 for the formal claim and limitations.
+func ComputeDecoyCountForEpsilon(numSuperBuckets, topSuperBuckets int, epsilon float64) int {
+	if epsilon <= 0 {
+		return 0
+	}
+	pool := numSuperBuckets - topSuperBuckets
+	if pool <= 0 {
+		return 0
+	}
+	// math.Exp imported via stdlib in callers; inline here to avoid extra dep.
+	exp := func(x float64) float64 {
+		// 32-term Taylor sufficient for ε in [0, 10] domain.
+		sum, term := 1.0, 1.0
+		for i := 1; i < 32; i++ {
+			term *= x / float64(i)
+			sum += term
+		}
+		return sum
+	}
+	target := float64(pool) * exp(-epsilon)
+	if target < 1 {
+		return 1
+	}
+	// Ceil.
+	t := int(target)
+	if float64(t) < target {
+		t++
+	}
+	return t
 }
 
 // SuperBucket represents a top-level bucket with a centroid.
