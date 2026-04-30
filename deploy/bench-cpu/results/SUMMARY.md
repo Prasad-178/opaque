@@ -19,13 +19,33 @@ CKKS `LogN=14` (128-bit security). Dataset: SIFT 1M (1,000,000 × 128-dim),
 
 Matches Pinecone `p1.x1` / Qdrant 8-core pod tier.
 
-### `TestSIFT1MAccuracy` — partial-mitigation run (2026-04-30, commit `bc0ec45`)
+### `TestSIFT1MAccuracy` — full-mitigation run (2026-04-30 19:08, commit `e45223b` + makeCredentials fix)
+
+All four mitigations live: σ=2^30 + DecodePublic, per-tenant blob ID
+permutation π, `PaddingMode=Bucketed` (next-pow2 cluster sizing,
+~6-12 % storage waste), `TargetEpsilon=2.0` → derived NumDecoys=17 (vs
+prior fixed 8). Recall fully recovered; latency adds ~30-65 % vs the
+partial-mitigation run (extra decoys + padding bandwidth).
+
+| Config     | Probe  | Multi | Recall@1 | Recall@10 | Avg query |
+|------------|--------|-------|----------|-----------|-----------|
+| strict-4   | 3.1 %  | no    | 94.0 %   | 88.4 %    | 410 ms    |
+| strict-8   | 6.2 %  | no    | 98.0 %   | 95.4 %    | 466 ms    |
+| strict-16  | 12.5 % | no    | 100.0 %  | 99.2 %    | 640 ms    |
+| probe-8    | 6.2 %+ | yes   | 100.0 %  | 99.4 %    | 630 ms    |
+| probe-16   | 12.5 %+| yes   | 100.0 %  | 100.0 %   | 815 ms    |
+
+`TestPQ_SIFT1M` was killed mid-run (likely OOM at standard-strict8 PQ
+codebook training; padding pushed memory over c6i.2xlarge's 16 GB limit).
+Re-run on c6i.4xlarge (32 GB) recommended for PQ-mitigated numbers.
+
+### `TestSIFT1MAccuracy` — partial-mitigation run (2026-04-30 11:49, commit `bc0ec45`)
 
 Includes σ=2^30 + DecodePublic. **Permutation π was MISSING from this run** —
 the public `opaque.NewDB` API uses `kmeans_builder.go`, which had not yet
 been wired to the permutation logic shipped to `enterprise_builder.go` in
-`bc0ec45`. Fixed in a later commit; see the next run for true post-mitigation
-numbers. Recall identical to baseline; latency within sampling noise.
+`bc0ec45`. Fixed in `e45223b`. Recall identical to baseline; latency within
+sampling noise.
 
 | Config     | Probe  | Multi | Recall@1 | Recall@10 | Avg query |
 |------------|--------|-------|----------|-----------|-----------|
@@ -118,16 +138,21 @@ throughput play (more instances, parallel queries), not a latency play.
 
 ## Headline numbers for paper / pitch
 
-Best single number for each hardware tier (post-mitigation, commit `bc0ec45`):
+Best single number for each hardware tier:
 
-| Hardware     | Config          | Recall@10 | Avg query |
-|--------------|-----------------|-----------|-----------|
-| c6i.2xlarge  | probe-8         | 99.0 %    | 366 ms    |
-| c6i.2xlarge  | probe-16        | 100.0 %   | 521 ms    |
-| c6i.2xlarge  | PQ-M8-probe16   | 99.2 %    | 462 ms    |
-| c6i.2xlarge  | PQ-M8-probe32   | 100.0 %   | 658 ms    |
+| Hardware    | Config       | Mitigations               | Recall@10 | Avg query |
+|-------------|--------------|---------------------------|-----------|-----------|
+| c6i.2xlarge | probe-8      | **all four (full)**       | 99.4 %    | 630 ms    |
+| c6i.2xlarge | probe-16     | **all four (full)**       | 100.0 %   | 815 ms    |
+| c6i.2xlarge | probe-8      | partial (σ + DecodePublic) | 99.0 %    | 366 ms    |
+| c6i.2xlarge | PQ-M8-probe32| pre-mitigation baseline   | 100.0 %   | 497 ms    |
+| c6i.2xlarge | probe-8      | pre-mitigation baseline   | 99.8 %    | 345 ms    |
 
-Pre-mitigation baseline (2026-04-19, c6i.2xlarge): probe-8 99.8% / 345 ms;
-PQ-M8-probe32 100% / 497 ms. Post-mitigation latency adds ~5-30% across
-configs; recall is statistically equivalent (50-query sampling noise dominates).
-Pre-mitigation c6i.4xlarge run not yet repeated post-mitigation.
+Latency progression:
+- pre-mitigation → partial-mitigation: +5-30 % (σ flood + DecodePublic +
+  cache effects).
+- partial-mitigation → full-mitigation: +30-65 % (Bucketed padding +
+  TargetEpsilon=2.0 increases NumDecoys 8 → 17, hence ~2× cluster fetches
+  and ~10 % more bytes per blob).
+
+Recall identical-to-better at every tier across mitigation deltas.

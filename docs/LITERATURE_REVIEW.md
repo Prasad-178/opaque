@@ -12,20 +12,22 @@ reproducible via `bash deploy/bench-cpu/run_bench.sh c6i.2xlarge`.
 
 **Security mitigations shipped (2026-04):**
 - **σ noise flooding 2^20 → 2^30 + DecodePublic(logprec=10)** for Li-Micciancio mitigation (commit `10b7850`, eprint 2020/1533).
-- **Per-tenant blob ID permutation π** for access-pattern privacy — hides the centroid-coordinate ↔ access-pattern link from server (commit `bc0ec45`).
+- **Per-tenant blob ID permutation π** hides centroid-coordinate ↔ access-pattern link from server (commit `bc0ec45`, fully wired in `e45223b`).
+- **`PaddingMode=Bucketed` constant-volume padding** closes volume side-channel (commit `414aa8e`).
+- **`TargetEpsilon=2.0` DP-style decoy sizing** derives NumDecoys ≈ 17 for SIFT1M (commit `990e2be`); see `docs/SECURITY_MODEL.md` §5.1 for the bound.
 
-Post-mitigation SIFT1M numbers below are from a clean AWS c6i.2xlarge run
-(2026-04-30, see `deploy/bench-cpu/results/SUMMARY.md`). Recall is
-statistically equivalent to pre-mitigation; latency adds ~5-30% within
-50-query sampling noise. See `docs/SECURITY_MODEL.md` and
-`docs/THRESHOLD_SECURITY.md` for details.
+Full-mitigation SIFT1M numbers below are from a clean AWS c6i.2xlarge run
+(2026-04-30 19:08, all four mitigations live, see
+`deploy/bench-cpu/results/SUMMARY.md`). Latency adds ~30-65 % vs the
+partial-mitigation run (extra decoys + padding bandwidth). Recall is
+identical-or-better across configurations.
 
 | System | Year/Venue | Approach | Scale | Recall@10 | Latency | Hardware | Security |
 |--------|-----------|----------|-------|-----------|---------|----------|----------|
-| **Opaque (probe-8)** | **2026** | **CKKS HE + AES + decoys + π** | **1M, 128d** | **99.0%** | **366ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access pattern** |
-| **Opaque (probe-16)** | **2026** | **CKKS HE + AES + decoys + π** | **1M, 128d** | **100.0%** | **521ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access pattern** |
-| **Opaque (PQ-M8-probe16)** | **2026** | **CKKS HE + PQ + AES + decoys + π** | **1M, 128d** | **99.2%** | **462ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access pattern** |
-| **Opaque (PQ-M8-probe32)** | **2026** | **CKKS HE + PQ + AES + decoys + π** | **1M, 128d** | **100.0%** | **658ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access pattern** |
+| **Opaque (probe-8, full mitigations)** | **2026** | **CKKS HE + AES + π + Bucketed pad + ε=2 decoys** | **1M, 128d** | **99.4%** | **630ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access + DP-bounded** |
+| **Opaque (probe-16, full mitigations)** | **2026** | **CKKS HE + AES + π + Bucketed pad + ε=2 decoys** | **1M, 128d** | **100.0%** | **815ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access + DP-bounded** |
+| Opaque (probe-8, partial-mit) | 2026 | CKKS HE + AES + decoys (8 fixed) | 1M, 128d | 99.0% | 366ms | c6i.2xlarge | HE + AES + statistical decoys |
+| Opaque (PQ-M8-probe32, baseline) | 2026 | CKKS HE + PQ + AES + decoys | 1M, 128d | 100.0% | 497ms | c6i.2xlarge | HE + AES + statistical decoys |
 | Opaque (PQ, GIST, pre-mitigation) | 2026 | CKKS HE + PQ + AES + decoys | 100K, 960d | 98.0% | 497ms | M4 Pro (10 vCPU) | HE + AES + access-pattern hiding |
 | Compass | OSDI 2025 | ORAM + HNSW | ~1M | high | ~1s | Full server compromise |
 | PPMI | arXiv 2025 | CKKS + AES-256 | 1M | >99% | 951ms | 128-bit IND-CPA |

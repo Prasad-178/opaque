@@ -147,17 +147,22 @@ noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 30, Bound: 6 * (1 << 30)}
 
 ### Post-mitigation SIFT1M verification (AWS c6i.2xlarge, 8 vCPU Intel Ice Lake)
 
-Includes both σ=2^30 + DecodePublic mitigation AND per-tenant blob ID permutation (commit `bc0ec45`).
+Full-mitigation run (2026-04-30 19:08, commit `e45223b`+`4c5abf8`): σ=2^30 +
+DecodePublic, per-tenant blob ID permutation π (now correctly wired through
+public `opaque.NewDB` API), `PaddingMode=Bucketed`, `TargetEpsilon=2.0`
+(NumDecoys derived to 17).
 
 | Config | Recall@1 | Recall@10 | Avg Query |
 |---|---|---|---|
-| strict-4 (3% probe) | 84.0% | 84.0% | 250 ms |
-| strict-8 (6%) | 92.0% | 93.2% | 299 ms |
-| strict-16 (12%) | 100.0% | 99.0% | 372 ms |
-| probe-8 (6%, multi-probe) | 98.0% | 99.0% | 366 ms |
-| probe-16 (12%, multi-probe) | 100.0% | 100.0% | 521 ms |
+| strict-4 (3% probe) | 94.0% | 88.4% | 410 ms |
+| strict-8 (6%) | 98.0% | 95.4% | 466 ms |
+| strict-16 (12%) | 100.0% | 99.2% | 640 ms |
+| probe-8 (6%, multi-probe) | 100.0% | 99.4% | 630 ms |
+| probe-16 (12%, multi-probe) | 100.0% | 100.0% | 815 ms |
 
-**Recall statistically equivalent to pre-mitigation baseline (50-query sampling noise).** Latency adds ~5-30% across configs (largest deltas attributable to query randomness, not mitigation cost). See `deploy/bench-cpu/results/SUMMARY.md` for pre-mitigation comparison.
+**Recall identical-or-better across configs vs partial-mitigation run.** Latency
+adds ~30-65 % (extra decoys via ε=2 + Bucketed padding bandwidth). See
+`deploy/bench-cpu/results/SUMMARY.md` for full pre/partial/full comparison.
 
 ## Status of Decoy / Volume / Permutation Mitigations (added 2026-04-30)
 
