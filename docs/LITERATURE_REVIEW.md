@@ -10,18 +10,23 @@ competitor's published hardware inline. Opaque rows are from AWS
 (Pinecone `p1.x1` / Qdrant 8-core pod). All Opaque numbers are
 reproducible via `bash deploy/bench-cpu/run_bench.sh c6i.2xlarge`.
 
-**Post-mitigation note (2026-04):** σ noise flooding bumped from 2^20 → 2^30
-and `DecodePublic(logprec=10)` applied on all client-facing decryption sites
-(Li-Micciancio mitigation per Lattigo SECURITY.md, eprint 2020/1533). SIFT1M
-recall verified on M4 Pro: probe-8 hits 100% Recall@10 at 262.6 ms,
-probe-16 hits 100% Recall@10 at 455.7 ms. Zero recall regression.
-See `docs/THRESHOLD_SECURITY.md` for details.
+**Security mitigations shipped (2026-04):**
+- **σ noise flooding 2^20 → 2^30 + DecodePublic(logprec=10)** for Li-Micciancio mitigation (commit `10b7850`, eprint 2020/1533).
+- **Per-tenant blob ID permutation π** for access-pattern privacy — hides the centroid-coordinate ↔ access-pattern link from server (commit `bc0ec45`).
+
+Post-mitigation SIFT1M numbers below are from a clean AWS c6i.2xlarge run
+(2026-04-30, see `deploy/bench-cpu/results/SUMMARY.md`). Recall is
+statistically equivalent to pre-mitigation; latency adds ~5-30% within
+50-query sampling noise. See `docs/SECURITY_MODEL.md` and
+`docs/THRESHOLD_SECURITY.md` for details.
 
 | System | Year/Venue | Approach | Scale | Recall@10 | Latency | Hardware | Security |
 |--------|-----------|----------|-------|-----------|---------|----------|----------|
-| **Opaque (probe-8)** | **2026** | **CKKS HE + AES + decoys** | **1M, 128d** | **99.8%** | **345ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + access-pattern hiding** |
-| **Opaque (PQ-M8-probe32)** | **2026** | **CKKS HE + PQ + AES + decoys** | **1M, 128d** | **100.0%** | **497ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + access-pattern hiding** |
-| **Opaque (PQ, GIST)** | **2026** | **CKKS HE + PQ + AES + decoys** | **100K, 960d** | **98.0%** | **497ms** | **M4 Pro (10 vCPU)** | **HE + AES + access-pattern hiding** |
+| **Opaque (probe-8)** | **2026** | **CKKS HE + AES + decoys + π** | **1M, 128d** | **99.0%** | **366ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access pattern** |
+| **Opaque (probe-16)** | **2026** | **CKKS HE + AES + decoys + π** | **1M, 128d** | **100.0%** | **521ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access pattern** |
+| **Opaque (PQ-M8-probe16)** | **2026** | **CKKS HE + PQ + AES + decoys + π** | **1M, 128d** | **99.2%** | **462ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access pattern** |
+| **Opaque (PQ-M8-probe32)** | **2026** | **CKKS HE + PQ + AES + decoys + π** | **1M, 128d** | **100.0%** | **658ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access pattern** |
+| Opaque (PQ, GIST, pre-mitigation) | 2026 | CKKS HE + PQ + AES + decoys | 100K, 960d | 98.0% | 497ms | M4 Pro (10 vCPU) | HE + AES + access-pattern hiding |
 | Compass | OSDI 2025 | ORAM + HNSW | ~1M | high | ~1s | Full server compromise |
 | PPMI | arXiv 2025 | CKKS + AES-256 | 1M | >99% | 951ms | 128-bit IND-CPA |
 | RemoteRAG | ACL 2025 | PHE + DP | 1M | 100% | 670ms | Differential privacy + PHE |

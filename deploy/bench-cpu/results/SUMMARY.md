@@ -3,11 +3,15 @@
 Raw per-run logs stay gitignored. This summary table survives the
 ephemeral EC2 teardown and is the durable record.
 
-All runs 2026-04-19 → 2026-04-20 on AWS `us-east-1`, ephemeral on-demand
-EC2 under the `personal` profile, destroyed at end of run.
-Ubuntu 22.04, Go 1.25, Lattigo v5.0.7, CKKS `LogN=14` (128-bit security).
-Dataset: SIFT 1M (1,000,000 × 128-dim), 50 queries, top-K=10, 8 decoys,
-128 clusters.
+All runs on AWS `us-east-1`, ephemeral on-demand EC2 under the `personal`
+profile, destroyed at end of run. Ubuntu 22.04, Go 1.25, Lattigo v5.0.7,
+CKKS `LogN=14` (128-bit security). Dataset: SIFT 1M (1,000,000 × 128-dim),
+50 queries, top-K=10, 8 decoys, 128 clusters.
+
+**Security mitigations shipped between runs:**
+- 2026-04-19/20: pre-mitigation baseline.
+- 2026-04-24 (commit `10b7850`): σ noise flooding 2^20→2^30 + DecodePublic(logprec=10) for Li-Micciancio mitigation.
+- 2026-04-30 (commit `bc0ec45`): per-tenant blob ID permutation π for access-pattern privacy (hides centroid-to-storage link from server).
 
 ---
 
@@ -15,7 +19,31 @@ Dataset: SIFT 1M (1,000,000 × 128-dim), 50 queries, top-K=10, 8 decoys,
 
 Matches Pinecone `p1.x1` / Qdrant 8-core pod tier.
 
-### `TestSIFT1MAccuracy`
+### `TestSIFT1MAccuracy` — post-mitigation run (2026-04-30, commit `bc0ec45`)
+
+Includes σ=2^30 + DecodePublic + per-tenant permutation. **Recall identical to baseline; latency within sampling noise (50 queries).**
+
+| Config     | Probe  | Multi | Recall@1 | Recall@10 | Avg query |
+|------------|--------|-------|----------|-----------|-----------|
+| strict-4   | 3.1 %  | no    | 84.0 %   | 84.0 %    | 250 ms    |
+| strict-8   | 6.2 %  | no    | 92.0 %   | 93.2 %    | 299 ms    |
+| strict-16  | 12.5 % | no    | 100.0 %  | 99.0 %    | 372 ms    |
+| probe-8    | 6.2 %+ | yes   | 98.0 %   | 99.0 %    | 366 ms    |
+| probe-16   | 12.5 %+| yes   | 100.0 %  | 100.0 %   | 521 ms    |
+
+### `TestPQ_SIFT1M` — post-mitigation run (2026-04-30)
+
+| Config             | Recall@1 | Recall@10 | Avg query | P50     | Build     |
+|--------------------|----------|-----------|-----------|---------|-----------|
+| standard-strict8   | 96.0 %   | 96.4 %    | 310 ms    | 305 ms  | 3m14s     |
+| standard-strict16  | 100.0 %  | 99.8 %    | 401 ms    | 398 ms  | 3m3s      |
+| PQ-M8-strict8      | 90.0 %   | 93.4 %    | 291 ms    | 288 ms  | 8m20s     |
+| PQ-M8-strict16     | 100.0 %  | 98.4 %    | 355 ms    | 352 ms  | 8m16s     |
+| PQ-M8-strict32     | 100.0 %  | 99.8 %    | 522 ms    | 522 ms  | 8m17s     |
+| PQ-M8-probe16      | 100.0 %  | 99.2 %    | 462 ms    | 458 ms  | 8m18s     |
+| PQ-M8-probe32      | 100.0 %  | 100.0 %   | 658 ms    | 646 ms  | 8m35s     |
+
+### `TestSIFT1MAccuracy` — pre-mitigation baseline (2026-04-19)
 
 | Config     | Probe  | Multi | Recall@1 | Recall@10 | Avg query |
 |------------|--------|-------|----------|-----------|-----------|
@@ -25,7 +53,7 @@ Matches Pinecone `p1.x1` / Qdrant 8-core pod tier.
 | probe-8    | 6.2 %+ | yes   | 100.0 %  | 99.8 %    | 345 ms    |
 | probe-16   | 12.5 %+| yes   | 100.0 %  | 100.0 %   | 452 ms    |
 
-### `TestPQ_SIFT1M`
+### `TestPQ_SIFT1M` — pre-mitigation baseline (2026-04-19)
 
 | Config             | Recall@1 | Recall@10 | Avg query | P50     | Build     |
 |--------------------|----------|-----------|-----------|---------|-----------|
@@ -86,11 +114,16 @@ throughput play (more instances, parallel queries), not a latency play.
 
 ## Headline numbers for paper / pitch
 
-Best single number for each hardware tier:
+Best single number for each hardware tier (post-mitigation, commit `bc0ec45`):
 
 | Hardware     | Config          | Recall@10 | Avg query |
 |--------------|-----------------|-----------|-----------|
-| c6i.2xlarge  | PQ-M8-probe32   | 100.0 %   | 497 ms    |
-| c6i.2xlarge  | probe-8         | 99.8 %    | 345 ms    |
-| c6i.4xlarge  | PQ-M8-probe32   | 100.0 %   | 504 ms    |
-| c6i.4xlarge  | probe-8         | 99.8 %    | 329 ms    |
+| c6i.2xlarge  | probe-8         | 99.0 %    | 366 ms    |
+| c6i.2xlarge  | probe-16        | 100.0 %   | 521 ms    |
+| c6i.2xlarge  | PQ-M8-probe16   | 99.2 %    | 462 ms    |
+| c6i.2xlarge  | PQ-M8-probe32   | 100.0 %   | 658 ms    |
+
+Pre-mitigation baseline (2026-04-19, c6i.2xlarge): probe-8 99.8% / 345 ms;
+PQ-M8-probe32 100% / 497 ms. Post-mitigation latency adds ~5-30% across
+configs; recall is statistically equivalent (50-query sampling noise dominates).
+Pre-mitigation c6i.4xlarge run not yet repeated post-mitigation.

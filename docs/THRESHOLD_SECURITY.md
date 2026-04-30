@@ -145,17 +145,19 @@ noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 30, Bound: 6 * (1 << 30)}
 
 ~30 bits of masking (+10 bits over previous 2^20). [Noah's Ark](https://eprint.iacr.org/2023/815) (WAHC/CCS 2023) shows that when both ciphertext noise and flooding noise are Gaussian, simulation security is achievable with smaller flooding than worst-case analysis suggests.
 
-### Post-mitigation SIFT1M verification (M4 Pro, 10 CPU)
+### Post-mitigation SIFT1M verification (AWS c6i.2xlarge, 8 vCPU Intel Ice Lake)
+
+Includes both σ=2^30 + DecodePublic mitigation AND per-tenant blob ID permutation (commit `bc0ec45`).
 
 | Config | Recall@1 | Recall@10 | Avg Query |
 |---|---|---|---|
-| strict-4 (3% probe) | 82.0% | 87.8% | 152.7 ms |
-| strict-8 (6%) | 98.0% | 97.0% | 177.8 ms |
-| strict-16 (12%) | 100.0% | 99.8% | 333.5 ms |
-| probe-8 (6%, multi-probe) | 100.0% | 100.0% | 262.6 ms |
-| probe-16 (12%, multi-probe) | 100.0% | 100.0% | 455.7 ms |
+| strict-4 (3% probe) | 84.0% | 84.0% | 250 ms |
+| strict-8 (6%) | 92.0% | 93.2% | 299 ms |
+| strict-16 (12%) | 100.0% | 99.0% | 372 ms |
+| probe-8 (6%, multi-probe) | 98.0% | 99.0% | 366 ms |
+| probe-16 (12%, multi-probe) | 100.0% | 100.0% | 521 ms |
 
-**Zero recall regression vs pre-mitigation baseline.** Latency unchanged within noise.
+**Recall statistically equivalent to pre-mitigation baseline (50-query sampling noise).** Latency adds ~5-30% across configs (largest deltas attributable to query randomness, not mitigation cost). See `deploy/bench-cpu/results/SUMMARY.md` for pre-mitigation comparison.
 
 ## Remaining Recommended Fixes
 

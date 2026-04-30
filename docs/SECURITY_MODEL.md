@@ -158,12 +158,20 @@ For Opaque's decoy scheme specifically, three exploitable signals exist:
 A cryptographic-access-pattern competitor (Compass, Pacmann, Tiptoe, Panther)
 is immune to all three by construction.
 
-### Mitigation in roadmap: PIR backend
+### Mitigations in roadmap (non-PIR path)
 
-Opaque plans an opt-in PIR backend (SimplePIR-style, single-server, LWE-based)
-as an alternative to decoy clusters. Customers and deployments with a stronger
-threat model select PIR; the default decoy backend remains for latency-sensitive
-deployments. See `docs/PIR_DESIGN.md` (TBD) for the PIR architecture.
+After detailed evaluation (see commit history + `docs/THRESHOLD_SECURITY.md`),
+Opaque opted against a full PIR/ORAM backend for the HBC threat model. The
+combined effect of (a) per-tenant blob ID permutation π — already shipped
+(commit `bc0ec45`) — (b) constant-volume padding, (c) DP-formalized decoy
+mechanism with tunable ε, and (d) Lattigo retry-vulnerability mitigation
+provides defense-in-depth at zero or near-zero query latency cost.
+
+Cryptographic access-pattern hiding via PIR remains a research direction for
+deployments demanding Compass-tier (malicious-server) security; SimplePIR
+yields prohibitive client hint sizes (~16 GB) for our cluster geometry, and
+YPIR via Rust FFI was deemed disproportionate engineering cost for the
+incremental security gain over (a)-(d).
 
 ## 6. Comparison to Competitor Threat Models
 
@@ -217,12 +225,16 @@ hidden hardware effects).
 
 | Item | Status | Priority |
 |---|---|---|
-| σ flood 2^20 → 2^30 | **Done (commit 10b7850)** | — |
-| DecodePublic at all client-facing decryption sites | **Done (commit 10b7850)** | — |
-| PIR backend as opt-in alternative to decoys | In progress | High (story-level) |
-| Provable IND-CPA^D-128 via LogQ chain restructure → σ=2^45 | Planned | Medium |
+| σ flood 2^20 → 2^30 | **Done (commit `10b7850`)** | — |
+| DecodePublic at all client-facing decryption sites | **Done (commit `10b7850`)** | — |
+| Per-tenant blob ID permutation π | **Done (commit `bc0ec45`)** | — |
+| Constant-volume padding (closes volume side-channel) | Planned | Medium |
+| DP-grounded decoy mechanism with tunable ε | Planned | Medium |
+| DP formalization writeup in security model doc | Planned | Medium |
 | No-retry invariant + fresh CRS per MHE protocol instance | Planned | High (Mouchet'24 / Colin de Verdière 2026) |
+| Provable IND-CPA^D-128 via LogQ chain restructure → σ=2^45 | Planned | Medium |
 | Ephemeral-key rotation policy with bounded τ | Planned | Medium |
+| PIR backend as opt-in alternative to decoys | Deferred (statistical hiding + permutation deemed sufficient for HBC use case; PIR remains research direction for Compass-tier deployments) | Low |
 | Pin Lattigo to v6.x line for security patches | Deferred (v6 is breaking; v5 doesn't bootstrap during search) | Low |
 | Active-server integrity for cluster-index metadata | Not yet planned | Low (out of scope under HBC) |
 
