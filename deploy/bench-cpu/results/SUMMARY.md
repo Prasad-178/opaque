@@ -19,9 +19,13 @@ CKKS `LogN=14` (128-bit security). Dataset: SIFT 1M (1,000,000 × 128-dim),
 
 Matches Pinecone `p1.x1` / Qdrant 8-core pod tier.
 
-### `TestSIFT1MAccuracy` — post-mitigation run (2026-04-30, commit `bc0ec45`)
+### `TestSIFT1MAccuracy` — partial-mitigation run (2026-04-30, commit `bc0ec45`)
 
-Includes σ=2^30 + DecodePublic + per-tenant permutation. **Recall identical to baseline; latency within sampling noise (50 queries).**
+Includes σ=2^30 + DecodePublic. **Permutation π was MISSING from this run** —
+the public `opaque.NewDB` API uses `kmeans_builder.go`, which had not yet
+been wired to the permutation logic shipped to `enterprise_builder.go` in
+`bc0ec45`. Fixed in a later commit; see the next run for true post-mitigation
+numbers. Recall identical to baseline; latency within sampling noise.
 
 | Config     | Probe  | Multi | Recall@1 | Recall@10 | Avg query |
 |------------|--------|-------|----------|-----------|-----------|

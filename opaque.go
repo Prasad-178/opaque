@@ -64,6 +64,22 @@ import (
 // StorageBackend selects where encrypted vector blobs are stored.
 type StorageBackend int
 
+// PaddingMode controls the constant-volume padding strategy for encrypted
+// blob storage. Re-exported from the internal enterprise package so callers
+// don't need to import it directly.
+type PaddingMode = enterprise.PaddingMode
+
+// PaddingNone disables padding (default; legacy behavior).
+const PaddingNone = enterprise.PaddingNone
+
+// PaddingBucketed pads each cluster up to the next power-of-2 vector count.
+// Modest storage cost (~6-12 %), closes most of the volume side-channel.
+const PaddingBucketed = enterprise.PaddingBucketed
+
+// PaddingMaxFixed pads every cluster to the global maximum vector count.
+// ~10-25 % storage waste, fully closes volume variance.
+const PaddingMaxFixed = enterprise.PaddingMaxFixed
+
 // DefaultPQSeed is the random seed used for PQ codebook training.
 const DefaultPQSeed int64 = 73
 
@@ -102,6 +118,26 @@ type Config struct {
 	// access pattern privacy at the cost of additional bandwidth.
 	// Default: 8.
 	NumDecoys int
+
+	// TargetEpsilon, when > 0, derives NumDecoys from an ε-style upper bound
+	// on per-query cluster-identity distinguishability:
+	//   NumDecoys = ⌈(NumClusters - TopClusters) · e^(-ε)⌉
+	// Smaller ε ⇒ stronger privacy ⇒ larger derived NumDecoys ⇒ more bandwidth.
+	// When set, supersedes NumDecoys at search time.
+	// Default: 0 (unused; NumDecoys passes through directly).
+	// See docs/SECURITY_MODEL.md §5.1 for the bound and limitations.
+	TargetEpsilon float64
+
+	// PaddingMode selects the constant-volume padding strategy applied at
+	// index build time, closing the volume side-channel where unequal real
+	// cluster sizes leak which fetched cluster is "real" vs decoy.
+	//   PaddingNone (default): no padding, current behavior.
+	//   PaddingBucketed: pad each cluster up to next power-of-2 vector count
+	//     (~6-12 % storage waste, closes most volume leak).
+	//   PaddingMaxFixed: pad every cluster to global max count
+	//     (~10-25 % storage waste, fully closes volume variance).
+	// See docs/SECURITY_MODEL.md §5.
+	PaddingMode PaddingMode
 
 	// WorkerPoolSize is the number of parallel CKKS homomorphic encryption engines.
 	// Each engine consumes ~50MB of memory but enables parallel centroid scoring.
@@ -899,10 +935,12 @@ func (db *DB) buildLocked(ctx context.Context) error {
 		store.Close()
 		return fmt.Errorf("opaque: enterprise config: %w", err)
 	}
+	ecfgBuild.PaddingMode = db.cfg.PaddingMode
 	builderCfg := hierarchical.ConfigFromEnterprise(ecfgBuild)
 	builderCfg.NumKMeansInit = db.cfg.NumKMeansInit
 	builderCfg.RedundantAssignments = db.cfg.RedundantAssignments
 	builderCfg.NormalizedStorage = db.cfg.normalizedStorage()
+	builderCfg.TargetEpsilon = db.cfg.TargetEpsilon
 	builder, err := hierarchical.NewKMeansBuilder(builderCfg, ecfgBuild)
 	if err != nil {
 		store.Close()
@@ -1052,6 +1090,7 @@ func (db *DB) makeSearchConfig(ecfg *enterprise.Config, effectiveDim int) hierar
 		TopSuperBuckets:      db.cfg.TopClusters,
 		SubBucketsPerSuper:   1,
 		NumDecoys:            db.cfg.NumDecoys,
+		TargetEpsilon:        db.cfg.TargetEpsilon,
 		ProbeThreshold:       db.cfg.ProbeThreshold,
 		MaxProbeClusters:     maxProbe,
 		RedundantAssignments: db.cfg.RedundantAssignments,

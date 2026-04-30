@@ -107,6 +107,10 @@ func TestPQ_SIFT1M(t *testing.T) {
 			TopClusters:    cfg.topClusters,
 			NumDecoys:      numDecoys,
 			ProbeThreshold: cfg.probeThresh,
+			// All four mitigations live: σ=2^30 + DecodePublic shipped library-wide;
+			// permutation π always-on at build; padding + ε opt-in here.
+			PaddingMode:   opaque.PaddingBucketed,
+			TargetEpsilon: 2.0,
 		}
 		if cfg.pqM > 0 {
 			dbCfg.PQSubspaces = cfg.pqM

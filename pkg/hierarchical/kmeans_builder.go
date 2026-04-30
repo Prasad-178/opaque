@@ -125,6 +125,15 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 		copy(b.superBuckets[i].Centroid, centroid)
 	}
 
+	// Generate logical→storage permutation. Blobs stored at storage_id =
+	// perm[logical_id]; server cannot link a fetched storage ID back to its
+	// centroid coordinates without the permutation, which lives only in
+	// client credentials. See SECURITY_MODEL.md §5.
+	perm, err := generateBlobIDPermutation(b.config.NumSuperBuckets)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate blob ID permutation: %w", err)
+	}
+
 	// Phase 2: Assign vectors to super-buckets and encrypt
 	// Support redundant assignment for improved recall on boundary queries
 	numAssignments := b.config.RedundantAssignments
@@ -149,7 +158,9 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 		// Pre-compute metadata from primary assignment
 		superID := assignments[0]
 		b.superBuckets[superID].VectorCount++
-		bucketKey := formatSuperBucketKey(superID)
+		// vectorLocs tracks the storage bucketKey (matches what's stored on
+		// disk). superID stays logical for HE-scoring metadata.
+		bucketKey := formatSuperBucketKey(perm[superID])
 		b.vectorLocs[id] = &VectorLocation{
 			ID:        id,
 			SuperID:   superID,
@@ -206,7 +217,8 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 				}
 
 				for assignIdx, superID := range allAssignments[i].assignments {
-					bucketKey := formatSuperBucketKey(superID)
+					// Storage uses permuted ID; centroid scoring uses logical superID.
+					bucketKey := formatSuperBucketKey(perm[superID])
 
 					blobID := id
 					if assignIdx > 0 {
@@ -248,10 +260,29 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 		copy(centroids[i], super.Centroid)
 	}
 
-	// Update enterprise config with k-means centroids
+	// Update enterprise config with k-means centroids and storage permutation.
 	b.enterpriseCfg.SetCentroids(centroids)
+	b.enterpriseCfg.SetBlobIDPermutation(perm)
 
-	// Phase 3: Store all encrypted blobs
+	// Phase 2.5: Generate constant-volume padding blobs (mode-dependent).
+	// Padding blobs share the storage bucketKey of real blobs but contain
+	// random AES-GCM-shaped bytes; client AES decryption fails GCM auth and
+	// the existing "skip failed decryptions" path drops them silently.
+	if b.enterpriseCfg.PaddingMode != enterprise.PaddingNone {
+		counts := make(map[string]int, b.config.NumSuperBuckets)
+		for _, blb := range blobs {
+			counts[blb.LSHBucket]++
+		}
+		paddingBlobs, err := generatePaddingBlobs(counts, b.enterpriseCfg.PaddingMode, b.config.Dimension)
+		if err != nil {
+			return nil, fmt.Errorf("padding generation: %w", err)
+		}
+		if len(paddingBlobs) > 0 {
+			blobs = append(blobs, paddingBlobs...)
+		}
+	}
+
+	// Phase 3: Store all encrypted blobs (real + padding).
 	if err := store.PutBatch(ctx, blobs); err != nil {
 		return nil, fmt.Errorf("failed to store blobs: %w", err)
 	}

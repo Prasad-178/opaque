@@ -119,6 +119,10 @@ func TestSIFT1MAccuracy(t *testing.T) {
 			TopClusters:    cfg.topClusters,
 			NumDecoys:      numDecoys,
 			ProbeThreshold: cfg.probeThresh,
+			// All four mitigations live: σ=2^30 + DecodePublic shipped library-wide;
+			// permutation π always-on at build; padding + ε opt-in here.
+			PaddingMode:   opaque.PaddingBucketed,
+			TargetEpsilon: 2.0, // ⇒ NumDecoys derived to ~17 for N=128, K_real=8
 		})
 		if err != nil {
 			t.Fatalf("NewDB failed: %v", err)
