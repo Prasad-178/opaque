@@ -158,20 +158,104 @@ For Opaque's decoy scheme specifically, three exploitable signals exist:
 A cryptographic-access-pattern competitor (Compass, Pacmann, Tiptoe, Panther)
 is immune to all three by construction.
 
-### Mitigations in roadmap (non-PIR path)
+### Active mitigations (non-PIR path)
 
-After detailed evaluation (see commit history + `docs/THRESHOLD_SECURITY.md`),
-Opaque opted against a full PIR/ORAM backend for the HBC threat model. The
-combined effect of (a) per-tenant blob ID permutation π — already shipped
-(commit `bc0ec45`) — (b) constant-volume padding, (c) DP-formalized decoy
-mechanism with tunable ε, and (d) Lattigo retry-vulnerability mitigation
-provides defense-in-depth at zero or near-zero query latency cost.
+Opaque opted against a full PIR/ORAM backend for the HBC threat model after
+detailed evaluation (commit history + `docs/THRESHOLD_SECURITY.md`). The
+combined effect of the four mitigations below provides defense-in-depth at
+zero or near-zero query latency cost:
 
-Cryptographic access-pattern hiding via PIR remains a research direction for
-deployments demanding Compass-tier (malicious-server) security; SimplePIR
-yields prohibitive client hint sizes (~16 GB) for our cluster geometry, and
-YPIR via Rust FFI was deemed disproportionate engineering cost for the
-incremental security gain over (a)-(d).
+1. **Per-tenant blob ID permutation π** — shipped (commit `bc0ec45`). At
+   build time each enterprise gets a uniform random π over super-bucket IDs;
+   blobs are stored at `storage_id = π[logical_id]`. Server cannot link a
+   fetched storage ID back to its centroid coordinates without π. Closes
+   semantic-cluster-ID inference and cross-tenant chosen-plaintext attacks.
+
+2. **Constant-volume padding** — shipped (commit `414aa8e`). Tunable via
+   `enterprise.PaddingMode` (None | Bucketed | MaxFixed). Pads each sub-bucket
+   with random AES-GCM-shaped dummy blobs to equalize per-cluster fetch
+   sizes. Closes the volume side-channel where unequal real-cluster sizes
+   let an HBC server distinguish real from decoy by comparing total bytes
+   returned. Storage cost: ~6-25% depending on mode and cluster size variance.
+
+3. **TargetEpsilon-tunable decoy count** — shipped (commit `990e2be`).
+   Customers specify a privacy budget ε; the system derives `NumDecoys =
+   ⌈(N - K_real) · e^(-ε)⌉` automatically. See §5.1 below for the formal
+   bound and limitations.
+
+4. **Threshold-CKKS retry-vulnerability mitigation** — planned (Lattigo
+   `mhe` no-retry invariant + fresh CRS per protocol instance). Closes the
+   Mouchet'24 / Okada'25 / Colin de Verdière 2026 attacks. Tracked under §8.
+
+### Cryptographic access-pattern hiding (deferred)
+
+PIR via SimplePIR / YPIR remains a research direction for deployments
+demanding Compass-tier (malicious-server) security. SimplePIR forces
+prohibitive client hint sizes (~16 GB) at our cluster geometry (N=128
+clusters × ~5 MB per cluster blob); YPIR via Rust FFI was deemed
+disproportionate engineering cost (4-6 weeks) for the incremental security
+gain over mitigations (1)-(3) above in the HBC threat model.
+
+### 5.1 Formal access-pattern privacy bound
+
+**Decoy mechanism:** for each search query, the client computes top-K_real
+logical clusters via HE scoring, then fetches K_real + K_decoy storage IDs
+where K_decoy random IDs are drawn uniformly without replacement from the
+N - K_real non-selected pool.
+
+**ε-style upper bound (informal):** an HBC server observing the fetched
+storage-ID set S of size K_real + K_decoy cannot distinguish "real cluster
+is c" from "real cluster is c' ∈ S" with probability ratio greater than
+
+    (N - K_real) / K_decoy
+
+Setting this ratio ≤ e^ε gives:
+
+    K_decoy ≥ (N - K_real) · e^(-ε)
+
+For SIFT1M (N=128, K_real=8) this yields:
+
+| Target ε | Required K_decoy | Total fetched | % of all clusters |
+|---|---|---|---|
+| 1.0  | 45 | 53  | 41% |
+| 2.0  | 17 | 25  | 20% |
+| 3.0  |  6 | 14  | 11% |
+| 4.0  |  3 | 11  |  9% |
+
+The current default (`NumDecoys = 8`) corresponds to roughly ε ≈ 2.7.
+
+**Caveats:**
+- The bound is an *informal* upper-bound on per-query distinguishability,
+  not a formally tight (ε,δ)-DP guarantee. The standard DP framework
+  requires Bernoulli per-cluster sampling (variable K per query); switching
+  to that is planned future work.
+- The bound covers a *single* query. Composition over τ queries scales
+  approximately as τ · ε under standard DP composition (with no cross-query
+  correlation). Long-running deployments should pair tunable ε with
+  ephemeral-key rotation (§8 roadmap).
+- The bound assumes uniform priors over real cluster choice. A workload
+  with heavily-skewed cluster popularity gives the adversary a Bayesian
+  prior advantage *not* covered by the bound. This is the well-known
+  leakage-abuse limitation of statistical k-anonymity (Cash CCS'15, Oya
+  USENIX Sec'21).
+
+**Tunability:** `Config.TargetEpsilon = 2.0` is recommended for typical
+HBC enterprise deployments. Push to ε=1.0 for high-sensitivity workloads
+(more bandwidth). Use ε=3-4 for cost-sensitive deployments where workload
+priors are weak.
+
+**Composing with permutation π and padding:** these three mitigations target
+distinct channels:
+- π hides the **semantic identity** of fetched IDs.
+- Padding hides the **volume** of fetched data.
+- Tunable decoy ε bounds the **per-query distinguishability** of which ID
+  in the fetched set is real.
+
+A workload-prior adversary still has residual frequency-analysis power
+across many queries; the bound on that residual is the τ · ε composition
+limit modulated by ephemeral-key rotation. PIR remains the only mitigation
+that closes this composition channel cryptographically; the four-layer
+defense above bounds it statistically with a quantifiable parameter.
 
 ## 6. Comparison to Competitor Threat Models
 
@@ -228,13 +312,14 @@ hidden hardware effects).
 | σ flood 2^20 → 2^30 | **Done (commit `10b7850`)** | — |
 | DecodePublic at all client-facing decryption sites | **Done (commit `10b7850`)** | — |
 | Per-tenant blob ID permutation π | **Done (commit `bc0ec45`)** | — |
-| Constant-volume padding (closes volume side-channel) | Planned | Medium |
-| DP-grounded decoy mechanism with tunable ε | Planned | Medium |
-| DP formalization writeup in security model doc | Planned | Medium |
+| Constant-volume padding (closes volume side-channel) | **Done (commit `414aa8e`)** | — |
+| DP-grounded decoy mechanism with tunable ε | **Done (commit `990e2be`)** | — |
+| DP formalization writeup in security model doc | **Done (this commit)** | — |
 | No-retry invariant + fresh CRS per MHE protocol instance | Planned | High (Mouchet'24 / Colin de Verdière 2026) |
 | Provable IND-CPA^D-128 via LogQ chain restructure → σ=2^45 | Planned | Medium |
 | Ephemeral-key rotation policy with bounded τ | Planned | Medium |
-| PIR backend as opt-in alternative to decoys | Deferred (statistical hiding + permutation deemed sufficient for HBC use case; PIR remains research direction for Compass-tier deployments) | Low |
+| Bernoulli per-cluster decoy sampling for tight (ε,δ)-DP | Planned | Low |
+| PIR backend as opt-in alternative to decoys | Deferred (statistical hiding + permutation + padding + tunable ε deemed sufficient for HBC; PIR remains research direction for Compass-tier malicious-server deployments) | Low |
 | Pin Lattigo to v6.x line for security patches | Deferred (v6 is breaking; v5 doesn't bootstrap during search) | Low |
 | Active-server integrity for cluster-index metadata | Not yet planned | Low (out of scope under HBC) |
 

@@ -159,6 +159,13 @@ Includes both σ=2^30 + DecodePublic mitigation AND per-tenant blob ID permutati
 
 **Recall statistically equivalent to pre-mitigation baseline (50-query sampling noise).** Latency adds ~5-30% across configs (largest deltas attributable to query randomness, not mitigation cost). See `deploy/bench-cpu/results/SUMMARY.md` for pre-mitigation comparison.
 
+## Status of Decoy / Volume / Permutation Mitigations (added 2026-04-30)
+
+- **Per-tenant blob ID permutation π** — **Done (commit `bc0ec45`)**. Hides centroid-to-storage link from server.
+- **Constant-volume padding** — **Done (commit `414aa8e`)**. `enterprise.PaddingMode` (None | Bucketed | MaxFixed) closes the volume side-channel.
+- **TargetEpsilon-tunable decoy count** — **Done (commit `990e2be`)**. ε-style upper bound on per-query distinguishability; customers pick ε directly.
+- **DP formalization writeup** — **Done**. See `docs/SECURITY_MODEL.md` §5.1.
+
 ## Remaining Recommended Fixes
 
 ### 3. Implement Key Rotation (Medium Effort, High Impact)
