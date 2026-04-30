@@ -22,6 +22,22 @@ import (
 )
 
 // Config holds all enterprise-specific secrets and configuration.
+// PaddingMode selects the volume-side-channel mitigation strategy for blob
+// storage. See Config.PaddingMode for usage.
+type PaddingMode int
+
+const (
+	// PaddingNone disables padding. Legacy / cost-minimized.
+	PaddingNone PaddingMode = iota
+	// PaddingBucketed pads each sub-bucket count up to the next power-of-2
+	// tier (e.g., 7800 → 8192). Modest storage cost (~6-12% on real data),
+	// closes most of the volume side-channel.
+	PaddingBucketed
+	// PaddingMaxFixed pads every sub-bucket to the global maximum count.
+	// Eliminates volume variance entirely. ~10-25% storage waste.
+	PaddingMaxFixed
+)
+
 // This is distributed to authenticated users via the auth service.
 type Config struct {
 	// EnterpriseID uniquely identifies the enterprise
@@ -45,6 +61,15 @@ type Config struct {
 	// storage ID back to its corresponding centroid coordinates. nil = identity
 	// (legacy behavior, used by indexes built before permutation was added).
 	BlobIDPermutation []int
+
+	// PaddingMode controls constant-volume padding of sub-buckets at index
+	// build time. Closes the volume side-channel where unequal cluster sizes
+	// let an HBC server infer which fetched cluster is "real" by comparing
+	// total bytes returned. Default PaddingNone preserves legacy behavior;
+	// PaddingBucketed rounds counts up to the next power-of-2 tier (cheap
+	// privacy-cost tradeoff); PaddingMaxFixed pads every sub-bucket to the
+	// global max count (full closure, ~20% storage waste).
+	PaddingMode PaddingMode
 
 	// Dimension is the vector dimension
 	Dimension int
@@ -194,6 +219,15 @@ func (c *Config) SetBlobIDPermutation(permutation []int) {
 	c.Version++
 }
 
+// SetPaddingMode configures the constant-volume padding strategy applied at
+// index build time. Must be called BEFORE Build for the setting to take
+// effect on a given index version.
+func (c *Config) SetPaddingMode(mode PaddingMode) {
+	c.PaddingMode = mode
+	c.UpdatedAt = time.Now()
+	c.Version++
+}
+
 // Clone creates a deep copy of the configuration.
 func (c *Config) Clone() *Config {
 	clone := &Config{
@@ -204,6 +238,7 @@ func (c *Config) Clone() *Config {
 		Dimension:       c.Dimension,
 		NumSuperBuckets: c.NumSuperBuckets,
 		NumSubBuckets:   c.NumSubBuckets,
+		PaddingMode:     c.PaddingMode,
 		CreatedAt:       c.CreatedAt,
 		UpdatedAt:       c.UpdatedAt,
 		Version:         c.Version,

@@ -34,6 +34,90 @@ func generateBlobIDPermutation(n int) ([]int, error) {
 	return π, nil
 }
 
+// nextPow2 returns the smallest power of 2 ≥ n. nextPow2(0) = 1.
+func nextPow2(n int) int {
+	if n <= 1 {
+		return 1
+	}
+	p := 1
+	for p < n {
+		p <<= 1
+	}
+	return p
+}
+
+// computePaddingTarget returns the target sub-bucket count for the chosen
+// PaddingMode. counts maps bucketKey → real-blob-count.
+func computePaddingTarget(counts map[string]int, mode enterprise.PaddingMode) int {
+	if mode == enterprise.PaddingNone || len(counts) == 0 {
+		return 0
+	}
+	maxCount := 0
+	for _, c := range counts {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+	if mode == enterprise.PaddingMaxFixed {
+		return maxCount
+	}
+	// PaddingBucketed: round max up to next power of 2.
+	return nextPow2(maxCount)
+}
+
+// generatePaddingBlobs returns dummy AES-GCM-shaped blobs that fill each
+// sub-bucket up to the target count. Each padding blob has a uniformly
+// random 32-char hex ID and `ciphertextLen` bytes of crypto/rand-sourced
+// content. Real ciphertexts are AES-GCM with size = 8*dim + 28 bytes (12-byte
+// nonce + 16-byte tag + dim×8-byte plaintext); padding matches that exact
+// shape, so a server cannot distinguish padding from real on the wire.
+//
+// On the client, decryption of a padding blob fails GCM auth and the existing
+// "skip failed decryptions" path silently drops it. No client-side awareness
+// of padding is required.
+func generatePaddingBlobs(counts map[string]int, mode enterprise.PaddingMode, dimension int) ([]*blob.Blob, error) {
+	target := computePaddingTarget(counts, mode)
+	if target == 0 {
+		return nil, nil
+	}
+	ciphertextLen := dimension*8 + 28
+	var pad []*blob.Blob
+	for bucketKey, count := range counts {
+		toAdd := target - count
+		if toAdd <= 0 {
+			continue
+		}
+		for i := 0; i < toAdd; i++ {
+			id, err := randomHexID(32)
+			if err != nil {
+				return nil, fmt.Errorf("padding ID gen: %w", err)
+			}
+			ct := make([]byte, ciphertextLen)
+			if _, err := rand.Read(ct); err != nil {
+				return nil, fmt.Errorf("padding ciphertext gen: %w", err)
+			}
+			pad = append(pad, blob.NewBlob(id, bucketKey, ct, dimension))
+		}
+	}
+	return pad, nil
+}
+
+// randomHexID returns 2*nBytes hex characters from crypto/rand. Used to
+// generate padding-blob IDs that are indistinguishable from random vector IDs.
+func randomHexID(nBytes int) (string, error) {
+	buf := make([]byte, nBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	const hex = "0123456789abcdef"
+	out := make([]byte, nBytes*2)
+	for i, b := range buf {
+		out[i*2] = hex[b>>4]
+		out[i*2+1] = hex[b&0x0f]
+	}
+	return string(out), nil
+}
+
 // EnterpriseBuilder constructs a hierarchical index using enterprise configuration.
 // Unlike the standard Builder which uses explicit AES keys and LSH seeds,
 // this builder derives everything from the enterprise config, ensuring
@@ -207,7 +291,19 @@ func (b *EnterpriseBuilder) Build(ctx context.Context, ids []string, vectors [][
 	b.enterpriseCfg.SetCentroids(centroids)
 	b.enterpriseCfg.SetBlobIDPermutation(perm)
 
-	// Phase 3: Store all encrypted blobs
+	// Phase 2.5: Generate constant-volume padding blobs (mode-dependent).
+	// Padding blobs share the storage bucketKey of real blobs but contain
+	// random AES-GCM-shaped bytes; client AES decryption fails GCM auth and
+	// the existing "skip failed decryptions" path drops them silently.
+	paddingBlobs, err := generatePaddingBlobs(b.subBucketCounts, b.enterpriseCfg.PaddingMode, b.config.Dimension)
+	if err != nil {
+		return nil, fmt.Errorf("padding generation: %w", err)
+	}
+	if len(paddingBlobs) > 0 {
+		blobs = append(blobs, paddingBlobs...)
+	}
+
+	// Phase 3: Store all encrypted blobs (real + padding).
 	if err := store.PutBatch(ctx, blobs); err != nil {
 		return nil, fmt.Errorf("failed to store blobs: %w", err)
 	}
