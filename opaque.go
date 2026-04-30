@@ -1067,14 +1067,15 @@ func (db *DB) createBlobStore() (blob.Store, error) {
 // This bypasses the auth service, which is only needed for multi-user server deployments.
 func makeCredentials(ecfg *enterprise.Config) *auth.ClientCredentials {
 	return &auth.ClientCredentials{
-		Token:           "opaque-library",
-		TokenExpiry:     time.Now().Add(100 * 365 * 24 * time.Hour),
-		AESKey:          ecfg.AESKey,
-		Centroids:       ecfg.Centroids,
-		EnterpriseID:    ecfg.EnterpriseID,
-		Dimension:       ecfg.Dimension,
-		NumSuperBuckets: ecfg.NumSuperBuckets,
-		NumSubBuckets:   ecfg.NumSubBuckets,
+		Token:             "opaque-library",
+		TokenExpiry:       time.Now().Add(100 * 365 * 24 * time.Hour),
+		AESKey:            ecfg.AESKey,
+		Centroids:         ecfg.Centroids,
+		BlobIDPermutation: ecfg.BlobIDPermutation,
+		EnterpriseID:      ecfg.EnterpriseID,
+		Dimension:         ecfg.Dimension,
+		NumSuperBuckets:   ecfg.NumSuperBuckets,
+		NumSubBuckets:     ecfg.NumSubBuckets,
 	}
 }
 
