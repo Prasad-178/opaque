@@ -225,7 +225,85 @@ elapsed: 412ms
 
 ---
 
-## 13. Future Variants (post-M1)
+## 13. fhe-attest — Verifiable FHE Compute (Opaque Extension, Sister Project)
+
+A separate but related research project that closes a real trust gap in Opaque (and in the M1 demo above).
+
+### The gap
+
+In M1 today, the visitor must trust that the server actually ran the homomorphic similarity search circuit they were promised — rather than (a) running a different circuit that selectively reveals query info via crafted noise, or (b) substituting a planted database that maps suspicious queries to attacker-chosen results, or (c) silently degrading recall to harvest re-query signals over time. CKKS hides the data, but does not prove the computation was the one declared.
+
+### The idea
+
+`fhe-attest` produces a **succinct ZK proof that a homomorphic evaluation was performed correctly** against a published circuit and a committed database. Server returns: encrypted result + ZK proof. Client verifies the proof in milliseconds before trusting the result.
+
+Concretely:
+- Database root is committed publicly (Merkle / Verkle / KZG over encrypted vectors).
+- Circuit (similarity-search-and-top-K homomorphic program) compiled to a verifiable IR.
+- Each query produces a SNARK / STARK proof: "I ran circuit `C` over database with commitment `D` and input ciphertext `Q`, producing output ciphertext `R`."
+- Client verifies in < 50ms before decrypting.
+
+### Why it's worth building
+
+- **Frontier research**: verifiable FHE is an open problem with active interest (Marlin/Plonky3 over arithmetic FHE traces; recent zkFHE proposals from Zama, Fhenix research). No production-grade library exists. Real paper-worthy gap.
+- **Closes Opaque's last trust assumption**: Opaque already proves data doesn't leak. fhe-attest proves *the right computation happened*. Together: end-to-end verifiable private compute.
+- **Reuses Opaque's Go infra + lattigo stack**: same FHE library, additive build.
+- **Universal beyond Opaque**: any FHE-based product (private RAG, private inference, private analytics) needs this primitive. Could be the standard library for the space.
+
+### Cryptographic approach (sketch)
+
+Three viable paths:
+
+1. **SNARK over the FHE evaluation trace** — represent each homomorphic op (rotation, addition, multiplication, key-switch) as constraints in a SNARK system (Plonky3 / Halo2 / Nova). Generates a proof that the trace is consistent with the declared circuit and inputs. **High effort, most general.**
+2. **Sumcheck / GKR over arithmetic circuit** — FHE evals are giant arithmetic circuits over a polynomial ring. GKR-style sumcheck protocols (Gemini, HyperPlonk variants) can prove correctness with sub-linear proof size. Likely best perf trade-off for the ciphertext sizes Opaque uses. **Medium effort, paper-friendly.**
+3. **TEE attestation hybrid (escape hatch)** — run FHE eval in an SGX/TDX/Nitro enclave, attestation acts as proof of correct execution. Weaker security model (trust the TEE vendor) but ships in weeks. **Low effort, weaker guarantees.**
+
+Recommend: ship a TEE-attested v0 in 2-3 weeks for the M1 demo (immediate trust improvement); pursue sumcheck-based v1 over 3-6 months as the research artifact.
+
+### Architecture changes vs Opaque today
+
+```
+┌────────────────────────────────┐
+│  Opaque server (existing)       │
+│  + circuit registry (declared)  │
+│  + db commitment publisher       │
+│  + proof generator (new)         │
+└────────────────────────────────┘
+              ↓
+        Enc(R) + π
+              ↓
+┌────────────────────────────────┐
+│  Client                          │
+│  + verifier (WASM, < 50ms)       │
+│  + fetches db_commitment + circuit│
+│  + verifies π before decrypting  │
+└────────────────────────────────┘
+```
+
+### Build phases (independent of M1)
+
+1. **Phase 1 — TEE-attested v0** (2 weeks): wrap existing Opaque homomorphic search in AWS Nitro enclave, ship Nitro attestation alongside results. Write client-side verifier.
+2. **Phase 2 — Circuit registry + db commitment** (1 week): publish hash of declared homomorphic circuit + Merkle root of encrypted DB. Anyone can audit.
+3. **Phase 3 — Sumcheck prover for FHE traces** (2-3 months): research-grade. Implement GKR-style protocol over CKKS evaluation traces. Benchmark proof size + verify time.
+4. **Phase 4 — Paper draft** (1 month): write up for IACR ePrint / submit to PETS / RWC / TCC.
+5. **Phase 5 — Wire into M1 demo** (1 week): visitor sees "✓ proof of correct execution verified" in trace panel. Real differentiator.
+
+### Open questions
+
+- TEE acceptable for v0 trust model, or skip directly to cryptographic proof?
+- Which proof system best fits CKKS arithmetic (Plonky3, Nova, sumcheck-based)?
+- Is the right output a paper, an OSS library, or both?
+- Does it warrant a separate folder (`fhe-attest/`) at the projects root, or stay as Opaque extension?
+
+### Hard constraints
+
+- Realfy must NEVER appear in any artifact, paper, or repo related to this work.
+- All research artifacts (paper draft, code) OSS from day 1 for trust/verifiability.
+- TEE v0 must be marked "weak attestation, trust the vendor" — no overclaiming.
+
+---
+
+## 14. Future Variants (post-M1, post-fhe-attest)
 
 - **M4 — Private journaling app**: visitor brings own data, search across encrypted personal notes. Standalone product, deeper engagement, return visits. Defer to v2.
 - **R1 — Private email search**: same primitive, different dataset. Could be its own consumer product.
