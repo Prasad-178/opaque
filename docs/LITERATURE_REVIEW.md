@@ -24,8 +24,10 @@ identical-or-better across configurations.
 
 | System | Year/Venue | Approach | Scale | Recall@10 | Latency | Hardware | Security |
 |--------|-----------|----------|-------|-----------|---------|----------|----------|
-| **Opaque (probe-8, full mitigations)** | **2026** | **CKKS HE + AES + π + Bucketed pad + ε=2 decoys** | **1M, 128d** | **99.4%** | **630ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access + DP-bounded** |
-| **Opaque (probe-16, full mitigations)** | **2026** | **CKKS HE + AES + π + Bucketed pad + ε=2 decoys** | **1M, 128d** | **100.0%** | **815ms** | **c6i.2xlarge (8 vCPU)** | **HE + AES + permuted access + DP-bounded** |
+| **Opaque (probe-8, optimal ε=2.5)** | **2026** | **CKKS HE + AES + π + Bucketed pad + ε=2.5 decoys** | **1M, 128d** | **99.6%** | **462ms** | **m6i.2xlarge (8 vCPU)** | **HE + AES + permuted access + DP-bounded** |
+| **Opaque (probe-16, optimal ε=2.5)** | **2026** | **CKKS HE + AES + π + Bucketed pad + ε=2.5 decoys** | **1M, 128d** | **100.0%** | **635ms** | **m6i.2xlarge (8 vCPU)** | **HE + AES + permuted access + DP-bounded** |
+| Opaque (PQ-M8-probe8, optimal ε=2.5) | 2026 | CKKS HE + PQ + AES + π + pad + ε=2.5 | 1M, 128d | 97.6% | 428ms | m6i.2xlarge | HE + AES + permuted access + DP-bounded |
+| Opaque (probe-8, ε=2 high-privacy tier) | 2026 | CKKS HE + AES + π + pad + ε=2.0 | 1M, 128d | 99.4% | 630ms | c6i.2xlarge | stronger ε bound |
 | Opaque (probe-8, partial-mit) | 2026 | CKKS HE + AES + decoys (8 fixed) | 1M, 128d | 99.0% | 366ms | c6i.2xlarge | HE + AES + statistical decoys |
 | Opaque (PQ-M8-probe32, baseline) | 2026 | CKKS HE + PQ + AES + decoys | 1M, 128d | 100.0% | 497ms | c6i.2xlarge | HE + AES + statistical decoys |
 | Opaque (PQ, GIST, pre-mitigation) | 2026 | CKKS HE + PQ + AES + decoys | 100K, 960d | 98.0% | 497ms | M4 Pro (10 vCPU) | HE + AES + access-pattern hiding |

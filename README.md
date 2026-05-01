@@ -145,15 +145,29 @@ opaque.Config{
     NumClusters:    128,
     TopClusters:    8,
     ProbeThreshold: 0.95,             // multi-probe expansion
-    PQSubspaces:    8,                // M=8 PQ for fast local scoring
     PaddingMode:    opaque.PaddingBucketed,
     TargetEpsilon:  2.5,              // derives NumDecoys ≈ 10
+    // PQSubspaces: 8,                // optional: enable for ~7% faster query
+                                      //   at -2 pp Recall@10 trade-off
 }
 ```
 
-Headline numbers and a per-config trade-off table are in
-[`deploy/bench-cpu/results/SUMMARY.md`](deploy/bench-cpu/results/SUMMARY.md)
-(verified on AWS c6i.2xlarge, 8 vCPU Intel Xeon Platinum 8375C).
+Verified on AWS m6i.2xlarge (8 vCPU, 32 GB, Intel Xeon Platinum 8375C),
+2026-05-01 (commit `429ddf7`):
+
+| Variant                          | Recall@1 | Recall@10 | Avg query |
+|----------------------------------|----------|-----------|-----------|
+| **probe-8, no PQ (recommended)** | **100 %**| **99.6 %**| **462 ms**|
+| probe-8, PQ-M8                   | 100 %    | 97.6 %    | 428 ms    |
+| probe-16, no PQ (max recall)     | 100 %    | 100.0 %   | 635 ms    |
+| probe-16, PQ-M8                  | 100 %    | 99.4 %    | 578 ms    |
+
+Per-config trade-offs and pre/full-mitigation comparisons are in
+[`deploy/bench-cpu/results/SUMMARY.md`](deploy/bench-cpu/results/SUMMARY.md).
+
+**When to enable PQ:** PQ wins more at higher dimensions (768-dim text
+embeddings, 960-dim GIST features). At SIFT1M (128-dim) the benefit is
+modest. PQ also adds ~5 minutes of one-time codebook training to `Build()`.
 
 ## Incremental Indexing
 

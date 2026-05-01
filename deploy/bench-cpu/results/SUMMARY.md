@@ -19,6 +19,56 @@ CKKS `LogN=14` (128-bit security). Dataset: SIFT 1M (1,000,000 × 128-dim),
 
 Matches Pinecone `p1.x1` / Qdrant 8-core pod tier.
 
+## m6i.2xlarge (8 vCPU, 32 GB, Intel Ice Lake) — optimal-config run (2026-05-01)
+
+`m6i.2xlarge` matches the c6i.2xlarge 8-vCPU profile but adds 16 GB of RAM
+(32 GB total) so SIFT1M Build with full mitigations (Bucketed padding +
+ε-derived decoys) doesn't OOM during PQ codebook training. Run on commit
+`429ddf7` with `TargetEpsilon=2.5` defaults.
+
+### `TestSIFT1MAccuracy` (no PQ, ε=2.5)
+
+| Config     | Probe  | Multi | Recall@1 | Recall@10 | Avg query |
+|------------|--------|-------|----------|-----------|-----------|
+| strict-4   | 3.1 %  | no    | 82.0 %   | 84.8 %    | 324 ms    |
+| strict-8   | 6.2 %  | no    | 94.0 %   | 95.2 %    | 369 ms    |
+| strict-16  | 12.5 % | no    | 100.0 %  | 99.6 %    | 469 ms    |
+| **probe-8** | 6.2 %+ | yes   | **100.0 %** | **99.6 %** | **462 ms** |
+| probe-16   | 12.5 %+| yes   | 100.0 %  | 100.0 %   | 635 ms    |
+
+### `TestPQ_SIFT1M` — privacy-tunable comparison
+
+| Config                 | ε    | PQ | Recall@1 | Recall@10 | Avg query | Build  |
+|------------------------|------|----|----------|-----------|-----------|--------|
+| **PQ-M8-probe8-eps25** | 2.50 | M8 | 100.0 %  | 97.6 %    | **428 ms**| 7m56s  |
+| PQ-M8-probe16-eps25    | 2.50 | M8 | 100.0 %  | 99.4 %    | 578 ms    | 8m6s   |
+| PQ-M8-probe8-eps271    | 2.71 | M8 | 98.0 %   | 98.0 %    | **410 ms**| 8m32s  |
+| PQ-M8-probe8-eps20     | 2.00 | M8 | 100.0 %  | 98.0 %    | 502 ms    | 8m9s   |
+| standard-probe8-eps25  | 2.50 | -- | 100.0 %  | 99.8 %    | 461 ms    | 3m25s  |
+
+Observations:
+- ε=2.71 (baseline-parity, ~9 decoys) is the fastest tier at 410 ms with
+  98 % recall — back to pre-mitigation latency neighborhood.
+- ε=2.5 (recommended default, ~10 decoys) lands at ~430-460 ms and recall
+  ≥ 97.6 %.
+- ε=2.0 (high-privacy, ~17 decoys) costs ~75 ms more than ε=2.5 for the
+  same recall.
+- PQ at SIFT1M (128-dim) saves only ~30-50 ms vs non-PQ at the same ε.
+  Trade is ~2 pp recall. PQ wins more at higher dimensions (text/RAG
+  embeddings).
+- Build cost: PQ adds ~5 min for codebook training; one-time, not query cost.
+
+### Headline (m6i.2xlarge, all four mitigations live, ε=2.5)
+
+| Config                       | Recall@1 | Recall@10 | Avg query |
+|------------------------------|----------|-----------|-----------|
+| **probe-8 (recommended)**    | 100.0 %  | 99.6 %    | **462 ms**|
+| **probe-16 (max recall)**    | 100.0 %  | 100.0 %   | **635 ms**|
+| PQ-M8-probe8 (PQ alt)        | 100.0 %  | 97.6 %    | 428 ms    |
+| PQ-M8-probe8-eps271 (fastest)| 98.0 %   | 98.0 %    | 410 ms    |
+
+---
+
 ### `TestSIFT1MAccuracy` — full-mitigation run (2026-04-30 19:08, commit `e45223b` + makeCredentials fix)
 
 All four mitigations live: σ=2^30 + DecodePublic, per-tenant blob ID
