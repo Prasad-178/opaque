@@ -79,38 +79,42 @@ func TestPQ_SIFT1M(t *testing.T) {
 	}
 	var results []benchResult
 
+	// Configs designed to characterize the privacy-tunable optimum with PQ
+	// always on (PQ wins at SIFT1M scale and is the default for "optimal").
+	// epsilon column tunes K_decoy via ⌈(N - K_real) · e^(-ε)⌉.
 	configs := []struct {
 		name        string
 		pqM         int
 		topClusters int
 		probeThresh float64
+		epsilon     float64
 	}{
-		// Standard baselines.
-		{"standard-strict8", 0, 8, 1.0},
-		{"standard-strict16", 0, 16, 1.0},
-		// PQ M=8 (best for 128-dim from SIFT100K results).
-		{"PQ-M8-strict8", 8, 8, 1.0},
-		{"PQ-M8-strict16", 8, 16, 1.0},
-		{"PQ-M8-strict32", 8, 32, 1.0},
-		// PQ with multi-probe.
-		{"PQ-M8-probe16", 8, 16, 0.95},
-		{"PQ-M8-probe32", 8, 32, 0.95},
+		// Optimal balanced (proposed default for paper / docs).
+		{"PQ-M8-probe8-eps25", 8, 8, 0.95, 2.5},
+		// Optimal high recall.
+		{"PQ-M8-probe16-eps25", 8, 16, 0.95, 2.5},
+		// Baseline-parity check: ε=2.71 ⇒ ~9 decoys, matches old 8-fixed scheme.
+		{"PQ-M8-probe8-eps271", 8, 8, 0.95, 2.71},
+		// High-privacy tier (sensitive workloads).
+		{"PQ-M8-probe8-eps20", 8, 8, 0.95, 2.0},
+		// Single non-PQ data point for PQ-vs-standard comparison at ε=2.5.
+		{"standard-probe8-eps25", 0, 8, 0.95, 2.5},
 	}
 
 	for _, cfg := range configs {
-		t.Logf("--- %s (TopClusters=%d, PQ=%d, probe=%.2f) ---",
-			cfg.name, cfg.topClusters, cfg.pqM, cfg.probeThresh)
+		t.Logf("--- %s (TopClusters=%d, PQ=%d, probe=%.2f, eps=%.2f) ---",
+			cfg.name, cfg.topClusters, cfg.pqM, cfg.probeThresh, cfg.epsilon)
 
 		dbCfg := opaque.Config{
 			Dimension:      dataset.Dimension,
 			NumClusters:    numClusters,
 			TopClusters:    cfg.topClusters,
-			NumDecoys:      numDecoys,
+			NumDecoys:      numDecoys, // ignored when TargetEpsilon > 0
 			ProbeThreshold: cfg.probeThresh,
 			// All four mitigations live: σ=2^30 + DecodePublic shipped library-wide;
-			// permutation π always-on at build; padding + ε opt-in here.
+			// permutation π always-on at build; padding + ε per-config here.
 			PaddingMode:   opaque.PaddingBucketed,
-			TargetEpsilon: 2.0,
+			TargetEpsilon: cfg.epsilon,
 		}
 		if cfg.pqM > 0 {
 			dbCfg.PQSubspaces = cfg.pqM

@@ -64,7 +64,9 @@ func main() {
 | `Dimension` | (required) | Vector dimension |
 | `NumClusters` | 64 | K-means clusters. More = faster search, less privacy |
 | `TopClusters` | NumClusters/2 | Clusters probed per search. More = better recall |
-| `NumDecoys` | 8 | Decoy clusters for access pattern hiding |
+| `NumDecoys` | 8 | Decoy clusters for access pattern hiding (used when `TargetEpsilon == 0`) |
+| `TargetEpsilon` | 0 (off) | DP-style privacy budget; when > 0, derives NumDecoys from ⌈(NumClusters - TopClusters) · e^(-ε)⌉. Smaller ε = stronger privacy = more decoys = more bandwidth. See **Privacy Tuning** below. |
+| `PaddingMode` | `PaddingNone` | `PaddingNone`, `PaddingBucketed` (next-pow2, ~6-12% storage), or `PaddingMaxFixed` (~10-25% storage). Closes volume side-channel by equalizing cluster sizes. |
 | `WorkerPoolSize` | min(NumCPU, 8) | Parallel HE engines (~50MB each) |
 | `Storage` | Memory | `opaque.Memory` or `opaque.File` |
 | `StoragePath` | "" | Directory for file storage |
@@ -77,6 +79,81 @@ func main() {
 | `PCADimension` | 0 (off) | Target dimension for PCA reduction |
 | `PQSubspaces` | 0 (off) | PQ subspaces for fast scoring (8=recommended for 128-dim) |
 | `AutoIndexEnabled` | false | Enable automatic background re-indexing |
+
+## Privacy Tuning
+
+Opaque's access-pattern privacy (which cluster a query targets) is tuned via the
+`TargetEpsilon` config field. The smaller the ε, the stronger the upper bound
+on per-query cluster-identity distinguishability — at the cost of fetching
+more decoy clusters per search. The bound is
+
+```
+NumDecoys = ⌈(NumClusters - TopClusters) · e^(-ε)⌉
+```
+
+For SIFT1M (NumClusters=128, TopClusters=8) the resulting trade-offs:
+
+| ε     | Decoys | Privacy meaning                                    | Cost (vs ε off, baseline NumDecoys=8) |
+|-------|--------|----------------------------------------------------|----------------------------------------|
+| 1.0   | 45     | Very strong: distinguish ratio ≤ e ≈ 2.72         | ~5× decoy fetches, +200%+ latency      |
+| 2.0   | 17     | Strong: ratio ≤ e^2 ≈ 7.4                         | ~2× decoys, +60-80% latency            |
+| 2.5   | 10     | **Recommended default** — modest upgrade over 8-decoy baseline | +5-15% latency               |
+| 2.71  | ~9     | ≈ baseline (matches the historical 8-fixed scheme) | ~baseline                              |
+| 3.0   | 6      | Weaker than baseline — only for cost-sensitive    | -10% latency                           |
+
+`TargetEpsilon=0` (default) leaves `NumDecoys` to take effect directly (8 by
+default). Set `TargetEpsilon=2.5` for a quantifiable, paper-grade privacy claim
+with minimal cost.
+
+The bound itself is informal (per-query distinguishability ratio); composition
+over many queries scales as τ·ε. See `docs/SECURITY_MODEL.md` §5.1 for the full
+formalism, caveats (uniform-prior assumption, single-query nature), and how π +
+padding compose with this knob to provide defense in depth.
+
+### Privacy presets (recommended config templates)
+
+```go
+// Cost-sensitive (acceptable when workload is broad / non-targeted)
+opaque.Config{
+    TargetEpsilon: 3.0,
+    PaddingMode:   opaque.PaddingNone,
+    PQSubspaces:   8,
+}
+
+// Balanced — recommended default for SIFT-class workloads
+opaque.Config{
+    TargetEpsilon: 2.5,
+    PaddingMode:   opaque.PaddingBucketed,
+    PQSubspaces:   8,
+}
+
+// High privacy (regulated / sensitive workloads)
+opaque.Config{
+    TargetEpsilon: 1.5,
+    PaddingMode:   opaque.PaddingMaxFixed,
+    PQSubspaces:   8,
+}
+```
+
+## Optimal Configuration (SIFT1M)
+
+The best balance of latency, recall, and privacy at SIFT1M (1 M × 128-dim) is:
+
+```go
+opaque.Config{
+    Dimension:      128,
+    NumClusters:    128,
+    TopClusters:    8,
+    ProbeThreshold: 0.95,             // multi-probe expansion
+    PQSubspaces:    8,                // M=8 PQ for fast local scoring
+    PaddingMode:    opaque.PaddingBucketed,
+    TargetEpsilon:  2.5,              // derives NumDecoys ≈ 10
+}
+```
+
+Headline numbers and a per-config trade-off table are in
+[`deploy/bench-cpu/results/SUMMARY.md`](deploy/bench-cpu/results/SUMMARY.md)
+(verified on AWS c6i.2xlarge, 8 vCPU Intel Xeon Platinum 8375C).
 
 ## Incremental Indexing
 
