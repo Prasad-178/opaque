@@ -24,9 +24,14 @@ export GOPATH=$HOME/go
 
 echo "Go version: $(/usr/local/go/bin/go version)"
 
-# Build tools (for transitive C dependencies, if any)
-sudo apt-get update -qq
-sudo apt-get install -y -qq build-essential curl
+# Build tools (best-effort — Opaque is pure Go, but transitive deps may need
+# a C compiler). Don't fail if build-essential is unavailable in the AMI's
+# package index (recent Canonical Ubuntu 22.04 minimal images sometimes ship
+# without main-universe wired up).
+sudo apt-get update -qq || true
+sudo apt-get install -y -qq build-essential curl 2>/dev/null || \
+  sudo apt-get install -y -qq gcc make curl 2>/dev/null || \
+  echo "warn: no C compiler installed; relying on pure Go build"
 
 # Extract opaque source
 echo "Extracting opaque source..."
