@@ -59,44 +59,46 @@ From SECURITY.md:
 
 > "The countermeasures from [Mouchet et al. 2024] and [Colin de Verdiere et al.] are **not currently implemented** in Lattigo."
 
-## Opaque's Current Implementation (post-mitigation, 2026-04)
+## Opaque's Current Implementation (post-restructure, 2026-05)
 
 **File:** `pkg/crypto/threshold/threshold.go`, line 237
 
 ```go
-noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 30, Bound: 6 * (1 << 30)}
+noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 45, Bound: 6 * (1 << 45)}
 ```
 
-**Sigma = 2^30 ≈ 1.07e9** (~30 bits of masking, +10 bits over the previous 2^20).
+**Sigma = 2^45 ≈ 3.5e13** (~45 bits of masking).
+
+LogQ chain restructured (commit `e42338f`):
+- Old: `LogQ=[60, 45, 45, 45, 45, 45, 45, 45]` + `LogDefaultScale=45`
+- New: `LogQ=[60, 60, 60, 60, 60]` + `LogDefaultScale=60`
 
 Composed with `DecodePublic(pt, values, 10)` on every client-facing decryption
 (see `pkg/crypto/crypto.go` and `pkg/crypto/threshold/threshold.go` `DecryptScalar` /
 `DecryptBatchScalars`). DecodePublic rounds output to 2^-10 ≈ 1e-3 precision per
 Lattigo SECURITY.md, sanitizing residual noise that the Li-Micciancio attack uses.
 
-### Why not sigma=2^45?
+### Why σ=2^45 with restructured chain
 
-Bergamaschi PKC 2025 (eprint 2024/424) recommends sigma~2^45 for provable 128-bit
-IND-CPA^D with tau<=2^20 decryptions. We tried this. **It catastrophically destroys
-signal in our parameter set**: CKKS plaintext scale per LogQ prime is 2^45, so
-flooding sigma=2^45 produces post-decode noise of magnitude ~1.0 on [-1, 1] scores
-(verified: TestThresholdDecryptScalar produced 10^88-magnitude garbage). Provable
-sigma=2^45 requires enlarging the LogQ chain so flooding stays << scale. **Deferred
-as a parameter-restructure task.**
+Bergamaschi PKC 2025 (eprint 2024/424) gives σ ≈ 2^45 for **provable 128-bit
+IND-CPA^D security** with τ ≤ 2^20 decryptions per key. With the previous
+`LogDefaultScale=45`, σ=2^45 had the same magnitude as the plaintext scale and
+destroyed signal entirely (post-decode noise ~1.0 on [-1,1] scores). Bumping
+`LogDefaultScale` to 60 gives 2^45/2^60 = 2^-15 ≈ 3e-5 post-decode noise — same
+ratio as the old σ=2^30/scale=2^45 setup, signal preserved.
 
-Sigma=2^30 is the highest value that preserves signal in the current parameter set:
-post-decode flooding noise ~ 2^30/2^45 = 2^-15 ≈ 3e-5, well below the 2^-10
-DecodePublic rounding precision (so the rounding masks it).
+5 primes (vs old 8) is sufficient because Opaque's HE circuit depth is 1
+(multiply + rotations + adds). Total `LogQ + LogP = 422` bits at `LogN=14`
+maintains 128-bit RLWE security.
 
-### Is sigma=2^30 + DecodePublic Sufficient?
+### Is σ=2^45 + DecodePublic Sufficient?
 
-**For provable 128-bit IND-CPA^D under Bergamaschi: No** — needs ~2^45 with bigger
-LogQ chain.
+**For provable 128-bit IND-CPA^D under Bergamaschi PKC 2025: Yes** — σ=2^45
+satisfies the bound for τ ≤ 2^20 decryptions per key.
 
-**For Opaque's practical use case: Yes** — Li-Micciancio key recovery requires the
-attacker to recover the residual noise polynomial. DecodePublic destroys that
-information by rounding. Sigma=2^30 strictly dominates the previous 2^20 and is
-the maximum compatible with the current parameter set.
+**Defense in depth:** DecodePublic compositionally destroys residual noise the
+Li-Micciancio attack uses, regardless of σ. The combination of parametric σ
+(provable) + DecodePublic (operational) gives belt-and-suspenders coverage.
 
 ### Was sigma=2^20 Sufficient? (historical)
 

@@ -61,18 +61,30 @@ is enforced via mTLS / authenticated transport (gRPC).
 ### CKKS noise flooding and DecodePublic (Li-Micciancio mitigation)
 
 Opaque's threshold-decryption path applies Gaussian noise flooding with
-`σ = 2^30` before partial decryption (`pkg/crypto/threshold/threshold.go:237`)
-and then routes every plaintext released to the client through
+`σ = 2^45` before partial decryption (`pkg/crypto/threshold/threshold.go:237`)
+and routes every plaintext released to the client through
 `DecodePublic(_, _, logprec=10)` (rounds output to 2^-10 ≈ 1e-3 precision).
 
 These two mitigations compose to defeat the Li-Micciancio key-recovery attack
-on CKKS approximate decryption (Eurocrypt 2021, eprint 2020/1533). Lattigo's
-own SECURITY.md documents this mitigation pattern.
+on CKKS approximate decryption (Eurocrypt 2021, eprint 2020/1533) and provide
+**provable 128-bit IND-CPA^D security** under the bound of Bergamaschi et al.
+PKC 2025 (eprint 2024/424) for τ ≤ 2^20 decryptions per key.
 
-The mitigation is **not provably IND-CPA^D-128-secure** under Bergamaschi et
-al. PKC 2025 (eprint 2024/424), which would require σ ≈ 2^45 with an enlarged
-LogQ chain (current chain has scale 2^45 per prime, which makes σ=2^45 destroy
-signal). Restructuring LogQ to enable provable σ=2^45 is on the roadmap.
+Achieving σ=2^45 required a LogQ chain restructure (commit `e42338f`):
+- Old: `LogQ=[60, 45, 45, 45, 45, 45, 45, 45]` (375 bits, `LogDefaultScale=45`)
+- New: `LogQ=[60, 60, 60, 60, 60]` (300 bits, `LogDefaultScale=60`)
+
+With the old chain, σ=2^45 noise had the same magnitude as the plaintext scale
+2^45 and destroyed signal entirely (post-decode noise ~1.0 on [-1,1] scores —
+verified empirically when σ=2^45 was first attempted). Restructuring to
+`LogDefaultScale=60` gives 2^45/2^60 = 2^-15 ≈ 3e-5 post-decode noise, well
+below the DecodePublic 2^-10 rounding precision so signal is preserved.
+
+5 primes is sufficient because Opaque's HE circuit depth is 1 (one multiply +
+log₂(d) rotations + adds). The 8-prime chain was over-provisioned.
+
+Total chain `LogQ + LogP = 300 + 122 = 422` bits at `LogN=14` → 128-bit RLWE
+security maintained per the standard CKKS security tables.
 
 ## 3. Threshold Mode (Optional)
 
@@ -309,14 +321,14 @@ hidden hardware effects).
 
 | Item | Status | Priority |
 |---|---|---|
-| σ flood 2^20 → 2^30 | **Done (commit `10b7850`)** | — |
+| σ flood 2^20 → 2^30 → 2^45 | **Done (commits `10b7850`, `e42338f`)** | — |
+| LogQ chain restructure for provable IND-CPA^D-128 | **Done (commit `e42338f`)** | — |
 | DecodePublic at all client-facing decryption sites | **Done (commit `10b7850`)** | — |
 | Per-tenant blob ID permutation π | **Done (commit `bc0ec45`)** | — |
 | Constant-volume padding (closes volume side-channel) | **Done (commit `414aa8e`)** | — |
 | DP-grounded decoy mechanism with tunable ε | **Done (commit `990e2be`)** | — |
 | DP formalization writeup in security model doc | **Done (this commit)** | — |
 | No-retry invariant + fresh CRS per MHE protocol instance | Planned | High (Mouchet'24 / Colin de Verdière 2026) |
-| Provable IND-CPA^D-128 via LogQ chain restructure → σ=2^45 | Planned | Medium |
 | Ephemeral-key rotation policy with bounded τ | Planned | Medium |
 | Bernoulli per-cluster decoy sampling for tight (ε,δ)-DP | Planned | Low |
 | PIR backend as opt-in alternative to decoys | Deferred (statistical hiding + permutation + padding + tunable ε deemed sufficient for HBC; PIR remains research direction for Compass-tier malicious-server deployments) | Low |
