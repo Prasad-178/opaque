@@ -51,16 +51,28 @@ type Engine struct {
 }
 
 // NewParameters creates CKKS parameters optimized for vector dot products.
-// Uses 128-bit security with LogN=14 supporting vectors up to 8192 dimensions.
+// Uses 128-bit security with LogN=14.
+//
+// Chain restructured (2026-05) to enable σ=2^45 noise flooding for provable
+// 128-bit IND-CPA^D security per Bergamaschi et al. PKC 2025 (ePrint 2024/424).
+//
+// LogQ = [60, 60, 60, 60, 60] (300 bits, 5 primes) + LogP = [61, 61] (122 bits)
+// Total = 422 bits at LogN=14 → 128-bit RLWE security.
+//
+// LogDefaultScale = 60 means encoded plaintexts and post-rescale ciphertexts
+// have scale 2^60. Threshold flooding at σ=2^45 yields post-decode noise of
+// 2^45 / 2^60 = 2^-15 ≈ 3e-5, well below the DecodePublic 2^-10 rounding
+// precision so signal is preserved (verified empirically — earlier σ=2^45
+// attempt at scale=2^45 destroyed signal; the chain restructure is the fix).
+//
+// 5 primes is sufficient for our circuit depth (1 multiply + log₂(d) rotations).
+// Older 8-prime chain was over-provisioned for our shallow circuits.
 func NewParameters() (hefloat.Parameters, error) {
-	// CKKS parameters for 128-bit security
-	// LogN=14 gives 2^14 = 16384 slots (enough for 8192-dim complex or 16384-dim real)
-	// LogDefaultScale=45 provides good precision for normalized vectors
 	params, err := hefloat.NewParametersFromLiteral(hefloat.ParametersLiteral{
-		LogN:            14,                                    // Ring degree 2^14 = 16384
-		LogQ:            []int{60, 45, 45, 45, 45, 45, 45, 45}, // Ciphertext modulus chain
-		LogP:            []int{61, 61},                         // Special primes for key-switching
-		LogDefaultScale: 45,                                    // Scale for encoding (2^45)
+		LogN:            14,                         // Ring degree 2^14 = 16384
+		LogQ:            []int{60, 60, 60, 60, 60},  // Ciphertext modulus chain (300 bits)
+		LogP:            []int{61, 61},              // Special primes for key-switching
+		LogDefaultScale: 60,                         // Scale for encoding (2^60)
 	})
 	if err != nil {
 		return hefloat.Parameters{}, fmt.Errorf("failed to create CKKS parameters: %w", err)
@@ -78,9 +90,9 @@ func NewParameters() (hefloat.Parameters, error) {
 func NewParametersGPU() (hefloat.Parameters, error) {
 	params, err := hefloat.NewParametersFromLiteral(hefloat.ParametersLiteral{
 		LogN:            14,
-		LogQ:            []int{60, 45, 45, 45, 45, 45, 45, 45},
-		LogP:            []int{61}, // Single P prime → d=8 decomposition, matches HEonGPU
-		LogDefaultScale: 45,
+		LogQ:            []int{60, 60, 60, 60, 60},
+		LogP:            []int{61}, // Single P prime → matches HEonGPU
+		LogDefaultScale: 60,
 	})
 	if err != nil {
 		return hefloat.Parameters{}, fmt.Errorf("failed to create GPU CKKS parameters: %w", err)

@@ -524,22 +524,23 @@ func TestBridgeDiagnostic(t *testing.T) {
 		// multiply_plain: output.scale = input.scale * pt.scale
 		// rescale: output.scale = output.scale / q_i (drops one modulus)
 
-		ctScale := params.DefaultScale().Float64() // 2^45
-		ptScale := params.DefaultScale().Float64() // 2^45
+		ctScale := params.DefaultScale().Float64() // 2^60 (post-restructure)
+		ptScale := params.DefaultScale().Float64() // 2^60
 
 		afterMul := ctScale * ptScale
 		t.Logf("After multiply_plain: scale = %.0f (2^%.1f)", afterMul, math.Log2(afterMul))
 
-		// Rescale divides by the modulus of the dropped level
-		// For CKKS, the last Q prime is dropped. Our Q primes have LogQ = [60,45,45,45,45,45,45,45]
-		// After multiply, depth=0, so we drop Q[7] (the last one with log=45)
-		lastQBits := 45.0 // LogQ[7]
+		// Rescale divides by the modulus of the dropped level.
+		// LogQ chain restructure (commit-restructure): primes are now [60,60,60,60,60].
+		// After multiply, depth=0; drop the last prime (log=60).
+		lastQBits := 60.0
 		afterRescale := afterMul / math.Pow(2, lastQBits)
+		expectedScaleBits := math.Log2(ctScale) // = 60
 		t.Logf("After rescale (drop ~2^%d): scale = %.0f (2^%.1f)", int(lastQBits), afterRescale, math.Log2(afterRescale))
 
-		// The result scale should be close to 2^45 (one level dropped)
-		if math.Abs(math.Log2(afterRescale)-45) > 1 {
-			t.Errorf("Result scale %.0f is not close to 2^45", afterRescale)
+		// The result scale should be close to 2^DefaultScale (one level dropped).
+		if math.Abs(math.Log2(afterRescale)-expectedScaleBits) > 1 {
+			t.Errorf("Result scale %.0f is not close to 2^%.0f", afterRescale, expectedScaleBits)
 		} else {
 			t.Log("Scale chain: correct ✓")
 		}

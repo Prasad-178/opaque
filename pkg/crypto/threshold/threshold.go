@@ -231,15 +231,14 @@ func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicK
 	// Concurrent calls are safe and simulate real distributed deployment
 	// where multiple ciphertexts are decrypted in parallel.
 
-	// Noise flooding sigma=2^30 (~30 bits masking, +10 bits over previous 2^20).
-	// Composes with DecodePublic(logprec=10) downstream for Li-Micciancio mitigation
-	// (Lattigo SECURITY.md, eprint 2020/1533). Sigma must stay below the CKKS
-	// scale (2^45 per LogQ prime) to preserve signal — sigma=2^30 leaves ~15 bits
-	// of margin, which post-decode is ~3e-5 noise on [-1,1] scores, invisible to
-	// the 2^-10 DecodePublic precision rounding.
-	// Provable 128-bit IND-CPA^D per Bergamaschi PKC 2025 (eprint 2024/424) would
-	// need sigma~2^45 with an enlarged LogQ chain — deferred to parameter restructure.
-	noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 30, Bound: 6 * (1 << 30)}
+	// Noise flooding sigma=2^45 — provable 128-bit IND-CPA^D security per
+	// Bergamaschi et al. PKC 2025 (ePrint 2024/424) for tau ≤ 2^20 decryptions
+	// per key. Sigma stays below the CKKS scale (2^60 with the restructured
+	// LogQ chain — see newParameters), leaving 2^45/2^60 = 2^-15 ≈ 3e-5 of
+	// post-decode noise on [-1,1] scores, well below the 2^-10 DecodePublic
+	// rounding precision so signal is preserved. Composes with DecodePublic
+	// for Li-Micciancio defense in depth.
+	noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 45, Bound: 6 * (1 << 45)}
 
 	activeParticipants := c.Participants[:c.Threshold]
 
@@ -378,12 +377,14 @@ func (s *ClientSession) Close() {
 }
 
 // newParameters creates CKKS parameters matching Opaque's existing configuration.
+// Mirrors crypto.NewParameters() — LogQ=[60×5] + LogDefaultScale=60 for σ=2^45
+// noise-flooding headroom while preserving signal (Bergamaschi PKC 2025 bound).
 func newParameters() (hefloat.Parameters, error) {
 	return hefloat.NewParametersFromLiteral(hefloat.ParametersLiteral{
 		LogN:            14,
-		LogQ:            []int{60, 45, 45, 45, 45, 45, 45, 45},
+		LogQ:            []int{60, 60, 60, 60, 60},
 		LogP:            []int{61, 61},
-		LogDefaultScale: 45,
+		LogDefaultScale: 60,
 	})
 }
 
