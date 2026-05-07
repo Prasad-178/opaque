@@ -147,24 +147,25 @@ noiseFlood := ring.DiscreteGaussian{Sigma: 1 << 30, Bound: 6 * (1 << 30)}
 
 ~30 bits of masking (+10 bits over previous 2^20). [Noah's Ark](https://eprint.iacr.org/2023/815) (WAHC/CCS 2023) shows that when both ciphertext noise and flooding noise are Gaussian, simulation security is achievable with smaller flooding than worst-case analysis suggests.
 
-### Post-mitigation SIFT1M verification (AWS c6i.2xlarge, 8 vCPU Intel Ice Lake)
+### Post-mitigation SIFT1M verification (AWS m6i.2xlarge, 8 vCPU)
 
-Full-mitigation run (2026-04-30 19:08, commit `e45223b`+`4c5abf8`): σ=2^30 +
-DecodePublic, per-tenant blob ID permutation π (now correctly wired through
-public `opaque.NewDB` API), `PaddingMode=Bucketed`, `TargetEpsilon=2.0`
-(NumDecoys derived to 17).
+Latest full-mitigation run (2026-05-02, commit `e42338f`): σ=2^45 +
+DecodePublic + LogQ chain restructure (provably 128-bit IND-CPA^D under
+Bergamaschi PKC 2025), per-tenant blob ID permutation π,
+`PaddingMode=Bucketed`, `TargetEpsilon=2.5` (NumDecoys ≈ 10).
 
 | Config | Recall@1 | Recall@10 | Avg Query |
 |---|---|---|---|
-| strict-4 (3% probe) | 94.0% | 88.4% | 410 ms |
-| strict-8 (6%) | 98.0% | 95.4% | 466 ms |
-| strict-16 (12%) | 100.0% | 99.2% | 640 ms |
-| probe-8 (6%, multi-probe) | 100.0% | 99.4% | 630 ms |
-| probe-16 (12%, multi-probe) | 100.0% | 100.0% | 815 ms |
+| strict-4 (3% probe) | 88.0% | 86.0% | 319 ms |
+| strict-8 (6%) | 100.0% | 97.0% | 364 ms |
+| strict-16 (12%) | 100.0% | 99.6% | 477 ms |
+| probe-8 (6%, multi-probe) | 100.0% | 99.8% | 464 ms |
+| probe-16 (12%, multi-probe) | 100.0% | 100.0% | 652 ms |
 
-**Recall identical-or-better across configs vs partial-mitigation run.** Latency
-adds ~30-65 % (extra decoys via ε=2 + Bucketed padding bandwidth). See
-`deploy/bench-cpu/results/SUMMARY.md` for full pre/partial/full comparison.
+**Recall preserved or slightly improved vs σ=2^30 prior run.** Latency essentially
+flat within sampling noise. Restructured chain gives precision gain
+(`LogDefaultScale=60` vs 45) which sometimes flips borderline queries from
+rank-2 to rank-1. See `deploy/bench-cpu/results/SUMMARY.md` for full history.
 
 ## Status of Decoy / Volume / Permutation Mitigations (added 2026-04-30)
 

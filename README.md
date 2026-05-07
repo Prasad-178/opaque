@@ -153,14 +153,15 @@ opaque.Config{
 ```
 
 Verified on AWS m6i.2xlarge (8 vCPU, 32 GB, Intel Xeon Platinum 8375C),
-2026-05-01 (commit `429ddf7`):
+2026-05-02 (commit `e42338f` — provable 128-bit IND-CPA^D under Bergamaschi
+PKC 2025):
 
 | Variant                          | Recall@1 | Recall@10 | Avg query |
 |----------------------------------|----------|-----------|-----------|
-| **probe-8, no PQ (recommended)** | **100 %**| **99.6 %**| **462 ms**|
-| probe-8, PQ-M8                   | 100 %    | 97.6 %    | 428 ms    |
-| probe-16, no PQ (max recall)     | 100 %    | 100.0 %   | 635 ms    |
-| probe-16, PQ-M8                  | 100 %    | 99.4 %    | 578 ms    |
+| **probe-8, no PQ (recommended)** | **100 %**| **99.8 %**| **464 ms**|
+| probe-8, PQ-M8                   | 100 %    | 98.4 %    | 409 ms    |
+| probe-16, no PQ (max recall)     | 100 %    | 100.0 %   | 652 ms    |
+| probe-16, PQ-M8                  | 100 %    | 99.2 %    | 568 ms    |
 
 Per-config trade-offs and pre/full-mitigation comparisons are in
 [`deploy/bench-cpu/results/SUMMARY.md`](deploy/bench-cpu/results/SUMMARY.md).

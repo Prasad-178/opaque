@@ -19,12 +19,45 @@ CKKS `LogN=14` (128-bit security). Dataset: SIFT 1M (1,000,000 × 128-dim),
 
 Matches Pinecone `p1.x1` / Qdrant 8-core pod tier.
 
-## m6i.2xlarge (8 vCPU, 32 GB, Intel Ice Lake) — optimal-config run (2026-05-01)
+## m6i.2xlarge (8 vCPU, 32 GB, Intel Ice Lake) — provable IND-CPA^D-128 run (2026-05-02)
 
-`m6i.2xlarge` matches the c6i.2xlarge 8-vCPU profile but adds 16 GB of RAM
-(32 GB total) so SIFT1M Build with full mitigations (Bucketed padding +
-ε-derived decoys) doesn't OOM during PQ codebook training. Run on commit
-`429ddf7` with `TargetEpsilon=2.5` defaults.
+LogQ chain restructured to support σ=2^45 noise flooding (commit `e42338f`).
+Now provably 128-bit IND-CPA^D-secure under Bergamaschi PKC 2025. Recall
+preserved or slightly improved (precision gain from `LogDefaultScale`
+45 → 60). Latency essentially flat (within sampling noise).
+
+### `TestSIFT1MAccuracy` (no PQ, ε=2.5, σ=2^45)
+
+| Config     | Probe  | Multi | Recall@1 | Recall@10 | Avg query |
+|------------|--------|-------|----------|-----------|-----------|
+| strict-4   | 3.1 %  | no    | 88.0 %   | 86.0 %    | 319 ms    |
+| strict-8   | 6.2 %  | no    | 100.0 %  | 97.0 %    | 364 ms    |
+| strict-16  | 12.5 % | no    | 100.0 %  | 99.6 %    | 477 ms    |
+| **probe-8** | 6.2 %+ | yes   | **100.0 %** | **99.8 %** | **464 ms** |
+| probe-16   | 12.5 %+| yes   | 100.0 %  | 100.0 %   | 652 ms    |
+
+### `TestPQ_SIFT1M` — privacy-tunable comparison (σ=2^45)
+
+| Config                 | ε    | PQ | Recall@1 | Recall@10 | Avg query | Build  |
+|------------------------|------|----|----------|-----------|-----------|--------|
+| **PQ-M8-probe8-eps25** | 2.50 | M8 | 100.0 %  | 98.4 %    | **409 ms**| 8m19s  |
+| PQ-M8-probe16-eps25    | 2.50 | M8 | 100.0 %  | 99.2 %    | 568 ms    | 8m10s  |
+| PQ-M8-probe8-eps271    | 2.71 | M8 | 100.0 %  | 98.4 %    | **406 ms**| 8m30s  |
+| PQ-M8-probe8-eps20     | 2.00 | M8 | 98.0 %   | 98.4 %    | 511 ms    | 8m10s  |
+| standard-probe8-eps25  | 2.50 | -- | 100.0 %  | 98.4 %    | 456 ms    | 3m19s  |
+
+### Headline (m6i.2xlarge, σ=2^45 + all mitigations live, ε=2.5)
+
+| Config                       | Recall@1 | Recall@10 | Avg query |
+|------------------------------|----------|-----------|-----------|
+| **probe-8 (recommended)**    | 100.0 %  | 99.8 %    | **464 ms**|
+| **probe-16 (max recall)**    | 100.0 %  | 100.0 %   | **652 ms**|
+| PQ-M8-probe8 (PQ alt)        | 100.0 %  | 98.4 %    | 409 ms    |
+| PQ-M8-probe8-eps271 (fastest)| 100.0 %  | 98.4 %    | 406 ms    |
+
+---
+
+## m6i.2xlarge (8 vCPU, 32 GB, Intel Ice Lake) — first full-mitigation run (2026-05-01, σ=2^30)
 
 ### `TestSIFT1MAccuracy` (no PQ, ε=2.5)
 

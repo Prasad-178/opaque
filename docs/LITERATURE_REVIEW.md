@@ -10,24 +10,25 @@ competitor's published hardware inline. Opaque rows are from AWS
 (Pinecone `p1.x1` / Qdrant 8-core pod). All Opaque numbers are
 reproducible via `bash deploy/bench-cpu/run_bench.sh c6i.2xlarge`.
 
-**Security mitigations shipped (2026-04):**
-- **σ noise flooding 2^20 → 2^30 + DecodePublic(logprec=10)** for Li-Micciancio mitigation (commit `10b7850`, eprint 2020/1533).
+**Security mitigations shipped (2026-04 → 2026-05):**
+- **σ noise flooding 2^20 → 2^30 → 2^45 + DecodePublic(logprec=10)** for Li-Micciancio mitigation (commits `10b7850`, `e42338f`, eprint 2020/1533).
+- **LogQ chain restructure** (8 primes → 5 primes, scale 2^45 → 2^60) for σ=2^45 headroom (commit `e42338f`); now provably 128-bit IND-CPA^D-secure under Bergamaschi PKC 2025.
 - **Per-tenant blob ID permutation π** hides centroid-coordinate ↔ access-pattern link from server (commit `bc0ec45`, fully wired in `e45223b`).
 - **`PaddingMode=Bucketed` constant-volume padding** closes volume side-channel (commit `414aa8e`).
-- **`TargetEpsilon=2.0` DP-style decoy sizing** derives NumDecoys ≈ 17 for SIFT1M (commit `990e2be`); see `docs/SECURITY_MODEL.md` §5.1 for the bound.
+- **`TargetEpsilon=2.5` DP-style decoy sizing** derives NumDecoys ≈ 10 for SIFT1M (commit `990e2be`); see `docs/SECURITY_MODEL.md` §5.1 for the bound.
 
-Full-mitigation SIFT1M numbers below are from a clean AWS c6i.2xlarge run
-(2026-04-30 19:08, all four mitigations live, see
-`deploy/bench-cpu/results/SUMMARY.md`). Latency adds ~30-65 % vs the
-partial-mitigation run (extra decoys + padding bandwidth). Recall is
-identical-or-better across configurations.
+Latest SIFT1M numbers below are from a clean AWS m6i.2xlarge run
+(2026-05-02, all mitigations live including σ=2^45 + restructured chain,
+see `deploy/bench-cpu/results/SUMMARY.md`). Recall preserved or slightly
+improved vs prior σ=2^30 run (precision gain from `LogDefaultScale=60`).
+Latency essentially flat within 50-query sampling noise.
 
 | System | Year/Venue | Approach | Scale | Recall@10 | Latency | Hardware | Security |
 |--------|-----------|----------|-------|-----------|---------|----------|----------|
-| **Opaque (probe-8, optimal ε=2.5)** | **2026** | **CKKS HE + AES + π + Bucketed pad + ε=2.5 decoys** | **1M, 128d** | **99.6%** | **462ms** | **m6i.2xlarge (8 vCPU)** | **HE + AES + permuted access + DP-bounded** |
-| **Opaque (probe-16, optimal ε=2.5)** | **2026** | **CKKS HE + AES + π + Bucketed pad + ε=2.5 decoys** | **1M, 128d** | **100.0%** | **635ms** | **m6i.2xlarge (8 vCPU)** | **HE + AES + permuted access + DP-bounded** |
-| Opaque (PQ-M8-probe8, optimal ε=2.5) | 2026 | CKKS HE + PQ + AES + π + pad + ε=2.5 | 1M, 128d | 97.6% | 428ms | m6i.2xlarge | HE + AES + permuted access + DP-bounded |
-| Opaque (probe-8, ε=2 high-privacy tier) | 2026 | CKKS HE + AES + π + pad + ε=2.0 | 1M, 128d | 99.4% | 630ms | c6i.2xlarge | stronger ε bound |
+| **Opaque (probe-8, σ=2^45, ε=2.5)** | **2026** | **CKKS HE + AES + π + Bucketed pad + ε-DP decoys + provable IND-CPA^D-128** | **1M, 128d** | **99.8%** | **464ms** | **m6i.2xlarge (8 vCPU)** | **HE + AES + permuted access + DP-bounded + provable IND-CPA^D** |
+| **Opaque (probe-16, σ=2^45, ε=2.5)** | **2026** | **CKKS HE + AES + π + Bucketed pad + ε-DP decoys** | **1M, 128d** | **100.0%** | **652ms** | **m6i.2xlarge (8 vCPU)** | same |
+| Opaque (PQ-M8-probe8, σ=2^45, ε=2.5) | 2026 | CKKS HE + PQ + AES + π + pad + ε=2.5 | 1M, 128d | 98.4% | 409ms | m6i.2xlarge | same |
+| Opaque (PQ-M8-probe8, ε=2.71 fastest tier) | 2026 | same | 1M, 128d | 98.4% | 406ms | m6i.2xlarge | baseline-parity ε |
 | Opaque (probe-8, partial-mit) | 2026 | CKKS HE + AES + decoys (8 fixed) | 1M, 128d | 99.0% | 366ms | c6i.2xlarge | HE + AES + statistical decoys |
 | Opaque (PQ-M8-probe32, baseline) | 2026 | CKKS HE + PQ + AES + decoys | 1M, 128d | 100.0% | 497ms | c6i.2xlarge | HE + AES + statistical decoys |
 | Opaque (PQ, GIST, pre-mitigation) | 2026 | CKKS HE + PQ + AES + decoys | 100K, 960d | 98.0% | 497ms | M4 Pro (10 vCPU) | HE + AES + access-pattern hiding |
