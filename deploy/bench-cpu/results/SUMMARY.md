@@ -12,12 +12,95 @@ CKKS `LogN=14` (128-bit security). Dataset: SIFT 1M (1,000,000 × 128-dim),
 - 2026-04-19/20: pre-mitigation baseline.
 - 2026-04-24 (commit `10b7850`): σ noise flooding 2^20→2^30 + DecodePublic(logprec=10) for Li-Micciancio mitigation.
 - 2026-04-30 (commit `bc0ec45`): per-tenant blob ID permutation π for access-pattern privacy (hides centroid-to-storage link from server).
+- 2026-05-02 (commit `e42338f`): LogQ chain restructure (`LogQ=[60×5]` + `LogDefaultScale=60`) → σ=2^45 noise flooding for provable 128-bit IND-CPA^D security under Bergamaschi PKC 2025.
+- 2026-05-09 (commit `5b55d0d`): NC=256 evaluation tests added; NC=128 confirmed optimal — see run below.
 
 ---
 
 ## c6i.2xlarge (8 vCPU, 16 GB, Intel Ice Lake)
 
 Matches Pinecone `p1.x1` / Qdrant 8-core pod tier.
+
+## m6i.2xlarge (8 vCPU, 32 GB, Intel Ice Lake) — NC=128 vs NC=256 evaluation (2026-05-09)
+
+Tests `TestSIFT1MAccuracy_NC256` + `TestPQ_SIFT1M_NC256` added to compare 128
+vs 256 cluster counts at equal coverage %. Hypothesis: smaller per-cluster
+blobs cut fetch + local-scoring time, possibly winning latency at equal
+recall.
+
+**Hypothesis disproven.** Doubling cluster count doubles level-1 HE
+operations (256 vs 128 centroid HE dot products on the encrypted query),
+and that cost dominates the small fetch+local saving. NC=256 is **60–67 %
+slower** at equal recall on every config tested. NC=128 stays the default.
+
+Apples comparison (equal coverage %, equal recall):
+
+| Path     | NC=128 config        | NC=256 config (apples) | NC=256 slowdown |
+|----------|----------------------|------------------------|-----------------|
+| no-PQ    | probe-8 (446 ms)     | probe-16 (747 ms)      | **+67 %**       |
+| PQ       | PQ-M8-probe8-eps271 (411 ms) | PQ-M8-probe16-eps271 (658 ms) | **+60 %** |
+
+Headline NC=128 numbers reproduce within ±2 pp / ±18 ms sampling noise
+of the 2026-05-02 run.
+
+### `TestSIFT1MAccuracy` (NC=128 reproduce, no PQ, ε=2.5, σ=2^45)
+
+| Config     | Probe  | Multi | Recall@1 | Recall@10 | Avg query |
+|------------|--------|-------|----------|-----------|-----------|
+| strict-4   | 3.1 %  | no    | 88.0 %   | 85.6 %    | 308 ms    |
+| strict-8   | 6.2 %  | no    | 96.0 %   | 97.8 %    | 352 ms    |
+| strict-16  | 12.5 % | no    | 98.0 %   | 99.4 %    | 731 ms    |
+| **probe-8** | 6.2 %+ | yes   | **100.0 %** | **99.4 %** | **446 ms** |
+| probe-16   | 12.5 %+| yes   | 100.0 %  | 100.0 %   | 653 ms    |
+
+### `TestSIFT1MAccuracy_NC256` (new, NC=256, no PQ, ε=2.5, σ=2^45)
+
+TopClusters scaled 2× of NC=128 to keep coverage % equal.
+
+| Config     | Probe  | Multi | Recall@1 | Recall@10 | Avg query |
+|------------|--------|-------|----------|-----------|-----------|
+| strict-8   | 3.1 %  | no    | 90.0 %   | 92.0 %    | 475 ms    |
+| strict-16  | 6.2 %  | no    | 100.0 %  | 98.4 %    | 619 ms    |
+| strict-32  | 12.5 % | no    | 100.0 %  | 100.0 %   | 749 ms    |
+| probe-16   | 6.2 %+ | yes   | 100.0 %  | 99.6 %    | 747 ms    |
+| probe-32   | 12.5 %+| yes   | 100.0 %  | 100.0 %   | 1101 ms   |
+
+### `TestPQ_SIFT1M` (NC=128 reproduce, σ=2^45)
+
+| Config                 | ε    | PQ | Recall@1 | Recall@10 | Avg query | Build  |
+|------------------------|------|----|----------|-----------|-----------|--------|
+| **PQ-M8-probe8-eps25** | 2.50 | M8 | 100.0 %  | 98.0 %    | **411 ms**| 8m21s  |
+| PQ-M8-probe16-eps25    | 2.50 | M8 | 100.0 %  | 99.4 %    | 582 ms    | 8m22s  |
+| PQ-M8-probe8-eps271    | 2.71 | M8 | 100.0 %  | 98.0 %    | **411 ms**| 8m43s  |
+| PQ-M8-probe8-eps20     | 2.00 | M8 | 100.0 %  | 97.8 %    | 513 ms    | 8m1s   |
+| standard-probe8-eps25  | 2.50 | -- | 98.0 %   | 99.2 %    | 459 ms    | 3m28s  |
+
+### `TestPQ_SIFT1M_NC256` (new, NC=256, σ=2^45)
+
+| Config                  | ε    | PQ | Recall@1 | Recall@10 | Avg query | Build   |
+|-------------------------|------|----|----------|-----------|-----------|---------|
+| PQ-M8-probe16-eps25     | 2.50 | M8 | 100.0 %  | 98.0 %    | 675 ms    | 11m39s  |
+| PQ-M8-probe32-eps25     | 2.50 | M8 | 100.0 %  | 99.4 %    | 955 ms    | 11m39s  |
+| PQ-M8-probe16-eps271    | 2.71 | M8 | 100.0 %  | 98.2 %    | 658 ms    | 11m25s  |
+| PQ-M8-probe16-eps20     | 2.00 | M8 | 100.0 %  | 98.4 %    | 1041 ms   | 11m45s  |
+| standard-probe16-eps25  | 2.50 | -- | 100.0 %  | 99.6 %    | 739 ms    | 6m39s   |
+
+Build time also worse at NC=256 — k-means convergence on 256 centroids
+takes ~40 % longer per iteration; PQ codebook training is unaffected.
+
+### Headline (m6i.2xlarge, σ=2^45, all mitigations live, ε=2.5, **NC=128 default**)
+
+| Config                       | Recall@1 | Recall@10 | Avg query |
+|------------------------------|----------|-----------|-----------|
+| **probe-8 (recommended)**    | 100.0 %  | 99.4 %    | **446 ms**|
+| **probe-16 (max recall)**    | 100.0 %  | 100.0 %   | **653 ms**|
+| PQ-M8-probe8 (PQ alt)        | 100.0 %  | 98.0 %    | 411 ms    |
+| PQ-M8-probe8-eps271 (fastest)| 100.0 %  | 98.0 %    | 411 ms    |
+
+Total bench wall time: ~2.6 hr (4 tests × ~5 configs × ~3-12 min build +
+queries + brute-force ground truth). Cost: ~$1.00 at $0.38/hr.
+
+---
 
 ## m6i.2xlarge (8 vCPU, 32 GB, Intel Ice Lake) — provable IND-CPA^D-128 run (2026-05-02)
 

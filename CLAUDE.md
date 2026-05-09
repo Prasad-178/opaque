@@ -171,6 +171,7 @@ HBC (not malicious) server model, long-term ε composition over τ queries.
 
 ## Recent commit highlights (most recent first)
 
+- `5b55d0d` bench: NC=256 SIFT1M variants for cluster-count tuning
 - `9f0dc2f` docs: σ=2^45 + LogQ-restructure bench numbers
 - `e42338f` security: LogQ chain restructure → σ=2^45 (provable IND-CPA^D-128)
 - `cc1d140` docs: DP formalization writeup
@@ -180,6 +181,33 @@ HBC (not malicious) server model, long-term ε composition over τ queries.
   (and the kmeans_builder + makeCredentials wire-up bugs to know about)
 - `10b7850` security: σ flood 2^20→2^30 + DecodePublic for Li-Micciancio
 - `276b579` docs: SECURITY_MODEL.md + lit-review fixes for FedSQ/SecureRAG
+
+## Active feature branches (not on `main`)
+
+- `dbpedia-bench` (`0799df7`) — Go scaffold for DBpedia-OpenAI-1M (1536-dim
+  ada-002) bench. Loader, test (`TestDBpedia1MAccuracy` + `TestPQ_DBpedia1M`,
+  build tag `dbpedia1m`, NC=128, M=48 + M=96 PQ), `scripts/download_dbpedia1m.sh`
+  HF parquet → fvecs converter. **EC2 setup wiring + `run_bench.sh` invocation
+  pending** — can land + fire AWS bench whenever (bigger instance recommended,
+  m6i.4xlarge ~$0.77/hr for safety at 1536-dim).
+- `threshold-retry-fix` (`1dcd2c4`) — Phase 1 of the Mouchet/Okada/CdV retry-
+  attack fix. Design doc (`docs/THRESHOLD_RETRY_FIX.md`), `RetryGuard` standalone
+  scaffold + 7 unit tests passing. **Phase 2 (wire into ThresholdDecrypt) +
+  Phase 3 (per-round CRS + abort state machine) pending.**
+
+## Tested-and-rejected variations (don't re-test)
+
+- **NC=256 vs NC=128 (2026-05-09 m6i.2xlarge bench).** Hypothesis was that
+  smaller per-cluster blobs would cut fetch + local-scoring time and win
+  latency at equal recall. Disproven: NC=256 is **60-67 % slower** at equal
+  recall on both no-PQ and PQ paths because doubling cluster count doubles
+  level-1 HE scoring cost (256 vs 128 centroid HE dot products on the
+  encrypted query) and that dominates the small fetch+local saving. Build
+  time also worsens by ~40 %. Tests `TestSIFT1MAccuracy_NC256` +
+  `TestPQ_SIFT1M_NC256` are kept in the tree as documentation and as a
+  guard against future hand-wavy "what if we tried more clusters?"
+  suggestions — see `deploy/bench-cpu/results/SUMMARY.md` 2026-05-09 section
+  for the full apples-comparison table.
 
 ---
 
