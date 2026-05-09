@@ -80,14 +80,14 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 	groundTruth := bruteForceTopK(dataset.Queries[:numQueries], dataset.Vectors, dataset.Dimension, topK)
 	t.Logf("Ground truth computed in %v", time.Since(gtStart))
 
+	// Trimmed config set — get a few comparison points, not exhaustive.
 	configs := []struct {
 		name        string
 		topClusters int
 		probeThresh float64
 	}{
 		{"probe-8", 8, 0.95},   // 6.25% — primary headline candidate
-		{"probe-16", 16, 0.95}, // 12.5%
-		{"probe-32", 32, 0.95}, // 25%
+		{"probe-16", 16, 0.95}, // 12.5% — higher-recall variant
 	}
 
 	t.Log("")
@@ -282,6 +282,7 @@ func TestPQ_DBpedia1M(t *testing.T) {
 	}
 	var results []benchResult
 
+	// Trimmed config set — three meaningful PQ comparison points.
 	// PQ M values must divide 1536. M=48 ⇒ 32-dim subspaces. M=96 ⇒ 16-dim.
 	configs := []struct {
 		name        string
@@ -290,9 +291,8 @@ func TestPQ_DBpedia1M(t *testing.T) {
 		probeThresh float64
 		epsilon     float64
 	}{
-		{"PQ-M48-probe8-eps25", 48, 8, 0.95, 2.5},   // headline-candidate, faster
-		{"PQ-M48-probe16-eps25", 48, 16, 0.95, 2.5}, // higher recall variant
-		{"PQ-M96-probe16-eps25", 96, 16, 0.95, 2.5}, // finer PQ, more accurate scoring
+		{"PQ-M48-probe8-eps25", 48, 8, 0.95, 2.5},   // headline candidate (fastest)
+		{"PQ-M96-probe16-eps25", 96, 16, 0.95, 2.5}, // finer PQ + more probing for recall
 		{"standard-probe8-eps25", 0, 8, 0.95, 2.5},  // PQ-vs-standard comparison
 	}
 

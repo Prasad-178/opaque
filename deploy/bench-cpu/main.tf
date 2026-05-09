@@ -89,7 +89,7 @@ resource "aws_instance" "bench" {
   vpc_security_group_ids = [aws_security_group.bench[0].id]
 
   root_block_device {
-    volume_size = 30 # SIFT1M dataset is ~600MB, plus Go toolchain
+    volume_size = 50 # SIFT1M ~600MB, DBpedia1M ~12GB peak (parquet+fvecs), plus Go toolchain. Same disk works for both bench paths.
     volume_type = "gp3"
   }
 

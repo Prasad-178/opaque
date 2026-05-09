@@ -182,18 +182,24 @@ HBC (not malicious) server model, long-term ε composition over τ queries.
 - `10b7850` security: σ flood 2^20→2^30 + DecodePublic for Li-Micciancio
 - `276b579` docs: SECURITY_MODEL.md + lit-review fixes for FedSQ/SecureRAG
 
-## Active feature branches (not on `main`)
+## Pending work shipped behind incomplete-but-merged scaffolds
 
-- `dbpedia-bench` (`0799df7`) — Go scaffold for DBpedia-OpenAI-1M (1536-dim
-  ada-002) bench. Loader, test (`TestDBpedia1MAccuracy` + `TestPQ_DBpedia1M`,
-  build tag `dbpedia1m`, NC=128, M=48 + M=96 PQ), `scripts/download_dbpedia1m.sh`
-  HF parquet → fvecs converter. **EC2 setup wiring + `run_bench.sh` invocation
-  pending** — can land + fire AWS bench whenever (bigger instance recommended,
-  m6i.4xlarge ~$0.77/hr for safety at 1536-dim).
-- `threshold-retry-fix` (`1dcd2c4`) — Phase 1 of the Mouchet/Okada/CdV retry-
-  attack fix. Design doc (`docs/THRESHOLD_RETRY_FIX.md`), `RetryGuard` standalone
-  scaffold + 7 unit tests passing. **Phase 2 (wire into ThresholdDecrypt) +
-  Phase 3 (per-round CRS + abort state machine) pending.**
+These pieces sit on `main` but have known follow-ups that the next session
+should pick up. Both have full design docs / call-site comments — read those
+first before extending.
+
+- **DBpedia 1M bench** — Go scaffold landed (`pkg/embeddings/loader.go` +
+  `test/dbpedia1m_benchmark_test.go` build-tag `dbpedia1m` + the HF parquet →
+  fvecs converter `scripts/download_dbpedia1m.sh`). Fires via
+  `deploy/bench-cpu/run_dbpedia_bench.sh`. Optional follow-ups: NC=256 variant
+  if some future config justifies it (current 2026-05-09 SIFT bench shows
+  NC=128 wins decisively, so don't pre-emptively add); larger M (M=192) if
+  ada-002 PQ recall is too lossy.
+- **Threshold retry-attack fix** — Phase 1 only (`docs/THRESHOLD_RETRY_FIX.md`
+  + `pkg/crypto/threshold/retry_guard.go` standalone). Phases 2 + 3 pending —
+  wiring `RetryGuard` into `ThresholdDecrypt` (API change: needs `instanceID`
+  parameter) and per-round CRS for keygen + coordinator abort state machine.
+  See the design doc §3 for the phased plan.
 
 ## Tested-and-rejected variations (don't re-test)
 
