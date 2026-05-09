@@ -3,13 +3,16 @@
 # bench on a fresh EC2 CPU instance. Sibling of run_bench.sh; same flow but
 # different setup script and different test invocations.
 #
-# Default instance: m6i.4xlarge (16 vCPU, 64 GB) — m6i.2xlarge OOMs at
-# 1536-dim full-mit + PQ codebook training (peak working set ~40 GB).
+# Default instance: r6i.4xlarge (16 vCPU, 128 GB) — empirically m6i.4xlarge
+# (64 GB) OOMs even on no-PQ probe-8 at 1536-dim during the AES-encrypt +
+# k-means staging phase (peak working set ~50-70 GB at 999K × 1536-dim).
+# r6i.4xlarge gives 2× RAM at slightly lower hourly cost (memory-optimised
+# tier). Same 16 vCPU as m6i.4xlarge — build is RAM-bound, not CPU-bound.
 #
-# Cost: ~$0.77/hr × ~1.5-2 hr.
+# Cost: ~$1.01/hr × ~1.5-2 hr ≈ $2.00.
 # Destroy runs in an always-on trap so an interrupted run still tears down.
 #
-# Usage: deploy/bench-cpu/run_dbpedia_bench.sh [m6i.4xlarge]
+# Usage: deploy/bench-cpu/run_dbpedia_bench.sh [r6i.4xlarge]
 
 set -euo pipefail
 
@@ -34,7 +37,7 @@ if [ -z "${HF_TOKEN:-}" ]; then
   exit 1
 fi
 
-INSTANCE_TYPE="${1:-m6i.4xlarge}"
+INSTANCE_TYPE="${1:-r6i.4xlarge}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 KEY_FILE="$SCRIPT_DIR/bench-cpu-key.pem"
