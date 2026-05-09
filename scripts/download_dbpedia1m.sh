@@ -34,7 +34,7 @@ if ! command -v python3 > /dev/null; then
     sudo apt-get install -y -qq python3 python3-pip || true
 fi
 
-python3 -m pip install --quiet --user --upgrade pyarrow huggingface-hub
+python3 -m pip install --quiet --user --upgrade numpy pyarrow huggingface-hub
 export PATH="$HOME/.local/bin:$PATH"
 
 echo "Downloading DBpedia-OpenAI-1M parquet shards from HuggingFace..."
