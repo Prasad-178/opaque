@@ -64,58 +64,87 @@ snapshot_download(
 )
 PYEOF
 
-echo "Converting parquet → fvecs..."
+echo "Converting parquet → fvecs (streaming, shard by shard)..."
 python3 - <<'PYEOF'
+# Streaming converter — reads each parquet shard one at a time and appends to
+# the output fvecs files, never holding more than one shard in memory at once.
+# A naive concat_tables + to_pylist of all 1M × 1536 floats blows past 64 GB
+# RAM (Python list overhead is ~10x raw size on FixedSizeList<float>).
 import glob
 import os
 import struct
+import sys
+
 import numpy as np
-import pyarrow as pa
 import pyarrow.parquet as pq
 
 files = sorted(glob.glob("**/*.parquet", recursive=True))
 if not files:
     raise SystemExit("No parquet files found after download")
+print(f"Reading {len(files)} parquet shard(s)...", flush=True)
 
-print(f"Reading {len(files)} parquet shard(s)...")
-tables = [pq.read_table(f) for f in files]
-table = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
-print(f"Total rows: {table.num_rows}")
-print(f"Columns:    {table.column_names}")
-
-# Locate embedding column. KShivendu's repo uses 'openai' as of writing,
-# but stay flexible across forks.
+# Pass 1: count rows + locate embedding column from the first shard.
+total_rows = 0
 emb_col = None
-for cand in ("openai", "embedding", "embeddings", "vector", "text-embedding-ada-002"):
-    if cand in table.column_names:
-        emb_col = cand
-        break
-if emb_col is None:
-    raise SystemExit(f"No embedding column found. Available: {table.column_names}")
-print(f"Using embedding column: {emb_col!r}")
+for f in files:
+    md = pq.read_metadata(f)
+    total_rows += md.num_rows
+    if emb_col is None:
+        cols = md.schema.to_arrow_schema().names
+        for cand in ("openai", "embedding", "embeddings", "vector", "text-embedding-ada-002"):
+            if cand in cols:
+                emb_col = cand
+                break
+        if emb_col is None:
+            raise SystemExit(f"No embedding column found. Available: {cols}")
 
-raw = table.column(emb_col).to_pylist()
-embs = np.asarray(raw, dtype=np.float32)
-print(f"Shape: {embs.shape}, dtype: {embs.dtype}")
-if embs.ndim != 2:
-    raise SystemExit(f"Expected 2D array, got shape {embs.shape}")
+print(f"Total rows: {total_rows} | embedding column: {emb_col!r}", flush=True)
 
-n_total, dim = embs.shape
-n_query = min(1000, n_total // 100)
-n_base = n_total - n_query
+# Hold out last 1000 rows as the query set, rest is base.
+n_query = min(1000, total_rows // 100)
+n_base = total_rows - n_query
+print(f"Split: {n_base} base + {n_query} query", flush=True)
 
-base = embs[:n_base]
-query = embs[n_base:]
-print(f"Split: {n_base} base + {n_query} query")
+base_path = "dbpedia_base.fvecs"
+query_path = "dbpedia_query.fvecs"
+base_f = open(base_path, "wb")
+query_f = open(query_path, "wb")
+
+written = 0
+dim = None
+try:
+    for fi, f in enumerate(files, 1):
+        # to_pylist() materialises this shard's rows but only this one shard.
+        # Each shard is ~38K × 1536 floats ≈ 230 MB raw, ~2.3 GB Python list peak.
+        col = pq.read_table(f, columns=[emb_col]).column(emb_col)
+        chunk = np.asarray(col.to_pylist(), dtype=np.float32)
+        if chunk.ndim != 2:
+            raise SystemExit(f"Expected 2D shard, got shape {chunk.shape}")
+        if dim is None:
+            dim = chunk.shape[1]
+        elif chunk.shape[1] != dim:
+            raise SystemExit(f"Dim mismatch: {chunk.shape[1]} vs {dim}")
+        # Append rows to base until we hit n_base; remainder go to query.
+        for row in chunk:
+            target = base_f if written < n_base else query_f
+            target.write(struct.pack("<i", dim))
+            target.write(row.tobytes())
+            written += 1
+        del chunk, col
+        print(f"  shard {fi}/{len(files)}: written={written}/{total_rows}", flush=True)
+finally:
+    base_f.close()
+    query_f.close()
+
+base_size = os.path.getsize(base_path)
+query_size = os.path.getsize(query_path)
+print(f"Wrote {base_path}: {n_base} × {dim} ({base_size/1e9:.2f} GB)", flush=True)
+print(f"Wrote {query_path}: {n_query} × {dim} ({query_size/1e6:.2f} MB)", flush=True)
 
 
 def write_fvecs(path, mat):
-    dim = mat.shape[1]
-    with open(path, "wb") as f:
-        for v in mat:
-            f.write(struct.pack("<i", dim))
-            f.write(v.astype(np.float32, copy=False).tobytes())
-    print(f"Wrote {path} ({mat.shape[0]} × {dim})")
+    # legacy stub — streaming path above replaces all in-memory writes.
+    raise NotImplementedError("write_fvecs no longer used")
 
 
 write_fvecs("dbpedia_base.fvecs", base)
