@@ -215,6 +215,30 @@ first before extending.
   suggestions — see `deploy/bench-cpu/results/SUMMARY.md` 2026-05-09 section
   for the full apples-comparison table.
 
+## Known-and-deferred work
+
+- **DBpedia 1M @ 1536-dim bench.** Eight EC2 attempts on 2026-05-09/10
+  uncovered a build-phase memory cliff: peak RSS at 1M × 1536-dim hits
+  ~128 GB on a 64 GB instance and OOM-kills. Three quick optimizations
+  (commit `1e735ec`) cut that peak to ~64 GB — half the work done.
+  Remaining headroom requires either (a) `r6i.4xlarge` 128 GB at ~$2/run,
+  or (b) the float32 refactor (multi-day, halves all hot-path memory →
+  fits on m6i.2xlarge at $0.38/hr). The Go scaffolding + bench scripts
+  are all in place; just hold off on firing the AWS bench until the
+  float32 work lands. Full memory analysis + reasoning + per-attempt
+  failure log: `docs/MEMORY_PROFILE.md`.
+
+- **float32 refactor.** Replace `[][]float64` with `[][]float32` on the
+  hot paths (`pkg/embeddings`, `pkg/cluster`, `pkg/pca`, `pkg/pq`,
+  `pkg/hierarchical`, `pkg/client`, `pkg/auth`, `pkg/enterprise`,
+  `opaque.go` public API). HE layer (`pkg/crypto`) keeps float64 since
+  Lattigo's encoder requires it; conversion happens at the narrow HE
+  encode boundary. **Zero accuracy impact** (ada-002 is float32 native,
+  SIFT precision well above float32 noise floor); ~30-50 % memory
+  reduction throughout; mild speedup from halved memory bandwidth.
+  Public API change (breaking) but acceptable for a research-stage
+  codebase with a single primary user.
+
 ---
 
 ## Working with the user (Prasad)

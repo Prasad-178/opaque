@@ -14,6 +14,7 @@ CKKS `LogN=14` (128-bit security). Dataset: SIFT 1M (1,000,000 × 128-dim),
 - 2026-04-30 (commit `bc0ec45`): per-tenant blob ID permutation π for access-pattern privacy (hides centroid-to-storage link from server).
 - 2026-05-02 (commit `e42338f`): LogQ chain restructure (`LogQ=[60×5]` + `LogDefaultScale=60`) → σ=2^45 noise flooding for provable 128-bit IND-CPA^D security under Bergamaschi PKC 2025.
 - 2026-05-09 (commit `5b55d0d`): NC=256 evaluation tests added; NC=128 confirmed optimal — see run below.
+- 2026-05-10 (commit `1e735ec`): build-phase memory optimizations (free `normalizedVecs` after k-means, `Storage: File` for DBpedia tests, `GOGC=50`). Cuts 1M × 1536-dim build peak from ~128 GB → ~64 GB. SIFT1M results unchanged (operates well below the OOM regime). Full DBpedia bench deferred pending float32 refactor — see `docs/MEMORY_PROFILE.md`.
 
 ---
 
