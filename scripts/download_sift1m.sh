@@ -25,7 +25,13 @@ echo "Downloading SIFT1M dataset..."
 mkdir -p "$DATA_DIR"
 
 TARBALL="$DATA_DIR/sift.tar.gz"
-curl -fSL "ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz" -o "$TARBALL"
+# IRISA's FTP server occasionally drops mid-stream during the 161 MB
+# transfer (curl exits 56 = "response reading failed"). Auto-retry up
+# to 5 times with backoff so a single network blip doesn't kill the
+# whole bench setup.
+curl -fSL --retry 5 --retry-delay 10 --retry-all-errors \
+  --connect-timeout 30 --max-time 600 \
+  "ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz" -o "$TARBALL"
 
 echo "Extracting..."
 tar xzf "$TARBALL" -C "$DATA_DIR" --strip-components=1
