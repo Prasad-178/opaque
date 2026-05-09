@@ -117,6 +117,11 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 		t.Logf("--- Config: %s (TopClusters=%d, ProbeThreshold=%.2f) ---",
 			cfg.name, cfg.topClusters, cfg.probeThresh)
 
+		// File-backed storage offloads ~12 GB of ciphertexts to disk vs the
+		// default in-memory backend, which is critical at 1M × 1536-dim where
+		// the build path's peak otherwise OOMs a 64 GB instance.
+		storageDir := filepath.Join(os.TempDir(), fmt.Sprintf("opaque-dbpedia-%s", cfg.name))
+		os.RemoveAll(storageDir)
 		db, err := opaque.NewDB(opaque.Config{
 			Dimension:      dataset.Dimension,
 			NumClusters:    numClusters,
@@ -125,6 +130,8 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 			ProbeThreshold: cfg.probeThresh,
 			PaddingMode:    opaque.PaddingBucketed,
 			TargetEpsilon:  2.5,
+			Storage:        opaque.File,
+			StoragePath:    storageDir,
 		})
 		if err != nil {
 			t.Fatalf("NewDB failed: %v", err)
@@ -300,6 +307,9 @@ func TestPQ_DBpedia1M(t *testing.T) {
 		t.Logf("--- %s (TopClusters=%d, PQ=%d, probe=%.2f, eps=%.2f) ---",
 			cfg.name, cfg.topClusters, cfg.pqM, cfg.probeThresh, cfg.epsilon)
 
+		// File-backed storage — see TestDBpedia1MAccuracy for memory rationale.
+		storageDir := filepath.Join(os.TempDir(), fmt.Sprintf("opaque-dbpedia-pq-%s", cfg.name))
+		os.RemoveAll(storageDir)
 		dbCfg := opaque.Config{
 			Dimension:      dataset.Dimension,
 			NumClusters:    numClusters,
@@ -308,6 +318,8 @@ func TestPQ_DBpedia1M(t *testing.T) {
 			ProbeThreshold: cfg.probeThresh,
 			PaddingMode:    opaque.PaddingBucketed,
 			TargetEpsilon:  cfg.epsilon,
+			Storage:        opaque.File,
+			StoragePath:    storageDir,
 		}
 		if cfg.pqM > 0 {
 			dbCfg.PQSubspaces = cfg.pqM

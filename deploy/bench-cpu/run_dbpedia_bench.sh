@@ -3,16 +3,15 @@
 # bench on a fresh EC2 CPU instance. Sibling of run_bench.sh; same flow but
 # different setup script and different test invocations.
 #
-# Default instance: r6i.4xlarge (16 vCPU, 128 GB) — empirically m6i.4xlarge
-# (64 GB) OOMs even on no-PQ probe-8 at 1536-dim during the AES-encrypt +
-# k-means staging phase (peak working set ~50-70 GB at 999K × 1536-dim).
-# r6i.4xlarge gives 2× RAM at slightly lower hourly cost (memory-optimised
-# tier). Same 16 vCPU as m6i.4xlarge — build is RAM-bound, not CPU-bound.
+# Default instance: m6i.4xlarge (16 vCPU, 64 GB). Earlier r6i.4xlarge (128 GB)
+# attempts also OOMed before the kmeans_builder + Storage:File + GOGC=50 fixes
+# landed; combined those reclaim ~40 GB of build-phase peak working set, so
+# 64 GB is now sufficient for 1M × 1536-dim DBpedia with full mitigations.
 #
-# Cost: ~$1.01/hr × ~1.5-2 hr ≈ $2.00.
+# Cost: ~$0.77/hr × ~1.5-2 hr ≈ $1.50.
 # Destroy runs in an always-on trap so an interrupted run still tears down.
 #
-# Usage: deploy/bench-cpu/run_dbpedia_bench.sh [r6i.4xlarge]
+# Usage: deploy/bench-cpu/run_dbpedia_bench.sh [m6i.4xlarge]
 
 set -euo pipefail
 
@@ -37,7 +36,7 @@ if [ -z "${HF_TOKEN:-}" ]; then
   exit 1
 fi
 
-INSTANCE_TYPE="${1:-r6i.4xlarge}"
+INSTANCE_TYPE="${1:-m6i.4xlarge}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 KEY_FILE="$SCRIPT_DIR/bench-cpu-key.pem"
@@ -111,6 +110,10 @@ echo "=== Running DBpedia1M benchmarks ==="
 $SSH '
   export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
   export GOPATH=$HOME/go
+  # GOGC=50 tightens Go GC from default 100 → triggers GC at 50% heap growth.
+  # Halves the build-phase memory headroom Go normally keeps for GC overhead.
+  # Slight CPU cost (more frequent GC) but build at 1536-dim is RAM-bound.
+  export GOGC=50
   cd /home/ubuntu/opaque
   nproc
   free -h | head -2

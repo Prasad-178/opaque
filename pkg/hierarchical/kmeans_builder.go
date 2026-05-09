@@ -168,6 +168,15 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 		}
 	}
 
+	// Free normalizedVecs before the parallel-encrypt phase. At 1M × 1536-dim
+	// this slice peaks at ~12 GB; the workers below re-normalize per vector
+	// on demand, which adds ~5-10 s of CPU but reclaims the buffer for Go's
+	// GC during the AES-encrypt phase. Empirically this is the largest single
+	// reclaimable working-set in the build path. See benchmarks/results
+	// commit history for the m6i.4xlarge OOM at 1M × 1536-dim that motivated
+	// this change.
+	normalizedVecs = nil
+
 	// Parallel encryption: split vectors across workers
 	numWorkers := runtime.NumCPU()
 	if numWorkers > len(ids) {
@@ -200,14 +209,22 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 			for i := start; i < end; i++ {
 				id := ids[i]
 				vec := vectors[i]
+
+				// Re-normalize per vector on demand (instead of holding all 1M
+				// normalized copies in normalizedVecs above). Only allocate the
+				// normalized buffer when we actually need it.
+				var normalizedVec []float64
+				if b.config.NormalizedStorage || b.pqModel != nil {
+					normalizedVec = cluster.NormalizeVector(vec)
+				}
 				if b.config.NormalizedStorage {
-					vec = normalizedVecs[i]
+					vec = normalizedVec
 				}
 
 				// PQ-encode once per vector (codes are the same for all assignments).
 				var pqCiphertext []byte
 				if b.pqModel != nil {
-					codes := b.pqModel.Encode(normalizedVecs[i])
+					codes := b.pqModel.Encode(normalizedVec)
 					ct, err := b.encryptor.EncryptWithAAD(codes, []byte(id))
 					if err != nil {
 						results[w] = workerResult{err: fmt.Errorf("failed to encrypt PQ codes for %s: %w", id, err)}
