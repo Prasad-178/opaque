@@ -91,11 +91,17 @@ $SSH '
   export GOPATH=$HOME/go
   cd /home/ubuntu/opaque
   nproc
-  echo "--- TestSIFT1MAccuracy ---"
-  go test -tags sift1m -count=1 -v -run TestSIFT1MAccuracy ./test/ -timeout 90m
+  echo "--- TestSIFT1MAccuracy (NC=128 headline) ---"
+  go test -tags sift1m -count=1 -v -run "^TestSIFT1MAccuracy$" ./test/ -timeout 90m
   echo ""
-  echo "--- TestPQ_SIFT1M ---"
-  go test -tags sift1m -count=1 -v -run TestPQ_SIFT1M ./test/ -timeout 90m
+  echo "--- TestSIFT1MAccuracy_NC256 ---"
+  go test -tags sift1m -count=1 -v -run "^TestSIFT1MAccuracy_NC256$" ./test/ -timeout 90m
+  echo ""
+  echo "--- TestPQ_SIFT1M (NC=128 headline) ---"
+  go test -tags sift1m -count=1 -v -run "^TestPQ_SIFT1M$" ./test/ -timeout 90m
+  echo ""
+  echo "--- TestPQ_SIFT1M_NC256 ---"
+  go test -tags sift1m -count=1 -v -run "^TestPQ_SIFT1M_NC256$" ./test/ -timeout 90m
 ' 2>&1 | tee "$RESULTS_DIR/bench.log"
 
 # Meta.
