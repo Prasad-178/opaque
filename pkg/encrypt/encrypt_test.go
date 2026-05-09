@@ -203,6 +203,9 @@ func TestEncryptVector(t *testing.T) {
 	key, _ := GenerateKey()
 	enc, _ := NewAESGCM(key)
 
+	// Vectors are encoded as float32 on the wire (see pkg/encrypt/vector.go),
+	// so values that aren't exactly representable in float32 (e.g. 0.1, 0.3)
+	// round-trip with ~1e-7 relative error. Test with tolerance.
 	vector := []float64{0.1, 0.2, 0.3, 0.4, 0.5, -0.1, -0.2, 0.0}
 
 	// Encrypt
@@ -222,9 +225,23 @@ func TestEncryptVector(t *testing.T) {
 		t.Fatalf("vector length mismatch: got %d, want %d", len(decrypted), len(vector))
 	}
 
+	const tol = 1.2e-7
 	for i := range vector {
-		if decrypted[i] != vector[i] {
-			t.Errorf("vector[%d] mismatch: got %f, want %f", i, decrypted[i], vector[i])
+		diff := decrypted[i] - vector[i]
+		if diff < 0 {
+			diff = -diff
+		}
+		// scale tolerance to value magnitude (relative error)
+		scale := vector[i]
+		if scale < 0 {
+			scale = -scale
+		}
+		if scale < 1 {
+			scale = 1
+		}
+		if diff > tol*scale {
+			t.Errorf("vector[%d] mismatch: got %g, want %g (diff %g, tol %g)",
+				i, decrypted[i], vector[i], diff, tol*scale)
 		}
 	}
 }
@@ -262,11 +279,14 @@ func TestEncryptVectorWithID(t *testing.T) {
 }
 
 func TestVectorToBytes(t *testing.T) {
+	// All test values are exactly representable in float32 so the
+	// float64 ↔ float32 round trip is bit-exact.
 	vector := []float64{1.0, 2.0, 3.0, -1.5, 0.0}
 
 	bytes := VectorToBytes(vector)
-	if len(bytes) != len(vector)*8 {
-		t.Errorf("bytes length should be %d, got %d", len(vector)*8, len(bytes))
+	// 4 bytes/element after the float32-encoding switch — see vector.go.
+	if len(bytes) != len(vector)*4 {
+		t.Errorf("bytes length should be %d, got %d", len(vector)*4, len(bytes))
 	}
 
 	recovered := BytesToVector(bytes)
@@ -277,6 +297,38 @@ func TestVectorToBytes(t *testing.T) {
 	for i := range vector {
 		if recovered[i] != vector[i] {
 			t.Errorf("vector[%d] mismatch: got %f, want %f", i, recovered[i], vector[i])
+		}
+	}
+}
+
+// TestVectorToBytes_Float32Precision asserts that the encoder/decoder pair is
+// lossless for values exactly representable in float32 and within ~1.2e-7 for
+// values that aren't (e.g. typical normalized embedding components).
+func TestVectorToBytes_Float32Precision(t *testing.T) {
+	// 1/3, π, etc. are not exactly representable in float32 — expect
+	// rounding error bounded by the float32 epsilon (≈ 1.19e-7).
+	vector := []float64{1.0 / 3.0, 0.31415926535, -0.7071067811865475, 1e-6, 1e6}
+
+	bytes := VectorToBytes(vector)
+	recovered := BytesToVector(bytes)
+
+	const tol = 1.2e-7 * 1.0 // float32 mantissa-derived tolerance for unit-scale values
+	for i := range vector {
+		// scale tolerance to value magnitude (relative error)
+		scale := vector[i]
+		if scale < 0 {
+			scale = -scale
+		}
+		if scale < 1 {
+			scale = 1
+		}
+		diff := recovered[i] - vector[i]
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff > tol*scale {
+			t.Errorf("vector[%d]: float32 round trip lost too much precision: got %g, want %g (diff %g, tol %g)",
+				i, recovered[i], vector[i], diff, tol*scale)
 		}
 	}
 }
