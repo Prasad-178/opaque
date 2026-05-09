@@ -13,13 +13,24 @@
 
 set -euo pipefail
 
+# Auto-source repo-root .env if present (gitignored, contains HF_TOKEN etc).
+SCRIPT_DIR_EARLY="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT_EARLY="$(cd "$SCRIPT_DIR_EARLY/../.." && pwd)"
+if [ -z "${HF_TOKEN:-}" ] && [ -f "$REPO_ROOT_EARLY/.env" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$REPO_ROOT_EARLY/.env"
+  set +a
+fi
+
 # Fail fast if HF_TOKEN missing — AWS IPs hit aggressive rate-limiting at
 # HF Hub and snapshot_download hangs at 0% indefinitely without auth.
 # Past lesson: a 6-hour hang cost ~$5 before this check existed.
 if [ -z "${HF_TOKEN:-}" ]; then
   echo "ERROR: HF_TOKEN is not set."
+  echo "       Either put it in $REPO_ROOT_EARLY/.env (HF_TOKEN=hf_xxx) or"
+  echo "       export HF_TOKEN=hf_xxx before re-running."
   echo "       Get a free read-only token at https://huggingface.co/settings/tokens"
-  echo "       Then re-run: HF_TOKEN=hf_xxx $0 $*"
   exit 1
 fi
 
