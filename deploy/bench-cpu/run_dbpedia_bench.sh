@@ -3,15 +3,19 @@
 # bench on a fresh EC2 CPU instance. Sibling of run_bench.sh; same flow but
 # different setup script and different test invocations.
 #
-# Default instance: m6i.4xlarge (16 vCPU, 64 GB). Earlier r6i.4xlarge (128 GB)
-# attempts also OOMed before the kmeans_builder + Storage:File + GOGC=50 fixes
-# landed; combined those reclaim ~40 GB of build-phase peak working set, so
-# 64 GB is now sufficient for 1M × 1536-dim DBpedia with full mitigations.
+# Default instance: r6i.4xlarge (16 vCPU, 128 GB). The kmeans_builder +
+# Storage:File + GOGC=50 optimizations landed in 1e735ec cut the build-phase
+# peak from ~128 GB → ~64 GB at 1M × 1536-dim — a 50 % reduction. But the
+# remaining peak still hugs 64 GB exactly (raw vectors held twice via
+# dataset.Vectors + AddBatch's defensive copy = 24.6 GB plus ciphertext
+# accumulator + Go GC slack), so m6i.4xlarge OOMs by single-digit GB.
+# r6i.4xlarge gives 2× headroom at slightly cheaper hourly cost than the
+# equivalent compute-tier m6i.8xlarge.
 #
-# Cost: ~$0.77/hr × ~1.5-2 hr ≈ $1.50.
+# Cost: ~$1.01/hr × ~1.5-2 hr ≈ $2.00.
 # Destroy runs in an always-on trap so an interrupted run still tears down.
 #
-# Usage: deploy/bench-cpu/run_dbpedia_bench.sh [m6i.4xlarge]
+# Usage: deploy/bench-cpu/run_dbpedia_bench.sh [r6i.4xlarge]
 
 set -euo pipefail
 
@@ -36,7 +40,7 @@ if [ -z "${HF_TOKEN:-}" ]; then
   exit 1
 fi
 
-INSTANCE_TYPE="${1:-m6i.4xlarge}"
+INSTANCE_TYPE="${1:-r6i.4xlarge}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 KEY_FILE="$SCRIPT_DIR/bench-cpu-key.pem"
