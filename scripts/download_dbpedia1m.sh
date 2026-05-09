@@ -140,15 +140,6 @@ base_size = os.path.getsize(base_path)
 query_size = os.path.getsize(query_path)
 print(f"Wrote {base_path}: {n_base} × {dim} ({base_size/1e9:.2f} GB)", flush=True)
 print(f"Wrote {query_path}: {n_query} × {dim} ({query_size/1e6:.2f} MB)", flush=True)
-
-
-def write_fvecs(path, mat):
-    # legacy stub — streaming path above replaces all in-memory writes.
-    raise NotImplementedError("write_fvecs no longer used")
-
-
-write_fvecs("dbpedia_base.fvecs", base)
-write_fvecs("dbpedia_query.fvecs", query)
 PYEOF
 
 echo "Removing parquet shards (no longer needed)..."
