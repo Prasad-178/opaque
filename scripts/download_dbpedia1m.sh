@@ -38,13 +38,29 @@ python3 -m pip install --quiet --user --upgrade pyarrow huggingface-hub
 export PATH="$HOME/.local/bin:$PATH"
 
 echo "Downloading DBpedia-OpenAI-1M parquet shards from HuggingFace..."
+# HF_TOKEN env var should be set by the caller — AWS IPs get aggressive
+# rate-limiting from HF when unauthenticated and snapshot_download hangs
+# indefinitely at 0%. With a token, downloads complete in minutes.
+if [ -z "${HF_TOKEN:-}" ]; then
+  echo "WARNING: HF_TOKEN not set. AWS IPs are heavily rate-limited at HF Hub."
+  echo "         Download may hang indefinitely. Set HF_TOKEN env var to fix."
+fi
 python3 - <<'PYEOF'
+import os
+import sys
 from huggingface_hub import snapshot_download
+
+token = os.environ.get("HF_TOKEN") or None
+print(f"HF_TOKEN: {'present (auth)' if token else 'missing (unauth, may rate-limit)'}", flush=True)
+
 snapshot_download(
     repo_id="KShivendu/dbpedia-entities-openai-1M",
     repo_type="dataset",
     local_dir=".",
     allow_patterns=["*.parquet"],
+    token=token,
+    max_workers=4,
+    etag_timeout=30,
 )
 PYEOF
 

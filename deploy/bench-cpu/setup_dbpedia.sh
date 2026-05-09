@@ -40,9 +40,12 @@ tar -xzf /tmp/opaque-bundle.tar.gz -C /home/ubuntu/opaque
 sudo chown -R ubuntu:ubuntu /home/ubuntu/opaque
 
 # Download + convert DBpedia-OpenAI-1M (~6GB after fvecs conversion, ~12GB peak).
+# HF_TOKEN must be in the environment — without it AWS IPs hang at 0% on the HF
+# rate-limit. The runner script (run_dbpedia_bench.sh) propagates HF_TOKEN
+# from the local environment over SSH.
 echo "Downloading + converting DBpedia-OpenAI-1M..."
 cd /home/ubuntu/opaque
-bash scripts/download_dbpedia1m.sh
+HF_TOKEN="${HF_TOKEN:-}" bash scripts/download_dbpedia1m.sh
 
 echo "=== Setup complete — $(date) ==="
 df -h /

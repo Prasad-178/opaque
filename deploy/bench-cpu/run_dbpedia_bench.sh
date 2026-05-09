@@ -13,6 +13,16 @@
 
 set -euo pipefail
 
+# Fail fast if HF_TOKEN missing — AWS IPs hit aggressive rate-limiting at
+# HF Hub and snapshot_download hangs at 0% indefinitely without auth.
+# Past lesson: a 6-hour hang cost ~$5 before this check existed.
+if [ -z "${HF_TOKEN:-}" ]; then
+  echo "ERROR: HF_TOKEN is not set."
+  echo "       Get a free read-only token at https://huggingface.co/settings/tokens"
+  echo "       Then re-run: HF_TOKEN=hf_xxx $0 $*"
+  exit 1
+fi
+
 INSTANCE_TYPE="${1:-m6i.4xlarge}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -75,9 +85,11 @@ scp -i "$KEY_FILE" -o StrictHostKeyChecking=no "$BUNDLE" "ubuntu@$IP:/tmp/opaque
 scp -i "$KEY_FILE" -o StrictHostKeyChecking=no "$SCRIPT_DIR/setup_dbpedia.sh" "ubuntu@$IP:/tmp/bench-setup.sh"
 
 # Run setup (installs Go + Python + downloads/converts DBpedia, ~5-10 min).
+# HF_TOKEN is forwarded inline as an env-var assignment on the remote command.
+# The EC2 is ephemeral + destroyed at end-of-run so token never persists.
 echo ""
 echo "=== Installing Go + Python + downloading DBpedia ==="
-$SSH 'bash /tmp/bench-setup.sh' 2>&1 | tee "$RESULTS_DIR/setup.log"
+$SSH "HF_TOKEN='$HF_TOKEN' bash /tmp/bench-setup.sh" 2>&1 | tee "$RESULTS_DIR/setup.log"
 
 # Run DBpedia accuracy + PQ benchmarks.
 echo ""
