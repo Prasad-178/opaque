@@ -117,3 +117,64 @@ func TestFingerprintHex_Deterministic(t *testing.T) {
 		t.Errorf("expected 64-char hex (sha256), got %d chars", len(a))
 	}
 }
+
+// TestDerivePerRoundCRS_DistinctRounds confirms the Phase-3 keygen-CRS
+// derivation yields a different PRNG sequence for each (epochSeed, roundLabel)
+// pair. CPK / Relin / Galois rounds within the same epoch must never collide;
+// distinct epochs must produce entirely different CRS families.
+func TestDerivePerRoundCRS_DistinctRounds(t *testing.T) {
+	epochA := []byte("epoch-A-test-seed-32-bytes-padding")
+	epochB := []byte("epoch-B-test-seed-32-bytes-padding")
+
+	read := func(seed []byte, round string, n int) []byte {
+		prng, err := derivePerRoundCRS(seed, round)
+		if err != nil {
+			t.Fatalf("derivePerRoundCRS(%s): %v", round, err)
+		}
+		buf := make([]byte, n)
+		if _, err := prng.Read(buf); err != nil {
+			t.Fatalf("prng.Read: %v", err)
+		}
+		return buf
+	}
+
+	// 1. Determinism: same input → same output.
+	a1 := read(epochA, "cpk", 32)
+	a2 := read(epochA, "cpk", 32)
+	if !bytesEqual(a1, a2) {
+		t.Errorf("derivePerRoundCRS must be deterministic for same inputs")
+	}
+
+	// 2. Distinct round labels → distinct PRNG output.
+	cpk := read(epochA, "cpk", 32)
+	relin := read(epochA, "relin", 32)
+	if bytesEqual(cpk, relin) {
+		t.Errorf("CPK and Relin rounds must produce distinct CRS streams")
+	}
+
+	// 3. Distinct epochs → distinct PRNG output for the same round.
+	a := read(epochA, "cpk", 32)
+	b := read(epochB, "cpk", 32)
+	if bytesEqual(a, b) {
+		t.Errorf("distinct epoch seeds must produce distinct CRS streams")
+	}
+
+	// 4. Galois sub-derivations: different element → different stream.
+	g1 := read(epochA, "galois/3", 32)
+	g2 := read(epochA, "galois/5", 32)
+	if bytesEqual(g1, g2) {
+		t.Errorf("distinct Galois element labels must produce distinct CRS streams")
+	}
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

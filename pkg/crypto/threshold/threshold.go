@@ -15,6 +15,7 @@
 package threshold
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"sync"
 	"time"
@@ -71,8 +72,16 @@ type Committee struct {
 	// params are the shared CKKS parameters.
 	params hefloat.Parameters
 
-	// crs is the common reference string shared by all participants.
-	crs mhe.CRS
+	// epochSeed is the fresh 64-byte entropy bound to this Committee's keygen.
+	// All per-round CRS derivations (CPK, Relin, Galois) are derived from
+	// H(epochSeed || roundLabel) so that distinct rounds use distinct CRPs and
+	// any future "retry a single keygen round" path would naturally use the
+	// same epoch's CRS for that round (and the per-emission RetryGuard would
+	// then catch a duplicate share for the same fingerprint). Re-running the
+	// full keygen from scratch must mint a new epochSeed — that's how Phase 3
+	// abort-not-retry semantics close the Colin de Verdière 2026 attack on
+	// keygen rounds. See docs/THRESHOLD_RETRY_FIX.md §2.2.
+	epochSeed []byte
 
 	// SimulatedRTT adds a simulated network round-trip delay per participant
 	// in ThresholdDecrypt to model real distributed deployment. Zero means no delay.
@@ -80,6 +89,30 @@ type Committee struct {
 	// and each node sends back its partial share (1 RTT), all in parallel.
 	// Typical values: 1-2ms (same data center), 50-100ms (cross-region).
 	SimulatedRTT time.Duration
+}
+
+// derivePerRoundCRS returns a fresh sampling.PRNG for a given keygen round,
+// seeded by H(epochSeed || roundLabel). Each named round (CPK, Relin, Galois)
+// gets a deterministic-from-epoch but distinct-across-rounds CRS so the SampleCRP
+// outputs of one round can never collide with another's. This is the structural
+// piece of the Phase 3 fix for the Colin de Verdière 2026 retry-attack: a future
+// "retry round X" path within the same epoch will read the same CRS, causing
+// the per-participant RetryGuard (Phase 2) to refuse the duplicate emission;
+// a fresh-epoch retry derives a new CRS family entirely.
+func derivePerRoundCRS(epochSeed []byte, roundLabel string) (sampling.PRNG, error) {
+	h := sha256.New()
+	// Length-prefix to defeat boundary-collision (analogous to writeLP in retry_guard.go).
+	var lenBuf [8]byte
+	for i, b := range [][]byte{epochSeed, []byte(roundLabel)} {
+		_ = i
+		n := uint64(len(b))
+		for j := 0; j < 8; j++ {
+			lenBuf[j] = byte(n >> (8 * j))
+		}
+		h.Write(lenBuf[:])
+		h.Write(b)
+	}
+	return sampling.NewKeyedPRNG(h.Sum(nil))
 }
 
 // ClientSession represents a querying client's ephemeral session.
@@ -116,25 +149,25 @@ func NewCommittee(n, threshold int) (*Committee, error) {
 		return nil, fmt.Errorf("failed to create CKKS parameters: %w", err)
 	}
 
-	// Create CRS from a random seed (in production, this seed is agreed upon out-of-band).
-	crsSeed := make([]byte, 64)
+	// Mint a fresh 64-byte epoch seed. Every per-round CRS (CPK/Relin/Galois)
+	// derives from this seed via H(epochSeed || roundLabel) — see
+	// derivePerRoundCRS. In a distributed-coordinator deployment the seed is
+	// agreed upon out-of-band; for the in-process simulator we draw fresh
+	// entropy each time NewCommittee is called.
+	epochSeed := make([]byte, 64)
 	prng, err := sampling.NewPRNG()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PRNG: %w", err)
 	}
-	if _, err := prng.Read(crsSeed); err != nil {
-		return nil, fmt.Errorf("failed to generate CRS seed: %w", err)
-	}
-	crs, err := sampling.NewKeyedPRNG(crsSeed)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create CRS: %w", err)
+	if _, err := prng.Read(epochSeed); err != nil {
+		return nil, fmt.Errorf("failed to generate epoch seed: %w", err)
 	}
 
 	c := &Committee{
 		N:         n,
 		Threshold: threshold,
 		params:    params,
-		crs:       crs,
+		epochSeed: epochSeed,
 	}
 
 	// Step 1: Each participant generates a local secret key share.
@@ -465,7 +498,11 @@ func (c *Committee) setupThreshold() error {
 // genCollectivePublicKey runs the collective public key generation protocol (1 round).
 func (c *Committee) genCollectivePublicKey() error {
 	cpk := mhe.NewPublicKeyGenProtocol(c.params)
-	crp := cpk.SampleCRP(c.crs)
+	roundCRS, err := derivePerRoundCRS(c.epochSeed, "cpk")
+	if err != nil {
+		return fmt.Errorf("derive CPK round CRS: %w", err)
+	}
+	crp := cpk.SampleCRP(roundCRS)
 
 	// Each participant generates their share.
 	shares := make([]mhe.PublicKeyGenShare, c.N)
@@ -498,7 +535,11 @@ func (c *Committee) genRelinearizationKey() error {
 		round2     mhe.RelinearizationKeyGenShare
 	}
 	states := make([]rkgState, c.N)
-	crp := rkg.SampleCRP(c.crs)
+	roundCRS, err := derivePerRoundCRS(c.epochSeed, "relin")
+	if err != nil {
+		return fmt.Errorf("derive Relin round CRS: %w", err)
+	}
+	crp := rkg.SampleCRP(roundCRS)
 
 	// Round 1: each participant generates ephemeral key + round 1 share.
 	for i, p := range c.Participants {
@@ -546,7 +587,14 @@ func (c *Committee) genGaloisKeys() error {
 	c.GaloisKeys = make([]*rlwe.GaloisKey, len(galEls))
 
 	for idx, galEl := range galEls {
-		crp := gkg.SampleCRP(c.crs)
+		// Each Galois element gets its own sub-round CRS so distinct rotation
+		// keys never share a CRP — defense-in-depth on top of the per-round
+		// derivation already separating Galois from CPK + Relin.
+		roundCRS, err := derivePerRoundCRS(c.epochSeed, fmt.Sprintf("galois/%d", galEl))
+		if err != nil {
+			return fmt.Errorf("derive Galois round CRS for element %d: %w", galEl, err)
+		}
+		crp := gkg.SampleCRP(roundCRS)
 
 		// Each participant generates their share for this rotation.
 		shares := make([]mhe.GaloisKeyGenShare, c.N)
