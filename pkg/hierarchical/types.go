@@ -66,10 +66,28 @@ type Config struct {
 	// Use ComputeDecoyCountForEpsilon to derive concrete NumDecoys values.
 	// Default: 0 (unused; NumDecoys takes effect directly).
 	//
-	// Note: this is an informal upper bound for the uniform-K-from-non-selected
-	// sampling scheme. A formal proof under the standard (ε,δ)-DP framework
-	// requires switching to Bernoulli sampling per cluster — planned future work.
+	// Note: with the default uniform-K-from-non-selected scheme, this is an
+	// informal upper bound. Set BernoulliDecoys=true to switch to per-cluster
+	// i.i.d. Bernoulli sampling at p = NumDecoys / (NumSuperBuckets - K_real),
+	// which is amenable to the standard (ε,δ)-DP composition analysis.
 	TargetEpsilon float64
+
+	// BernoulliDecoys when true switches the decoy sampling from the default
+	// uniform-K-from-non-selected scheme to per-cluster i.i.d. Bernoulli
+	// sampling. Each non-selected cluster c is independently included in the
+	// fetch with probability p = effective_NumDecoys / (NumSuperBuckets - K_real).
+	// Selected (real) clusters are always included by the caller.
+	//
+	// Tradeoff:
+	//   - Same E[K_decoy] as uniform-K (so existing TargetEpsilon-derived
+	//     bandwidth budgets carry over without retuning).
+	//   - K_decoy is now a binomial random variable rather than a fixed count
+	//     → per-query latency variance increases slightly.
+	//   - Privacy analysis becomes amenable to the standard subsampled-
+	//     mechanism (ε,δ)-DP composition framework (Dwork-Roth, Theorem 3.5+).
+	// Default: false (uniform-K, current behaviour).
+	// See docs/SECURITY_MODEL.md §5.1 for the bound + caveats.
+	BernoulliDecoys bool
 
 	// Multi-probe configuration for improved recall
 	// Instead of hard top-K cutoff, use confidence-based selection

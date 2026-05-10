@@ -780,9 +780,22 @@ func translateToStorage(logicalIDs []int, permutation []int) []int {
 // `numDecoys` is the per-call requested count; this method first lets the
 // hierarchical config (TargetEpsilon vs NumDecoys) decide the effective count
 // via ResolveDecoyCount when the caller passes the config default.
+//
+// When c.config.BernoulliDecoys is true, decoys are sampled per non-selected
+// cluster i.i.d. with probability p = numDecoys / (NumSuperBuckets - K_real)
+// — same expected count, variable per query, amenable to standard
+// (ε,δ)-DP composition analysis. See generateDecoySupersBernoulli.
 func (c *EnterpriseHierarchicalClient) generateDecoySupers(selectedSupers []int, numDecoys int) []int {
 	if numDecoys == c.config.NumDecoys { // caller used config default — apply TargetEpsilon override if set
 		numDecoys = hierarchical.ResolveDecoyCount(c.config)
+	}
+	if c.config.BernoulliDecoys {
+		pool := c.config.NumSuperBuckets - len(selectedSupers)
+		if pool <= 0 || numDecoys <= 0 {
+			return nil
+		}
+		p := float64(numDecoys) / float64(pool)
+		return generateDecoySupersBernoulli(selectedSupers, c.config.NumSuperBuckets, p)
 	}
 	return generateDecoySupers(selectedSupers, c.config.NumSuperBuckets, numDecoys)
 }

@@ -237,14 +237,25 @@ For SIFT1M (N=128, K_real=8) this yields:
 The current default (`NumDecoys = 8`) corresponds to roughly ε ≈ 2.7.
 
 **Caveats:**
-- The bound is an *informal* upper-bound on per-query distinguishability,
-  not a formally tight (ε,δ)-DP guarantee. The standard DP framework
-  requires Bernoulli per-cluster sampling (variable K per query); switching
-  to that is planned future work.
+- The bound above is an *informal* upper-bound on per-query
+  distinguishability for the default uniform-K-from-non-selected scheme,
+  not a formally tight (ε,δ)-DP guarantee.
+- Setting `Config.BernoulliDecoys = true` switches the sampler to
+  per-cluster i.i.d. Bernoulli at p = E[K_decoy] / (N - K_real). Same
+  expected decoy count, but K is now binomial Bin(N - K_real, p)
+  per query. This makes the mechanism amenable to the standard
+  subsampled-mechanism (ε,δ)-DP composition framework (Dwork-Roth,
+  Theorem 3.5+; Mironov RDP, 2017). The (ε,δ) for τ-fold composition
+  follows directly from the strong-composition theorem rather than the
+  loose τ · ε union bound. Trade-off: K_decoy is no longer
+  deterministic, so per-query latency picks up modest variance
+  (σ ≈ √(N-K_real)·p(1-p) clusters).
 - The bound covers a *single* query. Composition over τ queries scales
-  approximately as τ · ε under standard DP composition (with no cross-query
-  correlation). Long-running deployments should pair tunable ε with
-  ephemeral-key rotation (§8 roadmap).
+  approximately as τ · ε under union-bound composition (with no
+  cross-query correlation), or √(2τ ln(1/δ)) · ε + τ ε(e^ε - 1) under
+  strong composition with the Bernoulli sampler. Long-running
+  deployments should pair tunable ε with ephemeral-key rotation
+  (§8 roadmap).
 - The bound assumes uniform priors over real cluster choice. A workload
   with heavily-skewed cluster popularity gives the adversary a Bayesian
   prior advantage *not* covered by the bound. This is the well-known
@@ -330,7 +341,7 @@ hidden hardware effects).
 | DP formalization writeup in security model doc | **Done (this commit)** | — |
 | No-retry invariant + fresh CRS per MHE protocol instance | Planned | High (Mouchet'24 / Colin de Verdière 2026) |
 | Ephemeral-key rotation policy with bounded τ | Planned | Medium |
-| Bernoulli per-cluster decoy sampling for tight (ε,δ)-DP | Planned | Low |
+| Bernoulli per-cluster decoy sampling for tight (ε,δ)-DP | **Done** (commit landing now — `Config.BernoulliDecoys` flag, off by default) | Low |
 | PIR backend as opt-in alternative to decoys | Deferred (statistical hiding + permutation + padding + tunable ε deemed sufficient for HBC; PIR remains research direction for Compass-tier malicious-server deployments) | Low |
 | Pin Lattigo to v6.x line for security patches | Deferred (v6 is breaking; v5 doesn't bootstrap during search) | Low |
 | Active-server integrity for cluster-index metadata | Not yet planned | Low (out of scope under HBC) |

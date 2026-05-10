@@ -128,6 +128,15 @@ type Config struct {
 	// See docs/SECURITY_MODEL.md §5.1 for the bound and limitations.
 	TargetEpsilon float64
 
+	// BernoulliDecoys, when true, switches decoy sampling from the default
+	// uniform-K-from-non-selected scheme to per-cluster i.i.d. Bernoulli
+	// sampling at p = effective_NumDecoys / (NumClusters - K_real). Same
+	// expected decoy count, but K becomes a binomial random variable per
+	// query — slightly more latency variance for tighter (ε,δ)-DP composition
+	// analysis under the standard Dwork-Roth subsampled-mechanism framework.
+	// Default: false (uniform-K, current behaviour).
+	BernoulliDecoys bool
+
 	// PaddingMode selects the constant-volume padding strategy applied at
 	// index build time, closing the volume side-channel where unequal real
 	// cluster sizes leak which fetched cluster is "real" vs decoy.
@@ -1092,6 +1101,7 @@ func (db *DB) makeSearchConfig(ecfg *enterprise.Config, effectiveDim int) hierar
 		SubBucketsPerSuper:   1,
 		NumDecoys:            db.cfg.NumDecoys,
 		TargetEpsilon:        db.cfg.TargetEpsilon,
+		BernoulliDecoys:      db.cfg.BernoulliDecoys,
 		ProbeThreshold:       db.cfg.ProbeThreshold,
 		MaxProbeClusters:     maxProbe,
 		RedundantAssignments: db.cfg.RedundantAssignments,

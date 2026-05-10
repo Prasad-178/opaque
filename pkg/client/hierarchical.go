@@ -586,4 +586,66 @@ func generateDecoySupers(selectedSupers []int, numTotal int, numDecoys int) []in
 	return decoys
 }
 
+// generateDecoySupersBernoulli generates decoy super-bucket IDs by independent
+// per-cluster Bernoulli sampling with probability p over the non-selected pool.
+// Each non-selected cluster c is included in the fetch i.i.d. with probability
+// p; selected (real) clusters are always included by the caller. K_decoy is
+// then a binomial random variable Bin(N - K_real, p), variable per query, with
+// E[K_decoy] = (N - K_real) · p — matches the deterministic uniform-K count
+// at the same p so existing TargetEpsilon-derived bandwidth budgets carry over.
+//
+// Privacy framing: per-cluster i.i.d. Bernoulli sampling makes the decoy
+// mechanism amenable to the standard subsampled-mechanism (ε,δ)-DP analysis
+// under composition (Dwork-Roth, Theorem 3.5 et seq.), which the prior
+// uniform-K-from-non-selected scheme is harder to analyse formally. See
+// docs/SECURITY_MODEL.md §5.1 for the bound + caveats — in particular, with
+// the "real clusters always included" semantics, the bound is conditioned on
+// the real-set being correct (i.e., not (ε,0) for arbitrary fingerprints, but
+// (ε, δ) where δ captures the negligible event of dropping a real cluster).
+func generateDecoySupersBernoulli(selectedSupers []int, numTotal int, p float64) []int {
+	if p <= 0 {
+		return nil
+	}
+	if p >= 1 {
+		// Degenerate: include every non-selected cluster. Caller probably has
+		// a mis-derived p; just return the full non-selected set.
+		p = 1
+	}
+
+	selected := make(map[int]bool, len(selectedSupers))
+	for _, s := range selectedSupers {
+		selected[s] = true
+	}
+
+	// pBig is the threshold for inclusion; we draw a uniform u ∈ [0, 2^64) and
+	// include if u < threshold. Using crypto/rand for cryptographic-grade
+	// randomness — same source as the uniform-K path for consistency.
+	threshold := new(big.Int).SetUint64(uint64(p * float64(uint64(1)<<63) * 2))
+	if threshold.Sign() <= 0 {
+		return nil
+	}
+
+	// Cap the threshold at 2^64 - 1 in case p ≈ 1 (rare).
+	maxU := new(big.Int).Lsh(big.NewInt(1), 64)
+	if threshold.Cmp(maxU) > 0 {
+		threshold = maxU
+	}
+
+	decoys := make([]int, 0, int(float64(numTotal-len(selectedSupers))*p)+1)
+	for i := 0; i < numTotal; i++ {
+		if selected[i] {
+			continue
+		}
+		u, err := rand.Int(rand.Reader, maxU)
+		if err != nil {
+			// crypto/rand failure — skip this cluster rather than panic.
+			continue
+		}
+		if u.Cmp(threshold) < 0 {
+			decoys = append(decoys, i)
+		}
+	}
+	return decoys
+}
+
 // extractOriginalID is defined in enterprise_hierarchical.go
