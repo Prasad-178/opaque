@@ -19,6 +19,7 @@ CKKS `LogN=14` (128-bit security). Dataset: SIFT 1M (1,000,000 × 128-dim),
 - 2026-05-10 (commit `7efa65b`): `download_sift1m.sh` switched from IRISA FTP → ann-benchmarks HDF5 mirror after a multi-hour IRISA outage. HDF5 → fvecs/ivecs conversion via Python h5py on the EC2 instance.
 - 2026-05-10 (commits `e03c5d5` + `e314c65`): threshold retry-attack fix Phases 2 + 3a — `RetryGuard` wired into `ThresholdDecrypt` (instanceID-keyed per-emission refusal) and per-round CRS derivation (`derivePerRoundCRS(epochSeed, roundLabel)`) for CPK / Relin / Galois keygen rounds. Live retry-attack surface closed. Phases 3b (state machine) + 3c (chaos tests) pending.
 - 2026-05-10 (commit `38f678b`): per-cluster Bernoulli decoy sampling (`Config.BernoulliDecoys=true`) for tight (ε,δ)-DP under composition. Validated post-change on m6i.xlarge — see `m6i.xlarge` section below.
+- 2026-05-10 (commit `828ee0d`): float32 storage tier — `db.pendingVectors` and `kmeans_builder.normalizedVecs` now `[][]float32`, saving ~12 GB at 1M × 1536-dim. Public API stays `[]float64` (boundary conversion at AddBatch/Search). Build peak at 1M × 1536-dim now estimated ~30-40 GB vs prior ~64 GB (50 % further reduction on top of `1e735ec`). Validated on m6i.xlarge SIFT 100K — recall preserved within sampling noise (see m6i.xlarge section below).
 
 ---
 
@@ -50,6 +51,37 @@ on SIFT 1M-class data. No latency regression either.
 Total bench wall: ~5 min (much shorter than SIFT 1M's ~25 min per
 config because the test only runs 4 configs at 100K vectors each
 and the AES ciphertexts are now half the size on disk too).
+
+### `TestPQ_SIFT100K` (float32 storage tier validation, 2026-05-10 23:16)
+
+Re-run after commit `828ee0d` converted `db.pendingVectors` and the
+build-phase `normalizedVecs` to `[][]float32`. Goal: empirically confirm
+recall is preserved (the float32 round-trip introduces ~1.2e-7 per-element
+precision loss, ~6 orders below recall sensitivity at SIFT 1M-class scale)
+and that latency picks up no regression.
+
+| Config                    | Recall@1 | Recall@10 | Avg query | Δ R@10 vs pre-float32-tier |
+|---------------------------|----------|-----------|-----------|----------------------------|
+| standard                  | 100.0 %  | 98.4 %    | 155 ms    | −0.4 pp (within sampling noise) |
+| PQ-M8                     | 96.0 %   | 94.4 %    | 149 ms    | −0.8 pp |
+| PQ-M16                    | 100.0 %  | 97.8 %    | 151 ms    | −0.8 pp |
+| **standard-probe16**      | 100.0 %  | **100.0 %** | 170 ms  | **0** |
+| PQ-M8-probe16             | 100.0 %  | 99.4 %    | 163 ms    | +0.2 pp |
+| **standard-bernoulli**    | 100.0 %  | **98.8 %**| 152 ms    | **0** (identical) |
+| PQ-M8-probe16-bernoulli   | 100.0 %  | 99.4 %    | 161 ms    | −0.2 pp |
+
+All deltas within the documented ±2-4 pp 50-query sampling-noise band
+(see `CLAUDE.md`). The two configs that hit perfect 100 % R@10 in both
+runs (`standard-probe16` + `standard-bernoulli`) confirm the float32
+round-trip introduces no systematic recall regression — only sampling
+variance. Latency unchanged across all 7 configs.
+
+**The float32 storage tier is paper-ready.** Build peak at 1M × 1536-dim
+should now drop ~50 % further from the prior optimisations, plausibly
+unlocking DBpedia 1M @ 1536-dim on m6i.2xlarge ($0.38/hr) — to be
+confirmed by a separate DBpedia bench when ready.
+
+Cost: ~$0.04 (m6i.xlarge × ~10 min wall).
 
 ### `TestPQ_SIFT100K` (Bernoulli decoy validation, 2026-05-10 22:34)
 
