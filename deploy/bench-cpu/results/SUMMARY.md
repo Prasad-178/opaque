@@ -17,6 +17,8 @@ CKKS `LogN=14` (128-bit security). Dataset: SIFT 1M (1,000,000 × 128-dim),
 - 2026-05-10 (commit `1e735ec`): build-phase memory optimizations (free `normalizedVecs` after k-means, `Storage: File` for DBpedia tests, `GOGC=50`). Cuts 1M × 1536-dim build peak from ~128 GB → ~64 GB. SIFT1M results unchanged (operates well below the OOM regime). Full DBpedia bench deferred pending float32 refactor — see `docs/MEMORY_PROFILE.md`.
 - 2026-05-10 (commit `7a9a369`): AES vector ciphertext encoding switched from float64 → float32 (4 bytes/elem instead of 8). Halves AES ciphertext size; ~6 GB build-phase memory saved at 1M × 1536-dim; halves on-disk Storage:File footprint. Validated on m6i.xlarge SIFT 100K bench post-change — see `m6i.xlarge` section below. **Recall preserved**: standard 100% R@1 / 98.8% R@10 / 156 ms; PQ-M16 100/98.6% / 147 ms; standard-probe16 100/100% / 168 ms.
 - 2026-05-10 (commit `7efa65b`): `download_sift1m.sh` switched from IRISA FTP → ann-benchmarks HDF5 mirror after a multi-hour IRISA outage. HDF5 → fvecs/ivecs conversion via Python h5py on the EC2 instance.
+- 2026-05-10 (commits `e03c5d5` + `e314c65`): threshold retry-attack fix Phases 2 + 3a — `RetryGuard` wired into `ThresholdDecrypt` (instanceID-keyed per-emission refusal) and per-round CRS derivation (`derivePerRoundCRS(epochSeed, roundLabel)`) for CPK / Relin / Galois keygen rounds. Live retry-attack surface closed. Phases 3b (state machine) + 3c (chaos tests) pending.
+- 2026-05-10 (commit `38f678b`): per-cluster Bernoulli decoy sampling (`Config.BernoulliDecoys=true`) for tight (ε,δ)-DP under composition. Validated post-change on m6i.xlarge — see `m6i.xlarge` section below.
 
 ---
 
@@ -48,6 +50,36 @@ on SIFT 1M-class data. No latency regression either.
 Total bench wall: ~5 min (much shorter than SIFT 1M's ~25 min per
 config because the test only runs 4 configs at 100K vectors each
 and the AES ciphertexts are now half the size on disk too).
+
+### `TestPQ_SIFT100K` (Bernoulli decoy validation, 2026-05-10 22:34)
+
+Re-run after commit `38f678b` added `Config.BernoulliDecoys=true` to
+swap the uniform-K-from-non-selected decoy sampler for per-cluster
+i.i.d. Bernoulli sampling at p = E[K_decoy] / (N - K_real). Same
+expected K_decoy, but K is now binomial per query. Goal: verify recall
+is preserved (decoys never affect recall) and latency variance is
+bounded.
+
+| Config                    | Recall@1 | Recall@10 | Avg query | Δ R@10 vs uniform-K |
+|---------------------------|----------|-----------|-----------|---------------------|
+| standard                  | 100.0 %  | 98.8 %    | 156 ms    | (baseline)          |
+| **standard-bernoulli**    | 100.0 %  | **98.8 %**| **151 ms**| **−0.0 pp**         |
+| PQ-M8-probe16             | 100.0 %  | 99.2 %    | 160 ms    | (baseline)          |
+| **PQ-M8-probe16-bernoulli** | 100.0 % | **99.6 %**| **161 ms**| **+0.4 pp**         |
+
+Recall **identical** to uniform-K for `standard` (-0.0 pp) and within
+sampling noise for `PQ-M8-probe16` (+0.4 pp; 50-query bench has ±2 pp
+recall sampling noise documented elsewhere). Latency essentially equal —
+the predicted binomial-K variance translates to ≤5 ms per-query
+difference at this scale, vs the 156 ms baseline.
+
+**Bernoulli decoy path is paper-ready.** The (ε,δ)-DP composition
+analysis under standard subsampled-mechanism framework
+(Dwork-Roth Theorem 3.5+) now applies directly, replacing the prior
+informal e^ε bound for the uniform-K scheme. See
+`docs/SECURITY_MODEL.md` §5.1 for the full bound + caveats.
+
+Cost: ~$0.04 (m6i.xlarge × ~10 min wall).
 
 ---
 
