@@ -87,7 +87,12 @@ func NewKMeansBuilder(cfg Config, enterpriseCfg *enterprise.Config) (*KMeansBuil
 
 // Build constructs the index using k-means clustering.
 // Vectors are stored by super-bucket only (no sub-bucket division).
-func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]float64, store blob.Store) (*Index, error) {
+//
+// `vectors` is float32 — the storage tier for raw input vectors. At
+// 1M × 1536-dim this is ~6 GB instead of ~12 GB at float64. Conversions
+// to float64 happen at the per-vector boundaries where the AES encrypt /
+// PQ encode / HE-related callees still expect float64.
+func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]float32, store blob.Store) (*Index, error) {
 	if len(ids) != len(vectors) {
 		return nil, fmt.Errorf("ids and vectors length mismatch: %d vs %d", len(ids), len(vectors))
 	}
@@ -101,8 +106,9 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 	}
 
 	// Phase 1: Run k-means clustering to determine bucket assignments
-	// Normalize vectors for better clustering (cosine similarity based)
-	normalizedVecs := make([][]float64, len(vectors))
+	// Normalize vectors for better clustering (cosine similarity based).
+	// normalizedVecs is float32 — saves 6 GB at 1M × 1536-dim vs prior float64.
+	normalizedVecs := make([][]float32, len(vectors))
 	for i, vec := range vectors {
 		normalizedVecs[i] = cluster.NormalizeVector(vec)
 	}
@@ -120,9 +126,15 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 		return nil, fmt.Errorf("k-means clustering failed: %w", err)
 	}
 
-	// Use k-means centroids (they're optimal by construction!)
+	// Use k-means centroids (they're optimal by construction). Centroids are
+	// stored as float64 in superBuckets / enterprise config / auth credentials
+	// because they're tiny (≈ NumClusters × Dimension × 8 bytes ≪ MB) and
+	// downstream HE encoding wants float64 anyway. Upcast on copy.
 	for i, centroid := range b.kmeans.Centroids {
-		copy(b.superBuckets[i].Centroid, centroid)
+		dst := b.superBuckets[i].Centroid
+		for j, v := range centroid {
+			dst[j] = float64(v)
+		}
 	}
 
 	// Generate logical→storage permutation. Blobs stored at storage_id =
@@ -213,7 +225,7 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 				// Re-normalize per vector on demand (instead of holding all 1M
 				// normalized copies in normalizedVecs above). Only allocate the
 				// normalized buffer when we actually need it.
-				var normalizedVec []float64
+				var normalizedVec []float32
 				if b.config.NormalizedStorage || b.pqModel != nil {
 					normalizedVec = cluster.NormalizeVector(vec)
 				}
@@ -222,9 +234,11 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 				}
 
 				// PQ-encode once per vector (codes are the same for all assignments).
+				// PQ.Encode still takes float64 — convert this single vector at the
+				// boundary (~12 KB temp at 1536-dim, GC reclaims immediately).
 				var pqCiphertext []byte
 				if b.pqModel != nil {
-					codes := b.pqModel.Encode(normalizedVec)
+					codes := b.pqModel.Encode(cluster.AsFloat64One(normalizedVec))
 					ct, err := b.encryptor.EncryptWithAAD(codes, []byte(id))
 					if err != nil {
 						results[w] = workerResult{err: fmt.Errorf("failed to encrypt PQ codes for %s: %w", id, err)}
@@ -232,6 +246,11 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 					}
 					pqCiphertext = ct
 				}
+
+				// Convert this single vector to float64 once for the AES-encrypt
+				// boundary (encrypt.EncryptVectorWithID takes float64). Reused
+				// across all redundant assignments below.
+				vec64 := cluster.AsFloat64One(vec)
 
 				for assignIdx, superID := range allAssignments[i].assignments {
 					// Storage uses permuted ID; centroid scoring uses logical superID.
@@ -243,7 +262,7 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 					}
 
 					// Encrypt with enterprise AES key (AESGCM.Seal is safe for concurrent use)
-					ciphertext, err := b.encryptor.EncryptVectorWithID(vec, id)
+					ciphertext, err := b.encryptor.EncryptVectorWithID(vec64, id)
 					if err != nil {
 						results[w] = workerResult{err: fmt.Errorf("failed to encrypt vector %s: %w", id, err)}
 						return
@@ -392,6 +411,10 @@ func (b *KMeansBuilder) GetClusterCounts() []int {
 }
 
 // BuildKMeansIndex is a convenience function for building with k-means.
+// Accepts float64 input for backwards compatibility; converts to float32
+// internally before passing to the builder. The float64 caller's slice is
+// discarded after this conversion (best-effort: caller still holds the
+// reference, but builder's working set is float32).
 func BuildKMeansIndex(
 	ctx context.Context,
 	enterpriseID string,
@@ -414,8 +437,10 @@ func BuildKMeansIndex(
 		return nil, nil, fmt.Errorf("failed to create builder: %w", err)
 	}
 
-	// Build index
-	idx, err := builder.Build(ctx, ids, vectors, store)
+	// Build index — convert input vectors to float32 at this convenience-API
+	// boundary. opaque.NewDB's path stores float32 directly and avoids the
+	// double-allocation; this helper is mostly used by tests + small examples.
+	idx, err := builder.Build(ctx, ids, cluster.AsFloat32(vectors), store)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build index: %w", err)
 	}

@@ -8,7 +8,7 @@ import (
 
 func TestKMeansBasic(t *testing.T) {
 	// Create 3 obvious clusters
-	vectors := [][]float64{
+	vectors := [][]float32{
 		// Cluster 0: around (0, 0)
 		{0.1, 0.1}, {-0.1, 0.1}, {0.1, -0.1}, {-0.1, -0.1},
 		// Cluster 1: around (10, 0)
@@ -47,7 +47,7 @@ func TestKMeansBasic(t *testing.T) {
 
 func TestKMeansPredict(t *testing.T) {
 	// Create clusters
-	vectors := [][]float64{
+	vectors := [][]float32{
 		{0, 0}, {0.1, 0.1},
 		{10, 0}, {10.1, 0.1},
 		{5, 10}, {5.1, 10.1},
@@ -58,12 +58,12 @@ func TestKMeansPredict(t *testing.T) {
 
 	// Test prediction - should assign to nearest cluster
 	testCases := []struct {
-		query    []float64
+		query    []float32
 		expected int // The cluster containing similar training vectors
 	}{
-		{[]float64{0.05, 0.05}, km.Labels[0]},  // Near cluster 0
-		{[]float64{10.05, 0.05}, km.Labels[2]}, // Near cluster 1
-		{[]float64{5.05, 10.05}, km.Labels[4]}, // Near cluster 2
+		{[]float32{0.05, 0.05}, km.Labels[0]},  // Near cluster 0
+		{[]float32{10.05, 0.05}, km.Labels[2]}, // Near cluster 1
+		{[]float32{5.05, 10.05}, km.Labels[4]}, // Near cluster 2
 	}
 
 	for i, tc := range testCases {
@@ -76,18 +76,18 @@ func TestKMeansPredict(t *testing.T) {
 
 func TestKMeansPredictTopK(t *testing.T) {
 	// Create well-separated clusters
-	vectors := make([][]float64, 0)
+	vectors := make([][]float32, 0)
 	for i := 0; i < 5; i++ {
 		// Cluster i centered at (i*10, 0)
-		vectors = append(vectors, []float64{float64(i*10) + 0.1, 0.1})
-		vectors = append(vectors, []float64{float64(i*10) - 0.1, -0.1})
+		vectors = append(vectors, []float32{float32(i*10) + 0.1, 0.1})
+		vectors = append(vectors, []float32{float32(i*10) - 0.1, -0.1})
 	}
 
 	km := NewKMeans(Config{K: 5, MaxIter: 100, Seed: 42})
 	km.Fit(vectors)
 
 	// Query near cluster 1 (centered around 10, 0)
-	query := []float64{10, 0}
+	query := []float32{10, 0}
 	topK := km.PredictTopK(query, 3)
 
 	t.Logf("Centroids: %v", km.Centroids)
@@ -108,11 +108,11 @@ func TestKMeansLargeDataset(t *testing.T) {
 	dim := 128
 	k := 64
 
-	vectors := make([][]float64, n)
+	vectors := make([][]float32, n)
 	for i := 0; i < n; i++ {
-		vectors[i] = make([]float64, dim)
+		vectors[i] = make([]float32, dim)
 		for j := 0; j < dim; j++ {
-			vectors[i][j] = rng.NormFloat64()
+			vectors[i][j] = float32(rng.NormFloat64())
 		}
 	}
 
@@ -157,13 +157,13 @@ func TestKMeansQuality(t *testing.T) {
 	k := 16
 
 	// Generate vectors with some structure (mix of Gaussians)
-	vectors := make([][]float64, n)
+	vectors := make([][]float32, n)
 	for i := 0; i < n; i++ {
 		center := i % k // Assign to one of k "true" clusters
-		vectors[i] = make([]float64, dim)
+		vectors[i] = make([]float32, dim)
 		for j := 0; j < dim; j++ {
 			// Cluster centers spread out, with noise
-			vectors[i][j] = float64(center)*2 + rng.NormFloat64()*0.5
+			vectors[i][j] = float32(center)*2 + float32(rng.NormFloat64())*0.5
 		}
 	}
 
@@ -197,11 +197,11 @@ func BenchmarkKMeansFit(b *testing.B) {
 	dim := 128
 	k := 64
 
-	vectors := make([][]float64, n)
+	vectors := make([][]float32, n)
 	for i := 0; i < n; i++ {
-		vectors[i] = make([]float64, dim)
+		vectors[i] = make([]float32, dim)
 		for j := 0; j < dim; j++ {
-			vectors[i][j] = rng.NormFloat64()
+			vectors[i][j] = float32(rng.NormFloat64())
 		}
 	}
 

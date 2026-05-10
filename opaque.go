@@ -315,8 +315,13 @@ type DB struct {
 	state dbState
 
 	// Buffered vectors (accumulated via Add/AddBatch, consumed by Build).
+	// Stored as float32 for memory: at 1M × 1536-dim this is ~6 GB instead of
+	// ~12 GB. Public API still accepts []float64 — AddBatch / Add convert at
+	// the boundary. Lossy conversion is fine: ada-002 is float32-native and
+	// SIFT-class precision is well above the float32 floor (~1.2e-7 per
+	// element). See docs/MEMORY_PROFILE.md for the full rationale.
 	pendingIDs     []string
-	pendingVectors [][]float64
+	pendingVectors [][]float32
 
 	// Soft-deleted vector IDs. Filtered out during Search, excluded on Rebuild.
 	deletedIDs map[string]bool
@@ -387,15 +392,20 @@ func (db *DB) Add(ctx context.Context, id string, vector []float64) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	v := make([]float64, len(vector))
-	copy(v, vector)
+	// Downcast caller's float64 vector → float32 for storage (saves ~6 GB at
+	// 1M × 1536-dim). The caller's slice is independent — they may mutate it
+	// after Add returns.
+	v32 := make([]float32, len(vector))
+	for i, x := range vector {
+		v32[i] = float32(x)
+	}
 
 	db.pendingIDs = append(db.pendingIDs, id)
-	db.pendingVectors = append(db.pendingVectors, v)
+	db.pendingVectors = append(db.pendingVectors, v32)
 
 	// If the index is already built, assign to nearest centroid and store immediately.
 	if db.state == stateReady {
-		if err := db.addToIndexLocked(ctx, id, v); err != nil {
+		if err := db.addToIndexLocked(ctx, id, vector); err != nil {
 			return fmt.Errorf("opaque: incremental add failed: %w", err)
 		}
 		db.refreshCentroidCaches()
@@ -432,14 +442,19 @@ func (db *DB) AddBatch(ctx context.Context, ids []string, vectors [][]float64) e
 
 	ready := db.state == stateReady
 	for i, v := range vectors {
-		vc := make([]float64, len(v))
-		copy(vc, v)
+		// Downcast to float32 for storage. addToIndexLocked still receives the
+		// caller's float64 slice for its incremental-add path (small per-vector
+		// boundary cost; doesn't blow up memory).
+		v32 := make([]float32, len(v))
+		for j, x := range v {
+			v32[j] = float32(x)
+		}
 		db.pendingIDs = append(db.pendingIDs, ids[i])
-		db.pendingVectors = append(db.pendingVectors, vc)
+		db.pendingVectors = append(db.pendingVectors, v32)
 
 		// If the index is already built, assign to nearest centroid and store immediately.
 		if ready {
-			if err := db.addToIndexLocked(ctx, ids[i], vc); err != nil {
+			if err := db.addToIndexLocked(ctx, ids[i], v); err != nil {
 				return fmt.Errorf("opaque: incremental add failed for %q: %w", ids[i], err)
 			}
 		}
@@ -516,7 +531,7 @@ func (db *DB) Rebuild(ctx context.Context) error {
 
 		seen := make(map[string]bool)
 		var filteredIDs []string
-		var filteredVectors [][]float64
+		var filteredVectors [][]float32
 		// Iterate in reverse so the latest entry for each ID is processed first.
 		for i := len(db.pendingIDs) - 1; i >= 0; i-- {
 			id := db.pendingIDs[i]
@@ -705,7 +720,10 @@ func (db *DB) addToIndexLocked(ctx context.Context, id string, vector []float64)
 	}
 
 	// Normalize for centroid comparison (centroids are normalized from k-means).
-	normalized := cluster.NormalizeVector(indexVec)
+	// cluster.NormalizeVector now operates on float32; convert at the boundary
+	// for this single-vector incremental-add path (~12 KB temp at 1536-dim).
+	normalized32 := cluster.NormalizeVector(cluster.AsFloat32One(indexVec))
+	normalized := cluster.AsFloat64One(normalized32)
 
 	// Find nearest centroid(s).
 	centroids := db.enterpriseCfg.Centroids
@@ -878,7 +896,8 @@ func (db *DB) extractIndexedVectors(ctx context.Context) error {
 				continue
 			}
 			db.pendingIDs = append(db.pendingIDs, b.ID)
-			db.pendingVectors = append(db.pendingVectors, vec)
+			// Downcast extracted float64 → float32 for the new storage tier.
+			db.pendingVectors = append(db.pendingVectors, cluster.AsFloat32One(vec))
 			existing[b.ID] = true
 		}
 	}
@@ -899,25 +918,32 @@ func (db *DB) buildLocked(ctx context.Context) error {
 	progress := db.cfg.OnBuildProgress
 
 	// Apply PCA dimensionality reduction if configured.
+	// indexVectors is [][]float32 — same memory tier as db.pendingVectors. PCA
+	// path converts at its boundaries since pkg/pca operates in float64; the
+	// non-PCA path (default) skips both conversions and stays float32.
 	indexVectors := db.pendingVectors
 	indexDim := db.cfg.Dimension
 	if db.cfg.PCADimension > 0 {
 		if progress != nil {
 			progress("pca", 0)
 		}
-		model, err := pca.Fit(db.pendingVectors, db.cfg.PCADimension)
+		// PCA needs float64 input. One-time conversion + drop after.
+		pendingVecs64 := cluster.AsFloat64(db.pendingVectors)
+		model, err := pca.Fit(pendingVecs64, db.cfg.PCADimension)
 		if err != nil {
 			return fmt.Errorf("opaque: PCA fitting failed: %w", err)
 		}
 		if progress != nil {
 			progress("pca", 0.5)
 		}
-		reduced, err := model.TransformBatch(db.pendingVectors)
+		reduced64, err := model.TransformBatch(pendingVecs64)
 		if err != nil {
 			return fmt.Errorf("opaque: PCA transform failed: %w", err)
 		}
+		pendingVecs64 = nil // free
 		db.pcaModel = model
-		indexVectors = reduced
+		// Convert reduced vectors back to float32 for the storage tier.
+		indexVectors = cluster.AsFloat32(reduced64)
 		indexDim = db.cfg.PCADimension
 		if progress != nil {
 			progress("pca", 1)
@@ -965,10 +991,14 @@ func (db *DB) buildLocked(ctx context.Context) error {
 		if progress != nil {
 			progress("pq_training", 0)
 		}
-		// Normalize vectors for PQ training (cosine similarity = dot product on unit vectors).
+		// Normalize vectors for PQ training (cosine similarity = dot product
+		// on unit vectors). Normalize as float32, then convert each vector to
+		// float64 at the pq.Train boundary. At 1M × 1536-dim this costs ~12 GB
+		// in normVecs (float64); the float32 normalized intermediates are GC'd
+		// per-vector. Future PQ refactor can push float32 down to pq.Train.
 		normVecs := make([][]float64, len(indexVectors))
 		for i, v := range indexVectors {
-			normVecs[i] = cluster.NormalizeVector(v)
+			normVecs[i] = cluster.AsFloat64One(cluster.NormalizeVector(v))
 		}
 		pqModel, err := pq.Train(normVecs, indexDim, pq.Config{
 			M:    db.cfg.PQSubspaces,

@@ -95,11 +95,13 @@ func (db *DB) Update(ctx context.Context, id string, vector []float64) error {
 	}
 	db.deletedIDs[id] = true
 
-	// Buffer the new vector.
-	v := make([]float64, len(vector))
-	copy(v, vector)
+	// Buffer the new vector — downcast to float32 for the storage tier.
+	v32 := make([]float32, len(vector))
+	for i, x := range vector {
+		v32[i] = float32(x)
+	}
 	db.pendingIDs = append(db.pendingIDs, id)
-	db.pendingVectors = append(db.pendingVectors, v)
+	db.pendingVectors = append(db.pendingVectors, v32)
 	db.dataVersion++
 
 	return nil

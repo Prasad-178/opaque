@@ -36,15 +36,17 @@ func (db *DB) AddWithMetadata(ctx context.Context, id string, vector []float64, 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	v := make([]float64, len(vector))
-	copy(v, vector)
+	v32 := make([]float32, len(vector))
+	for i, x := range vector {
+		v32[i] = float32(x)
+	}
 
 	db.pendingIDs = append(db.pendingIDs, id)
-	db.pendingVectors = append(db.pendingVectors, v)
+	db.pendingVectors = append(db.pendingVectors, v32)
 
 	// If the index is already built, assign to nearest centroid and store immediately.
 	if db.state == stateReady {
-		if err := db.addToIndexLocked(ctx, id, v); err != nil {
+		if err := db.addToIndexLocked(ctx, id, vector); err != nil {
 			return fmt.Errorf("opaque: incremental add failed: %w", err)
 		}
 		db.refreshCentroidCaches()
@@ -95,14 +97,16 @@ func (db *DB) AddBatchWithMetadata(ctx context.Context, ids []string, vectors []
 
 	ready := db.state == stateReady
 	for i, v := range vectors {
-		vc := make([]float64, len(v))
-		copy(vc, v)
+		v32 := make([]float32, len(v))
+		for j, x := range v {
+			v32[j] = float32(x)
+		}
 		db.pendingIDs = append(db.pendingIDs, ids[i])
-		db.pendingVectors = append(db.pendingVectors, vc)
+		db.pendingVectors = append(db.pendingVectors, v32)
 
 		// If the index is already built, assign to nearest centroid and store immediately.
 		if ready {
-			if err := db.addToIndexLocked(ctx, ids[i], vc); err != nil {
+			if err := db.addToIndexLocked(ctx, ids[i], v); err != nil {
 				return fmt.Errorf("opaque: incremental add failed for %q: %w", ids[i], err)
 			}
 		}

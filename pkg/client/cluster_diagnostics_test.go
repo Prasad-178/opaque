@@ -11,6 +11,7 @@ import (
 
 	"github.com/Prasad-178/opaque/pkg/auth"
 	"github.com/Prasad-178/opaque/pkg/blob"
+	"github.com/Prasad-178/opaque/pkg/cluster"
 	"github.com/Prasad-178/opaque/pkg/enterprise"
 	"github.com/Prasad-178/opaque/pkg/hierarchical"
 )
@@ -84,7 +85,7 @@ func TestClusterSelectionDiagnostics(t *testing.T) {
 	cfg.NumDecoys = 0
 
 	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-	index, _ := builder.Build(ctx, ids, vectors, store)
+	index, _ := builder.Build(ctx, ids, cluster.AsFloat32(vectors), store)
 	enterpriseCfg = builder.GetEnterpriseConfig()
 
 	// Create vector-to-cluster mapping from index
@@ -331,7 +332,7 @@ func TestClusterDistribution(t *testing.T) {
 	cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
 
 	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-	index, _ := builder.Build(ctx, ids, vectors, store)
+	index, _ := builder.Build(ctx, ids, cluster.AsFloat32(vectors), store)
 
 	// Count vectors per cluster
 	clusterCounts := make([]int, numClusters)
@@ -449,7 +450,7 @@ func TestTopSelectImpact(t *testing.T) {
 	cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
 
 	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-	index, _ := builder.Build(ctx, ids, vectors, store)
+	index, _ := builder.Build(ctx, ids, cluster.AsFloat32(vectors), store)
 	enterpriseCfg = builder.GetEnterpriseConfig()
 
 	vectorToCluster := make(map[string]int)

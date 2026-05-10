@@ -1,4 +1,11 @@
 // Package cluster provides clustering algorithms for vector indexing.
+//
+// Internal storage is float32 throughout — half the memory bandwidth of
+// float64 with imperceptible precision impact for SIFT-class workloads
+// (~1.2e-7 per element, ~6 orders of magnitude below recall sensitivity)
+// and zero impact for ada-002-class embeddings (already float32-native).
+// Conversion to float64 happens only at HE-encoding boundaries where
+// Lattigo's encoder requires it.
 package cluster
 
 import (
@@ -8,14 +15,14 @@ import (
 	"sync"
 )
 
-// KMeans performs k-means clustering on vectors.
+// KMeans performs k-means clustering on float32 vectors.
 type KMeans struct {
 	K          int         // Number of clusters
 	MaxIter    int         // Maximum iterations
-	Tolerance  float64     // Convergence tolerance
+	Tolerance  float64     // Convergence tolerance (still float64 — scalar accumulator)
 	Seed       int64       // Random seed for reproducibility
 	NumInit    int         // Number of initializations (best inertia wins)
-	Centroids  [][]float64 // Cluster centroids (after Fit)
+	Centroids  [][]float32 // Cluster centroids (after Fit)
 	Labels     []int       // Cluster assignment for each vector (after Fit)
 	Iterations int         // Actual iterations run
 	Inertia    float64     // Final inertia (sum of squared distances to centroids)
@@ -59,7 +66,7 @@ func NewKMeans(cfg Config) *KMeans {
 
 // Fit runs k-means clustering on the given vectors.
 // If NumInit > 1, runs multiple initializations in parallel and keeps the best result.
-func (km *KMeans) Fit(vectors [][]float64) error {
+func (km *KMeans) Fit(vectors [][]float32) error {
 	if len(vectors) == 0 {
 		return fmt.Errorf("no vectors provided")
 	}
@@ -74,7 +81,7 @@ func (km *KMeans) Fit(vectors [][]float64) error {
 
 	// Run multiple initializations in parallel, keep the best (lowest inertia)
 	type initResult struct {
-		centroids  [][]float64
+		centroids  [][]float32
 		labels     []int
 		iterations int
 		inertia    float64
@@ -137,7 +144,7 @@ func (km *KMeans) numInit() int {
 }
 
 // fitOnce runs a single k-means initialization and iteration cycle.
-func (km *KMeans) fitOnce(vectors [][]float64, seed int64) error {
+func (km *KMeans) fitOnce(vectors [][]float32, seed int64) error {
 	dim := len(vectors[0])
 	rng := rand.New(rand.NewSource(seed))
 
@@ -171,17 +178,18 @@ func (km *KMeans) fitOnce(vectors [][]float64, seed int64) error {
 
 // kmeansppInit initializes centroids using k-means++ algorithm.
 // This provides better starting points than random initialization.
-func kmeansppInit(vectors [][]float64, k int, rng *rand.Rand) [][]float64 {
+func kmeansppInit(vectors [][]float32, k int, rng *rand.Rand) [][]float32 {
 	n := len(vectors)
 	dim := len(vectors[0])
-	centroids := make([][]float64, k)
+	centroids := make([][]float32, k)
 
 	// Choose first centroid randomly
 	firstIdx := rng.Intn(n)
-	centroids[0] = make([]float64, dim)
+	centroids[0] = make([]float32, dim)
 	copy(centroids[0], vectors[firstIdx])
 
-	// Distance from each point to nearest centroid
+	// Distance from each point to nearest centroid (float64 accumulator;
+	// individual distances accumulate over many vectors).
 	distances := make([]float64, n)
 	for i := range distances {
 		distances[i] = math.MaxFloat64
@@ -211,7 +219,7 @@ func kmeansppInit(vectors [][]float64, k int, rng *rand.Rand) [][]float64 {
 			}
 		}
 
-		centroids[c] = make([]float64, dim)
+		centroids[c] = make([]float32, dim)
 		copy(centroids[c], vectors[chosen])
 	}
 
@@ -220,7 +228,7 @@ func kmeansppInit(vectors [][]float64, k int, rng *rand.Rand) [][]float64 {
 
 // assignClusters assigns each vector to its nearest centroid.
 // Returns total inertia (sum of squared distances to centroids).
-func (km *KMeans) assignClusters(vectors [][]float64) float64 {
+func (km *KMeans) assignClusters(vectors [][]float32) float64 {
 	var totalInertia float64
 	var mu sync.Mutex
 
@@ -270,30 +278,34 @@ func (km *KMeans) assignClusters(vectors [][]float64) float64 {
 
 // updateCentroids recomputes centroids as means of assigned vectors.
 // Empty clusters are recovered by reassigning the farthest vector from the largest cluster.
-func (km *KMeans) updateCentroids(vectors [][]float64, dim int) {
+// Centroids are accumulated in float64 for numerical stability, then downcast to float32.
+func (km *KMeans) updateCentroids(vectors [][]float32, dim int) {
 	// Reset centroids and counts
 	counts := make([]int, km.K)
-	newCentroids := make([][]float64, km.K)
+	newCentroids64 := make([][]float64, km.K)
 	for c := 0; c < km.K; c++ {
-		newCentroids[c] = make([]float64, dim)
+		newCentroids64[c] = make([]float64, dim)
 	}
 
-	// Sum vectors in each cluster
+	// Sum vectors in each cluster (in float64 to avoid catastrophic
+	// cancellation when many small float32 contributions accumulate).
 	for i, vec := range vectors {
 		c := km.Labels[i]
 		counts[c]++
 		for j, v := range vec {
-			newCentroids[c][j] += v
+			newCentroids64[c][j] += float64(v)
 		}
 	}
 
-	// Compute means
+	// Compute means and downcast back to float32 for storage.
 	for c := 0; c < km.K; c++ {
 		if counts[c] > 0 {
-			for j := range newCentroids[c] {
-				newCentroids[c][j] /= float64(counts[c])
+			scale := 1.0 / float64(counts[c])
+			centroid := make([]float32, dim)
+			for j := range newCentroids64[c] {
+				centroid[j] = float32(newCentroids64[c][j] * scale)
 			}
-			km.Centroids[c] = newCentroids[c]
+			km.Centroids[c] = centroid
 		}
 	}
 
@@ -319,7 +331,7 @@ func (km *KMeans) updateCentroids(vectors [][]float64, dim int) {
 		farthestIdx := -1
 		for i, label := range km.Labels {
 			if label == largestCluster {
-				d := squaredEuclidean(vectors[i], newCentroids[largestCluster])
+				d := squaredEuclidean(vectors[i], km.Centroids[largestCluster])
 				if d > maxDist {
 					maxDist = d
 					farthestIdx = i
@@ -339,7 +351,7 @@ func (km *KMeans) updateCentroids(vectors [][]float64, dim int) {
 }
 
 // Predict returns the nearest centroid index for a query vector.
-func (km *KMeans) Predict(query []float64) int {
+func (km *KMeans) Predict(query []float32) int {
 	minDist := math.MaxFloat64
 	minIdx := 0
 	for c, centroid := range km.Centroids {
@@ -353,7 +365,7 @@ func (km *KMeans) Predict(query []float64) int {
 }
 
 // PredictTopK returns the indices of the K nearest centroids.
-func (km *KMeans) PredictTopK(query []float64, k int) []int {
+func (km *KMeans) PredictTopK(query []float32, k int) []int {
 	type centroidDist struct {
 		idx  int
 		dist float64
@@ -391,23 +403,27 @@ func (km *KMeans) GetClusterSizes() []int {
 	return sizes
 }
 
-// squaredEuclidean computes squared Euclidean distance between two vectors.
-func squaredEuclidean(a, b []float64) float64 {
+// squaredEuclidean computes squared Euclidean distance between two float32 vectors.
+// Accumulator is float64 to avoid catastrophic cancellation for large dim.
+func squaredEuclidean(a, b []float32) float64 {
 	var sum float64
 	for i := range a {
-		d := a[i] - b[i]
+		d := float64(a[i]) - float64(b[i])
 		sum += d * d
 	}
 	return sum
 }
 
-// CosineSimilarity computes cosine similarity between two vectors.
-func CosineSimilarity(a, b []float64) float64 {
+// CosineSimilarity computes cosine similarity between two float32 vectors.
+// Accumulator is float64 to maintain precision over high dimensions.
+func CosineSimilarity(a, b []float32) float64 {
 	var dot, normA, normB float64
 	for i := range a {
-		dot += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
+		ai := float64(a[i])
+		bi := float64(b[i])
+		dot += ai * bi
+		normA += ai * ai
+		normB += bi * bi
 	}
 	if normA == 0 || normB == 0 {
 		return 0
@@ -415,18 +431,22 @@ func CosineSimilarity(a, b []float64) float64 {
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
-// NormalizeVector returns a unit-length copy of the vector.
-func NormalizeVector(v []float64) []float64 {
+// NormalizeVector returns a unit-length copy of the float32 vector.
+// The norm computation is float64 for numerical stability; the output is
+// downcast to float32 for storage.
+func NormalizeVector(v []float32) []float32 {
 	var norm float64
 	for _, val := range v {
-		norm += val * val
+		fv := float64(val)
+		norm += fv * fv
 	}
 	norm = math.Sqrt(norm)
 
-	result := make([]float64, len(v))
+	result := make([]float32, len(v))
 	if norm > 0 {
+		invNorm := 1.0 / norm
 		for i, val := range v {
-			result[i] = val / norm
+			result[i] = float32(float64(val) * invNorm)
 		}
 	}
 	return result
@@ -437,4 +457,48 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// AsFloat32 converts a [][]float64 slice to [][]float32 (used at API boundaries
+// where the caller still passes float64). Allocates a fresh outer + inner slice.
+func AsFloat32(vectors [][]float64) [][]float32 {
+	out := make([][]float32, len(vectors))
+	for i, vec := range vectors {
+		out[i] = make([]float32, len(vec))
+		for j, v := range vec {
+			out[i][j] = float32(v)
+		}
+	}
+	return out
+}
+
+// AsFloat32One converts a single []float64 vector to []float32.
+func AsFloat32One(v []float64) []float32 {
+	out := make([]float32, len(v))
+	for i, x := range v {
+		out[i] = float32(x)
+	}
+	return out
+}
+
+// AsFloat64 converts [][]float32 back to [][]float64 (used at HE-encoding
+// boundary where Lattigo requires float64 inputs).
+func AsFloat64(vectors [][]float32) [][]float64 {
+	out := make([][]float64, len(vectors))
+	for i, vec := range vectors {
+		out[i] = make([]float64, len(vec))
+		for j, v := range vec {
+			out[i][j] = float64(v)
+		}
+	}
+	return out
+}
+
+// AsFloat64One converts a single []float32 to []float64.
+func AsFloat64One(v []float32) []float64 {
+	out := make([]float64, len(v))
+	for i, x := range v {
+		out[i] = float64(x)
+	}
+	return out
 }
