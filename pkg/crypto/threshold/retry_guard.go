@@ -1,11 +1,37 @@
 package threshold
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 )
+
+// NewInstanceID returns a fresh 16-byte random nonce suitable for use as the
+// `instanceID` parameter to ThresholdDecrypt. Callers that don't have a
+// domain-specific protocol-instance identifier should call this once per
+// logical threshold-decrypt invocation. A retry of the same logical operation
+// should keep the same instanceID — the per-participant RetryGuard then
+// refuses the second emission, closing the Mouchet'24 retry-attack family.
+func NewInstanceID() ([]byte, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return nil, fmt.Errorf("crypto/rand: %w", err)
+	}
+	return b, nil
+}
+
+// mustInstanceID returns a fresh 16-byte random nonce or panics. Test-only
+// helper; production callers should use NewInstanceID and handle the error.
+func mustInstanceID() []byte {
+	b, err := NewInstanceID()
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
 
 // ErrShareAlreadyEmitted is returned when a participant is asked to emit a
 // partial-decryption share for an (instance, ciphertext, clientPK) tuple that

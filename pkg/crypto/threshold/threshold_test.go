@@ -1,6 +1,7 @@
 package threshold
 
 import (
+	"errors"
 	"math"
 	"testing"
 
@@ -111,7 +112,7 @@ func TestThresholdDecryptScalar(t *testing.T) {
 	}
 
 	// Threshold decryption: re-encrypt result under client's public key.
-	ctClient, err := committee.ThresholdDecrypt(result, session.PK)
+	ctClient, err := committee.ThresholdDecrypt(result, session.PK, mustInstanceID())
 	if err != nil {
 		t.Fatalf("threshold decryption failed: %v", err)
 	}
@@ -155,7 +156,7 @@ func TestThresholdDecryptNofN(t *testing.T) {
 	}
 
 	// Threshold decrypt directly (no HE computation, just re-encrypt under client key).
-	ctClient, err := committee.ThresholdDecrypt(ct, session.PK)
+	ctClient, err := committee.ThresholdDecrypt(ct, session.PK, mustInstanceID())
 	if err != nil {
 		t.Fatalf("threshold decryption failed: %v", err)
 	}
@@ -169,6 +170,61 @@ func TestThresholdDecryptNofN(t *testing.T) {
 	// Threshold decryption adds noise flooding, so tolerance is wider than direct mode.
 	if math.Abs(got-0.42) > 0.01 {
 		t.Errorf("decryption mismatch: expected 0.42, got %.6f (diff=%.2e)", got, math.Abs(got-0.42))
+	}
+}
+
+// TestThresholdDecrypt_RetryGuardRefusesReplay verifies the Phase-2 wiring of
+// the per-participant RetryGuard: the second call to ThresholdDecrypt with the
+// SAME (instanceID, ciphertext, clientPK) tuple must fail. This is the load-
+// bearing property that closes the Mouchet'24 / Okada'25 / Colin de Verdière
+// 2026 retry-attack family.
+func TestThresholdDecrypt_RetryGuardRefusesReplay(t *testing.T) {
+	committee, err := NewCommittee(3, 2)
+	if err != nil {
+		t.Fatalf("failed to create committee: %v", err)
+	}
+
+	session, err := committee.NewClientSession()
+	if err != nil {
+		t.Fatalf("failed to create client session: %v", err)
+	}
+	defer session.Close()
+
+	vector := make([]float64, 128)
+	vector[0] = 0.42
+	ct, err := committee.EncryptVector(vector)
+	if err != nil {
+		t.Fatalf("encrypt failed: %v", err)
+	}
+
+	// Pin a single instanceID across both calls — this is the "retry of the
+	// same logical operation" scenario the guard must refuse.
+	instanceID := mustInstanceID()
+
+	// First call must succeed.
+	_, err = committee.ThresholdDecrypt(ct, session.PK, instanceID)
+	if err != nil {
+		t.Fatalf("first threshold decrypt must succeed, got %v", err)
+	}
+
+	// Second call with same (instanceID, ct, pk) must be refused. The error
+	// surfaces from the worker goroutine via the standard "share gen failed"
+	// wrapper; we just check that it surfaced and references the guard error.
+	_, err = committee.ThresholdDecrypt(ct, session.PK, instanceID)
+	if err == nil {
+		t.Fatal("second threshold decrypt with same fingerprint must fail, got nil")
+	}
+	if !errors.Is(err, ErrShareAlreadyEmitted) {
+		t.Errorf("expected error to wrap ErrShareAlreadyEmitted, got %v", err)
+	}
+
+	// Different instanceID with same ct + pk should still succeed (fresh
+	// fingerprint = fresh emission). This matches the design doc §2.3 abort-
+	// then-restart semantics: a new logical instance gets a new instanceID.
+	freshInstance := mustInstanceID()
+	_, err = committee.ThresholdDecrypt(ct, session.PK, freshInstance)
+	if err != nil {
+		t.Errorf("threshold decrypt with fresh instanceID must succeed, got %v", err)
 	}
 }
 
@@ -256,7 +312,7 @@ func TestThresholdDecryptBatch(t *testing.T) {
 	}
 
 	// Threshold decrypt.
-	ctClient, err := committee.ThresholdDecrypt(result, session.PK)
+	ctClient, err := committee.ThresholdDecrypt(result, session.PK, mustInstanceID())
 	if err != nil {
 		t.Fatalf("threshold decryption failed: %v", err)
 	}

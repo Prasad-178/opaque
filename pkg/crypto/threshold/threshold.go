@@ -40,6 +40,12 @@ type Participant struct {
 
 	// params are the shared CKKS parameters.
 	params hefloat.Parameters
+
+	// guard prevents double-emission of partial-decryption shares for the same
+	// (instanceID, ciphertext, clientPK) fingerprint — the load-bearing
+	// component closing the Mouchet'24 / Okada'25 / Colin de Verdière 2026
+	// retry-attack family. See docs/THRESHOLD_RETRY_FIX.md §2.1.
+	guard *RetryGuard
 }
 
 // Committee orchestrates the threshold CKKS protocol across N participants.
@@ -139,6 +145,7 @@ func NewCommittee(n, threshold int) (*Committee, error) {
 			ID:     mhe.ShamirPublicPoint(i + 1), // 1-indexed
 			sk:     kgen.GenSecretKeyNew(),
 			params: params,
+			guard:  NewRetryGuard(),
 		}
 	}
 
@@ -225,7 +232,15 @@ func (c *Committee) EncryptVector(vector []float64) (*rlwe.Ciphertext, error) {
 //
 // This uses PublicKeySwitchProtocol: each participant produces a partial share,
 // shares are aggregated, and the result is a ciphertext under clientPK.
-func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicKey) (*rlwe.Ciphertext, error) {
+//
+// instanceID is a coordinator-supplied protocol-instance nonce — distinct
+// invocations of the threshold protocol MUST use distinct instanceIDs. Each
+// participant tracks the (instanceID, ct, clientPK) fingerprint via its
+// RetryGuard and refuses to emit a second share for the same fingerprint,
+// closing the Mouchet'24 / Okada'25 / Colin de Verdière 2026 retry-attack
+// family. Use NewInstanceID() if the caller doesn't have a domain-specific
+// nonce — see docs/THRESHOLD_RETRY_FIX.md §2 for the threat model.
+func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicKey, instanceID []byte) (*rlwe.Ciphertext, error) {
 	// No mutex needed: all state created per-call (pcks, shares, activeKeys).
 	// Participant fields (shamirShare, sk) are read-only after setup.
 	// Concurrent calls are safe and simulate real distributed deployment
@@ -275,6 +290,20 @@ func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicK
 		}
 	}
 
+	// Serialize ct + clientPK ONCE (outside the worker loop) for the
+	// per-participant guard fingerprint. Lattigo's binary serialization is
+	// deterministic, so the same ct will always produce the same bytes — that's
+	// what makes the guard's "refuse second emission for same fingerprint"
+	// property hold.
+	ctBytes, err := ct.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize ciphertext for retry-guard fingerprint: %w", err)
+	}
+	pkBytes, err := clientPK.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize clientPK for retry-guard fingerprint: %w", err)
+	}
+
 	// Each participant generates their partial key-switch share in parallel.
 	// In a real deployment, this is the network-parallel step: each node
 	// computes its share independently and sends it to the aggregator.
@@ -290,6 +319,13 @@ func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicK
 				// node computes share, sends it back (1 RTT). Both happen per-node.
 				if c.SimulatedRTT > 0 {
 					time.Sleep(2 * c.SimulatedRTT)
+				}
+				// RETRY-GUARD CHECK: refuse to emit a second share for this
+				// (instanceID, ct, clientPK) fingerprint. This is the fix for
+				// Mouchet'24 / Okada'25 / Colin de Verdière 2026.
+				if err := activeParticipants[i].guard.Admit(instanceID, ctBytes, pkBytes); err != nil {
+					shareErrs[i] = fmt.Errorf("participant %d retry-guard refused emission: %w", activeParticipants[i].ID, err)
+					return
 				}
 				// Each participant gets its own PCKS instance (internal PRNG state).
 				pcks, err := mhe.NewPublicKeySwitchProtocol(c.params, noiseFlood)

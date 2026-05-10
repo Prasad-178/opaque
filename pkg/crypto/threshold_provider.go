@@ -239,7 +239,14 @@ func (e *thresholdEvalEngine) HomomorphicBatchDotProduct(encQuery *rlwe.Cipherte
 }
 
 func (e *thresholdEvalEngine) DecryptScalar(ct *rlwe.Ciphertext) (float64, error) {
-	ctClient, err := e.committee.ThresholdDecrypt(ct, e.session.PK)
+	// Fresh instanceID per call. The per-participant RetryGuard inside
+	// ThresholdDecrypt then refuses any duplicate emission for the same
+	// (instanceID, ct, clientPK) fingerprint — Mouchet'24 retry-attack defense.
+	instanceID, err := threshold.NewInstanceID()
+	if err != nil {
+		return 0, fmt.Errorf("threshold instance ID: %w", err)
+	}
+	ctClient, err := e.committee.ThresholdDecrypt(ct, e.session.PK, instanceID)
 	if err != nil {
 		return 0, fmt.Errorf("threshold decrypt failed: %w", err)
 	}
@@ -254,7 +261,11 @@ func (e *thresholdEvalEngine) DecryptScalar(ct *rlwe.Ciphertext) (float64, error
 }
 
 func (e *thresholdEvalEngine) DecryptBatchScalars(ct *rlwe.Ciphertext, numCentroids, dimension int) ([]float64, error) {
-	ctClient, err := e.committee.ThresholdDecrypt(ct, e.session.PK)
+	instanceID, err := threshold.NewInstanceID()
+	if err != nil {
+		return nil, fmt.Errorf("threshold instance ID: %w", err)
+	}
+	ctClient, err := e.committee.ThresholdDecrypt(ct, e.session.PK, instanceID)
 	if err != nil {
 		return nil, fmt.Errorf("threshold decrypt failed: %w", err)
 	}
