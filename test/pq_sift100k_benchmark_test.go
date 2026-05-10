@@ -97,24 +97,31 @@ func TestPQ_SIFT100K(t *testing.T) {
 		pqM         int
 		topClusters int
 		probeThresh float64
+		bernoulli   bool
 	}{
-		{"standard", 0, 8, 1.0},
-		{"PQ-M8", 8, 8, 1.0},
-		{"PQ-M16", 16, 8, 1.0},
+		{"standard", 0, 8, 1.0, false},
+		{"PQ-M8", 8, 8, 1.0, false},
+		{"PQ-M16", 16, 8, 1.0, false},
 		// Also test with multi-probe to see PQ at higher recall.
-		{"standard-probe16", 0, 16, 0.95},
-		{"PQ-M8-probe16", 8, 16, 0.95},
+		{"standard-probe16", 0, 16, 0.95, false},
+		{"PQ-M8-probe16", 8, 16, 0.95, false},
+		// Bernoulli decoy sampling for tight (ε,δ)-DP composition. Same
+		// expected K_decoy as the uniform-K default, but K is binomial per
+		// query — recall must be preserved (decoys never affect recall).
+		{"standard-bernoulli", 0, 8, 1.0, true},
+		{"PQ-M8-probe16-bernoulli", 8, 16, 0.95, true},
 	}
 
 	for _, cfg := range configs {
 		t.Logf("--- %s (TopClusters=%d, PQ=%d) ---", cfg.name, cfg.topClusters, cfg.pqM)
 
 		dbCfg := opaque.Config{
-			Dimension:      dataset.Dimension,
-			NumClusters:    numClusters,
-			TopClusters:    cfg.topClusters,
-			NumDecoys:      numDecoys,
-			ProbeThreshold: cfg.probeThresh,
+			Dimension:       dataset.Dimension,
+			NumClusters:     numClusters,
+			TopClusters:     cfg.topClusters,
+			NumDecoys:       numDecoys,
+			ProbeThreshold:  cfg.probeThresh,
+			BernoulliDecoys: cfg.bernoulli,
 		}
 		if cfg.pqM > 0 {
 			dbCfg.PQSubspaces = cfg.pqM
