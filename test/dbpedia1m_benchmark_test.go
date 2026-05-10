@@ -69,6 +69,8 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 	numQueries := 50
 	topK := 10
 	numDecoys := 8
+	dim := dataset.Dimension
+	numVectors := len(dataset.Vectors)
 
 	if numQueries > len(dataset.Queries) {
 		numQueries = len(dataset.Queries)
@@ -77,8 +79,18 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 	// Brute-force GT on the full base. 1M × 50 × 1536 dot products ≈ 75 GFLOP — minutes.
 	t.Log("Computing brute-force cosine ground truth (1M × 1536-dim)...")
 	gtStart := time.Now()
-	groundTruth := bruteForceTopK(dataset.Queries[:numQueries], dataset.Vectors, dataset.Dimension, topK)
+	groundTruth := bruteForceTopK(dataset.Queries[:numQueries], dataset.Vectors, dim, topK)
 	t.Logf("Ground truth computed in %v", time.Since(gtStart))
+
+	// CRITICAL: free dataset.Vectors NOW (12 GB of float64 base vectors). The
+	// per-config loop below re-loads them just before AddBatch and frees again
+	// after, so the test-side memory footprint goes from "12 GB held throughout"
+	// to "12 GB transient per AddBatch + 0 GB during Build". This is what makes
+	// the bench fit on m6i.4xlarge (64 GB) instead of needing 128+ GB.
+	queries := dataset.Queries[:numQueries]
+	ids := dataset.IDs
+	dataset = nil
+	runtime.GC()
 
 	// Trimmed config set — get a few comparison points, not exhaustive.
 	configs := []struct {
@@ -94,9 +106,9 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 	t.Log("================================================================")
 	t.Log("    DBpedia1M ACCURACY BENCHMARK (1M × 1536-dim ada-002)")
 	t.Log("================================================================")
-	t.Logf("Vectors:     %d", len(dataset.Vectors))
-	t.Logf("Dimension:   %d", dataset.Dimension)
-	t.Logf("Clusters:    %d (~%d vectors each)", numClusters, len(dataset.Vectors)/numClusters)
+	t.Logf("Vectors:     %d", numVectors)
+	t.Logf("Dimension:   %d", dim)
+	t.Logf("Clusters:    %d (~%d vectors each)", numClusters, numVectors/numClusters)
 	t.Logf("Queries:     %d, TopK: %d", numQueries, topK)
 	t.Logf("Decoys:      %d", numDecoys)
 	t.Logf("CPUs:        %d", runtime.NumCPU())
@@ -123,7 +135,7 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 		storageDir := filepath.Join(os.TempDir(), fmt.Sprintf("opaque-dbpedia-%s", cfg.name))
 		os.RemoveAll(storageDir)
 		db, err := opaque.NewDB(opaque.Config{
-			Dimension:      dataset.Dimension,
+			Dimension:      dim,
 			NumClusters:    numClusters,
 			TopClusters:    cfg.topClusters,
 			NumDecoys:      numDecoys,
@@ -137,9 +149,23 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 			t.Fatalf("NewDB failed: %v", err)
 		}
 
-		if err := db.AddBatch(ctx, dataset.IDs, dataset.Vectors); err != nil {
+		// Re-load dataset.Vectors freshly per config (the master copy was
+		// freed before the loop). ~14 s per re-load × N configs is small
+		// vs the per-build wall time. After AddBatch, drop the local
+		// reference + GC so the build phase has full instance RAM available.
+		freshLoadStart := time.Now()
+		freshDS, err := embeddings.DBpedia1M(dataPath)
+		if err != nil {
+			t.Fatalf("re-load failed: %v", err)
+		}
+		t.Logf("  re-loaded %d vectors in %v", len(freshDS.Vectors), time.Since(freshLoadStart))
+
+		if err := db.AddBatch(ctx, ids, freshDS.Vectors); err != nil {
 			t.Fatalf("AddBatch failed: %v", err)
 		}
+		// AddBatch made a float32 copy; drop our reference and GC eagerly.
+		freshDS = nil
+		runtime.GC()
 
 		buildStart := time.Now()
 		if err := db.Build(ctx); err != nil {
@@ -147,14 +173,14 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 		}
 		buildTime := time.Since(buildStart)
 
-		db.Search(ctx, dataset.Queries[0], topK)
+		db.Search(ctx, queries[0], topK)
 
 		var totalLatency time.Duration
 		var recall1Sum, recall10Sum float64
 
 		for q := 0; q < numQueries; q++ {
 			start := time.Now()
-			searchResults, err := db.Search(ctx, dataset.Queries[q], topK)
+			searchResults, err := db.Search(ctx, queries[q], topK)
 			totalLatency += time.Since(start)
 			if err != nil {
 				t.Fatalf("Search %d failed: %v", q, err)
@@ -250,8 +276,8 @@ func TestPQ_DBpedia1M(t *testing.T) {
 	}
 
 	N := len(dataset.Vectors)
+	dim := dataset.Dimension
 	ids := dataset.IDs[:N]
-	vectors := dataset.Vectors[:N]
 
 	numClusters := 128
 	numQueries := 50
@@ -265,8 +291,14 @@ func TestPQ_DBpedia1M(t *testing.T) {
 
 	t.Log("Computing brute-force cosine ground truth (1M × 1536-dim)...")
 	gtStart := time.Now()
-	groundTruth := bruteForceTopK(queries, vectors, dataset.Dimension, topK)
+	groundTruth := bruteForceTopK(queries, dataset.Vectors, dim, topK)
 	t.Logf("Ground truth computed in %v", time.Since(gtStart))
+
+	// Free the master dataset.Vectors copy NOW (12 GB float64). Each config's
+	// AddBatch will re-load from disk + free immediately. See
+	// TestDBpedia1MAccuracy for the memory rationale.
+	dataset = nil
+	runtime.GC()
 
 	t.Log("")
 	t.Log("================================================================")
@@ -311,7 +343,7 @@ func TestPQ_DBpedia1M(t *testing.T) {
 		storageDir := filepath.Join(os.TempDir(), fmt.Sprintf("opaque-dbpedia-pq-%s", cfg.name))
 		os.RemoveAll(storageDir)
 		dbCfg := opaque.Config{
-			Dimension:      dataset.Dimension,
+			Dimension:      dim,
 			NumClusters:    numClusters,
 			TopClusters:    cfg.topClusters,
 			NumDecoys:      numDecoys,
@@ -330,9 +362,19 @@ func TestPQ_DBpedia1M(t *testing.T) {
 			t.Fatalf("NewDB: %v", err)
 		}
 
-		if err := db.AddBatch(ctx, ids, vectors); err != nil {
+		// Re-load fresh per config — see TestDBpedia1MAccuracy.
+		freshLoadStart := time.Now()
+		freshDS, err := embeddings.DBpedia1M(dataPath)
+		if err != nil {
+			t.Fatalf("re-load failed: %v", err)
+		}
+		t.Logf("  re-loaded %d vectors in %v", len(freshDS.Vectors), time.Since(freshLoadStart))
+
+		if err := db.AddBatch(ctx, ids, freshDS.Vectors); err != nil {
 			t.Fatalf("AddBatch: %v", err)
 		}
+		freshDS = nil
+		runtime.GC()
 
 		buildStart := time.Now()
 		if err := db.Build(ctx); err != nil {
