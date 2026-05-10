@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime"
 	"sync"
 )
 
@@ -232,8 +233,18 @@ func (km *KMeans) assignClusters(vectors [][]float32) float64 {
 	var totalInertia float64
 	var mu sync.Mutex
 
-	// Parallel assignment for large datasets
-	numWorkers := 4
+	// Parallel assignment — scale with available cores. Cap at 16 to avoid
+	// per-goroutine overhead dominating on tiny datasets.
+	numWorkers := runtime.NumCPU()
+	if numWorkers > 16 {
+		numWorkers = 16
+	}
+	if numWorkers > len(vectors) {
+		numWorkers = len(vectors)
+	}
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
 	chunkSize := (len(vectors) + numWorkers - 1) / numWorkers
 
 	var wg sync.WaitGroup

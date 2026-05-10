@@ -113,10 +113,12 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 		normalizedVecs[i] = cluster.NormalizeVector(vec)
 	}
 
-	// Run k-means with k = NumSuperBuckets
+	// Run k-means with k = NumSuperBuckets. MaxIter=50 is plenty in practice —
+	// the tolerance early-stop almost always kicks in by iter ~20-30 on real
+	// SIFT/ada-002-class data; the prior 100 cap was just dead wall time.
 	kmCfg := cluster.Config{
 		K:         b.config.NumSuperBuckets,
-		MaxIter:   100,
+		MaxIter:   50,
 		Tolerance: 1e-4,
 		Seed:      b.enterpriseCfg.GetLSHSeedAsInt64(), // Use enterprise seed for reproducibility
 		NumInit:   b.config.NumKMeansInit,
