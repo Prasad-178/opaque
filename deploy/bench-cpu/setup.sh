@@ -36,9 +36,12 @@ export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=l
 export NEEDRESTART_SUSPEND=1
 sudo -E apt-get update -qq || true
-sudo -E apt-get install -y -qq build-essential curl 2>/dev/null || \
-  sudo -E apt-get install -y -qq gcc make curl 2>/dev/null || \
-  echo "warn: no C compiler installed; relying on pure Go build"
+# Python is needed by scripts/download_sift1m.sh (HDF5 → fvecs conversion
+# via h5py — switched from IRISA FTP to ann-benchmarks HDF5 mirror after
+# IRISA had a multi-hour outage on 2026-05-10).
+sudo -E apt-get install -y -qq build-essential curl python3 python3-pip 2>/dev/null || \
+  sudo -E apt-get install -y -qq gcc make curl python3 python3-pip 2>/dev/null || \
+  echo "warn: package install partial; continuing"
 
 # Extract opaque source
 echo "Extracting opaque source..."
