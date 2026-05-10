@@ -28,9 +28,16 @@ echo "Go version: $(/usr/local/go/bin/go version)"
 # a C compiler). Don't fail if build-essential is unavailable in the AMI's
 # package index (recent Canonical Ubuntu 22.04 minimal images sometimes ship
 # without main-universe wired up).
-sudo apt-get update -qq || true
-sudo apt-get install -y -qq build-essential curl 2>/dev/null || \
-  sudo apt-get install -y -qq gcc make curl 2>/dev/null || \
+# NEEDRESTART_MODE=l puts needrestart in "list-only" mode so it doesn't
+# restart sshd post-install — without this, Ubuntu 22.04's needrestart
+# kicks the SSH session mid-setup ("Connection reset by peer"). Pair with
+# DEBIAN_FRONTEND=noninteractive to suppress all prompts.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=l
+export NEEDRESTART_SUSPEND=1
+sudo -E apt-get update -qq || true
+sudo -E apt-get install -y -qq build-essential curl 2>/dev/null || \
+  sudo -E apt-get install -y -qq gcc make curl 2>/dev/null || \
   echo "warn: no C compiler installed; relying on pure Go build"
 
 # Extract opaque source

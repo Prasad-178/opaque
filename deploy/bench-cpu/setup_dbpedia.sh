@@ -27,9 +27,14 @@ export GOPATH=$HOME/go
 echo "Go version: $(/usr/local/go/bin/go version)"
 
 # Build tools + Python (DBpedia download script needs Python+pyarrow+huggingface-hub).
-sudo apt-get update -qq || true
-sudo apt-get install -y -qq build-essential curl python3 python3-pip 2>/dev/null || \
-  sudo apt-get install -y -qq gcc make curl python3 python3-pip 2>/dev/null || \
+# NEEDRESTART_MODE=l prevents needrestart from killing the SSH session by
+# restarting sshd post-install on Ubuntu 22.04. See setup.sh for context.
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=l
+export NEEDRESTART_SUSPEND=1
+sudo -E apt-get update -qq || true
+sudo -E apt-get install -y -qq build-essential curl python3 python3-pip 2>/dev/null || \
+  sudo -E apt-get install -y -qq gcc make curl python3 python3-pip 2>/dev/null || \
   echo "warn: package install partial; continuing"
 
 # Extract opaque source.
