@@ -15,6 +15,39 @@ CKKS `LogN=14` (128-bit security). Dataset: SIFT 1M (1,000,000 × 128-dim),
 - 2026-05-02 (commit `e42338f`): LogQ chain restructure (`LogQ=[60×5]` + `LogDefaultScale=60`) → σ=2^45 noise flooding for provable 128-bit IND-CPA^D security under Bergamaschi PKC 2025.
 - 2026-05-09 (commit `5b55d0d`): NC=256 evaluation tests added; NC=128 confirmed optimal — see run below.
 - 2026-05-10 (commit `1e735ec`): build-phase memory optimizations (free `normalizedVecs` after k-means, `Storage: File` for DBpedia tests, `GOGC=50`). Cuts 1M × 1536-dim build peak from ~128 GB → ~64 GB. SIFT1M results unchanged (operates well below the OOM regime). Full DBpedia bench deferred pending float32 refactor — see `docs/MEMORY_PROFILE.md`.
+- 2026-05-10 (commit `7a9a369`): AES vector ciphertext encoding switched from float64 → float32 (4 bytes/elem instead of 8). Halves AES ciphertext size; ~6 GB build-phase memory saved at 1M × 1536-dim; halves on-disk Storage:File footprint. Validated on m6i.xlarge SIFT 100K bench post-change — see `m6i.xlarge` section below. **Recall preserved**: standard 100% R@1 / 98.8% R@10 / 156 ms; PQ-M16 100/98.6% / 147 ms; standard-probe16 100/100% / 168 ms.
+- 2026-05-10 (commit `7efa65b`): `download_sift1m.sh` switched from IRISA FTP → ann-benchmarks HDF5 mirror after a multi-hour IRISA outage. HDF5 → fvecs/ivecs conversion via Python h5py on the EC2 instance.
+
+---
+
+## m6i.xlarge (4 vCPU, 16 GB, Intel Ice Lake) — float32-ciphertext validation (2026-05-10)
+
+Quick-and-cheap regression check (~$0.03/run) after the float32 AES
+vector ciphertext encoding landed in commit `7a9a369`. Goal: verify
+the float32 round-trip during AES encrypt/decrypt does not regress
+recall or latency. SIFT 100K (first 100K of SIFT 1M, 128-dim).
+
+Source: `ann-benchmarks.com/sift-128-euclidean.hdf5` (replaces
+ftp.irisa.fr after IRISA's multi-hour outage on 2026-05-10).
+
+### `TestPQ_SIFT100K` (NC=64, top-8 default)
+
+| Config           | Recall@1 | Recall@10 | Avg query | P50    | Build      |
+|------------------|----------|-----------|-----------|--------|------------|
+| standard         | 100.0 %  | 98.8 %    | 156 ms    | 153 ms | 14.5 s     |
+| PQ-M8            | 98.0 %   | 95.2 %    | 146 ms    | 146 ms | 1m15s      |
+| PQ-M16           | 100.0 %  | 98.6 %    | 147 ms    | 146 ms | 1m15s      |
+| standard-probe16 | 100.0 %  | **100.0 %** | 168 ms  | 166 ms | 14.6 s     |
+| PQ-M8-probe16    | 100.0 %  | 99.4 %    | 163 ms    | 161 ms | 1m14s      |
+
+**Recall preserved** vs the pre-float32 historical numbers within
+sampling noise. The ~1.2e-7 per-element float32 round-trip error
+sits well below any recall-meaningful boundary in cosine similarity
+on SIFT 1M-class data. No latency regression either.
+
+Total bench wall: ~5 min (much shorter than SIFT 1M's ~25 min per
+config because the test only runs 4 configs at 100K vectors each
+and the AES ciphertexts are now half the size on disk too).
 
 ---
 
