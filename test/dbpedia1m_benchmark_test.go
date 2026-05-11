@@ -240,6 +240,12 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 			buildTime.Round(time.Millisecond), r1*100, r10*100, avgLatency)
 
 		db.Close()
+		// Free this config's ~6 GB on-disk blob storage before the next
+		// config's Build allocates its own. Without this, the 50 GB EBS root
+		// fills after 2-3 configs at 1M × 1536-dim (12 GB parquet + 6 GB
+		// fvecs + 5 GB OS + 6 GB per config). Latest run hit "no space left
+		// on device" mid-PQ-M48 build for exactly this reason.
+		os.RemoveAll(storageDir)
 	}
 
 	t.Log("")
@@ -472,6 +478,9 @@ func TestPQ_DBpedia1M(t *testing.T) {
 			avgLatency.Round(time.Millisecond), p50.Round(time.Millisecond))
 
 		db.Close()
+		// Free this config's ~6 GB on-disk blob storage. See the same
+		// cleanup in TestDBpedia1MAccuracy for the disk-budget rationale.
+		os.RemoveAll(storageDir)
 	}
 
 	t.Log("")
