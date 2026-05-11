@@ -134,17 +134,32 @@ func newPaddingBlob(bucketKey string, dimension, ciphertextLen int) (*blob.Blob,
 	return blob.NewBlob(id, bucketKey, ct, dimension), nil
 }
 
-// streamPaddingBlobs generates padding blobs and writes each one to `store`
-// as it's created — without ever accumulating all of them in memory. At
-// 1M × 1536-dim where PaddingBucketed can generate ~50K-1.1M padding blobs,
-// this avoids materialising up to ~14 GB of fake ciphertext in RAM before
-// the disk flush (the third arm of the DBpedia OOM bugs from May 2026).
+// streamPaddingBlobs generates padding blobs and writes them to `store` in
+// chunks of paddingFlushChunk via PutBatch — avoiding both the in-memory
+// accumulator peak (up to ~14 GB at 1M × 1536-dim with PaddingBucketed) AND
+// the per-blob Put → per-blob index-Flush amplification that turned the
+// padding phase into a multi-minute serial bottleneck on file-backed
+// storage. PutBatch on FileStore is concurrent-safe and defers the index
+// save to Close/Flush, so the padding phase now scales with raw disk
+// bandwidth rather than syscall/lock overhead.
 func streamPaddingBlobs(ctx context.Context, counts map[string]int, mode enterprise.PaddingMode, dimension int, store blob.Store) error {
 	targets := computePaddingTargets(counts, mode)
 	if len(targets) == 0 {
 		return nil
 	}
+	const paddingFlushChunk = 1024
 	ciphertextLen := dimension*4 + 28
+	pending := make([]*blob.Blob, 0, paddingFlushChunk)
+	flush := func() error {
+		if len(pending) == 0 {
+			return nil
+		}
+		if err := store.PutBatch(ctx, pending); err != nil {
+			return fmt.Errorf("store padding chunk: %w", err)
+		}
+		pending = pending[:0]
+		return nil
+	}
 	for bucketKey, target := range targets {
 		toAdd := target - counts[bucketKey]
 		if toAdd <= 0 {
@@ -155,12 +170,15 @@ func streamPaddingBlobs(ctx context.Context, counts map[string]int, mode enterpr
 			if err != nil {
 				return err
 			}
-			if err := store.Put(ctx, b); err != nil {
-				return fmt.Errorf("store padding blob: %w", err)
+			pending = append(pending, b)
+			if len(pending) >= paddingFlushChunk {
+				if err := flush(); err != nil {
+					return err
+				}
 			}
 		}
 	}
-	return nil
+	return flush()
 }
 
 // randomHexID returns 2*nBytes hex characters from crypto/rand. Used to

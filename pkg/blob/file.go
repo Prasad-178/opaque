@@ -21,6 +21,27 @@ import (
 //	    ├── blob_id_1.json
 //	    ├── blob_id_2.json
 //	    └── ...
+//
+// # Concurrency
+//
+// PutBatch is safe for concurrent use from many goroutines. The bulk of the
+// work — serializing blobs and writing them to disk — happens WITHOUT holding
+// the mutex; only the in-memory buckets-map update is locked, and that lock
+// is held briefly. This is what makes the parallel-encrypt phase in
+// hierarchical.KMeansBuilder actually parallel on file-backed storage; the
+// prior implementation serialised all 16 workers on a single lock held for
+// the entire batch (~1024 file writes each), turning a 10-minute build into
+// hours at 1M × 1536-dim.
+//
+// # Index persistence
+//
+// The on-disk index.json is NOT rewritten on every PutBatch — that turned
+// out to be the worst offender during the DBpedia 1M @ 1536-dim build, where
+// the index file grows to ~20 MB JSON and was being marshaled + rewritten
+// ~1000 times per build (~20 GB cumulative disk writes for the index alone).
+// Instead, we mark the in-memory index "dirty" on every mutation, and
+// persist on Close() or via an explicit Flush() call. If the process crashes
+// mid-build, the index can be rebuilt by scanning the blobs/ directory.
 type FileStore struct {
 	basePath  string
 	blobsPath string
@@ -28,7 +49,8 @@ type FileStore struct {
 	// In-memory index (loaded from disk)
 	buckets map[string][]string // bucket -> blob IDs
 
-	mu sync.RWMutex
+	mu    sync.RWMutex
+	dirty bool // index has unsaved changes; flushed on Close/Flush
 }
 
 // NewFileStore creates a new file-based blob store.
@@ -108,86 +130,119 @@ func (s *FileStore) saveIndex() error {
 	return nil
 }
 
-// Put stores a blob to disk.
+// Put stores a single blob to disk. The on-disk index is persisted eagerly
+// here so single-Put callers (e.g. incremental adds) keep the historical
+// "Put = durable" contract. Use PutBatch + Flush for the bulk path.
 func (s *FileStore) Put(ctx context.Context, blob *Blob) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Check if exists
 	if _, err := os.Stat(s.blobPath(blob.ID)); err == nil {
 		return ErrBlobExists
 	}
 
-	// Serialize blob
 	data, err := blob.Serialize()
 	if err != nil {
 		return fmt.Errorf("failed to serialize blob: %w", err)
 	}
 
-	// Write blob file
 	if err := os.WriteFile(s.blobPath(blob.ID), data, 0600); err != nil {
 		return fmt.Errorf("failed to write blob: %w", err)
 	}
 
-	// Update index
+	s.mu.Lock()
 	s.buckets[blob.LSHBucket] = append(s.buckets[blob.LSHBucket], blob.ID)
+	s.dirty = true
+	s.mu.Unlock()
 
-	// Save index
-	if err := s.saveIndex(); err != nil {
-		// Rollback: delete blob file
+	if err := s.Flush(); err != nil {
 		os.Remove(s.blobPath(blob.ID))
 		return err
 	}
+	return nil
+}
+
+// PutBatch stores multiple blobs. Safe for concurrent use across goroutines.
+//
+// Bulk disk writes happen WITHOUT the global mutex (each blob has a unique
+// filename), so multiple goroutines calling PutBatch in parallel can saturate
+// EBS bandwidth instead of serialising on one lock. The buckets-map update
+// is the only thing that takes the lock, and it does so briefly.
+//
+// The on-disk index is NOT saved here — see the FileStore type comment for
+// the rationale. Call Flush() or Close() to persist.
+//
+// NOTE: existence checks are skipped on the bulk path. Callers (the build
+// pipeline) generate fresh unique IDs and don't need overwrite protection.
+// Use Put() for the single-blob path which does check.
+func (s *FileStore) PutBatch(ctx context.Context, blobs []*Blob) error {
+	if len(blobs) == 0 {
+		return nil
+	}
+
+	for _, b := range blobs {
+		data, err := b.Serialize()
+		if err != nil {
+			return fmt.Errorf("failed to serialize blob %s: %w", b.ID, err)
+		}
+		if err := os.WriteFile(s.blobPath(b.ID), data, 0600); err != nil {
+			return fmt.Errorf("failed to write blob %s: %w", b.ID, err)
+		}
+	}
+
+	s.mu.Lock()
+	for _, b := range blobs {
+		s.buckets[b.LSHBucket] = append(s.buckets[b.LSHBucket], b.ID)
+	}
+	s.dirty = true
+	s.mu.Unlock()
 
 	return nil
 }
 
-// PutBatch stores multiple blobs.
-func (s *FileStore) PutBatch(ctx context.Context, blobs []*Blob) error {
+// Flush persists the in-memory bucket index to disk. Safe to call from any
+// goroutine. Idempotent: a no-op when there are no unsaved changes.
+func (s *FileStore) Flush() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if !s.dirty {
+		s.mu.Unlock()
+		return nil
+	}
+	// Snapshot under the lock so we can release it before the slow JSON
+	// marshal + disk write. Index file is single-writer (we hold the snapshot
+	// in a local map) but the FileStore can keep accepting PutBatch in the
+	// meantime; dirty stays true on next change.
+	snapshot := make(map[string][]string, len(s.buckets))
+	for k, v := range s.buckets {
+		cp := make([]string, len(v))
+		copy(cp, v)
+		snapshot[k] = cp
+	}
+	s.dirty = false
+	s.mu.Unlock()
 
-	// Check for duplicates first
-	for _, blob := range blobs {
-		if _, err := os.Stat(s.blobPath(blob.ID)); err == nil {
-			return ErrBlobExists
-		}
+	data, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		s.markDirty()
+		return fmt.Errorf("failed to marshal index: %w", err)
 	}
 
-	// Write all blobs
-	writtenIDs := make([]string, 0, len(blobs))
-	for _, blob := range blobs {
-		data, err := blob.Serialize()
-		if err != nil {
-			// Rollback
-			for _, id := range writtenIDs {
-				os.Remove(s.blobPath(id))
-			}
-			return fmt.Errorf("failed to serialize blob %s: %w", blob.ID, err)
-		}
-
-		if err := os.WriteFile(s.blobPath(blob.ID), data, 0600); err != nil {
-			// Rollback
-			for _, id := range writtenIDs {
-				os.Remove(s.blobPath(id))
-			}
-			return fmt.Errorf("failed to write blob %s: %w", blob.ID, err)
-		}
-
-		writtenIDs = append(writtenIDs, blob.ID)
-		s.buckets[blob.LSHBucket] = append(s.buckets[blob.LSHBucket], blob.ID)
+	tmpPath := s.indexPath() + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
+		s.markDirty()
+		return fmt.Errorf("failed to write index: %w", err)
 	}
-
-	// Save index
-	if err := s.saveIndex(); err != nil {
-		// Rollback
-		for _, id := range writtenIDs {
-			os.Remove(s.blobPath(id))
-		}
-		return err
+	if err := os.Rename(tmpPath, s.indexPath()); err != nil {
+		os.Remove(tmpPath)
+		s.markDirty()
+		return fmt.Errorf("failed to rename index: %w", err)
 	}
-
 	return nil
+}
+
+// markDirty re-sets the dirty flag — used when a flush attempt fails so the
+// next Flush retries persistence.
+func (s *FileStore) markDirty() {
+	s.mu.Lock()
+	s.dirty = true
+	s.mu.Unlock()
 }
 
 // Get retrieves a blob from disk.
@@ -310,8 +365,8 @@ func (s *FileStore) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("failed to delete blob file: %w", err)
 	}
 
-	// Save index
-	return s.saveIndex()
+	s.dirty = true
+	return nil
 }
 
 // DeleteBatch removes multiple blobs.
@@ -392,9 +447,9 @@ func (s *FileStore) Stats(ctx context.Context) (*StoreStats, error) {
 	}, nil
 }
 
-// Close is a no-op for file store.
+// Close flushes any unsaved in-memory index to disk and shuts down.
 func (s *FileStore) Close() error {
-	return nil
+	return s.Flush()
 }
 
 // GetSuperBuckets retrieves all blobs from the specified super-bucket IDs.
