@@ -302,27 +302,29 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 	b.enterpriseCfg.SetCentroids(centroids)
 	b.enterpriseCfg.SetBlobIDPermutation(perm)
 
-	// Phase 2.5: Generate constant-volume padding blobs (mode-dependent).
-	// Padding blobs share the storage bucketKey of real blobs but contain
-	// random AES-GCM-shaped bytes; client AES decryption fails GCM auth and
-	// the existing "skip failed decryptions" path drops them silently.
-	if b.enterpriseCfg.PaddingMode != enterprise.PaddingNone {
-		counts := make(map[string]int, b.config.NumSuperBuckets)
-		for _, blb := range blobs {
-			counts[blb.LSHBucket]++
-		}
-		paddingBlobs, err := generatePaddingBlobs(counts, b.enterpriseCfg.PaddingMode, b.config.Dimension)
-		if err != nil {
-			return nil, fmt.Errorf("padding generation: %w", err)
-		}
-		if len(paddingBlobs) > 0 {
-			blobs = append(blobs, paddingBlobs...)
-		}
+	// Phase 3: Store the real encrypted blobs. We flush BEFORE generating
+	// padding so the real-blob accumulator can be released and so the padding
+	// streaming loop has the file store warmed up. Padding blobs share the
+	// storage bucketKey of real blobs but contain random AES-GCM-shaped bytes;
+	// client AES decryption fails GCM auth and the existing "skip failed
+	// decryptions" path drops them silently.
+	counts := make(map[string]int, b.config.NumSuperBuckets)
+	for _, blb := range blobs {
+		counts[blb.LSHBucket]++
 	}
-
-	// Phase 3: Store all encrypted blobs (real + padding).
 	if err := store.PutBatch(ctx, blobs); err != nil {
 		return nil, fmt.Errorf("failed to store blobs: %w", err)
+	}
+	blobs = nil // free the real-blob accumulator before generating padding
+
+	// Phase 4: Generate padding directly into the store, one blob at a time.
+	// At 1M × 1536-dim with PaddingBucketed this avoids ~14 GB of in-memory
+	// padding accumulator vs the prior pattern that appended all padding
+	// into the same slice and called PutBatch once.
+	if b.enterpriseCfg.PaddingMode != enterprise.PaddingNone {
+		if err := streamPaddingBlobs(ctx, counts, b.enterpriseCfg.PaddingMode, b.config.Dimension, store); err != nil {
+			return nil, fmt.Errorf("padding generation: %w", err)
+		}
 	}
 
 	// Build index structure

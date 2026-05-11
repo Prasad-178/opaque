@@ -118,6 +118,16 @@ $SSH '
   # Halves the build-phase memory headroom Go normally keeps for GC overhead.
   # Slight CPU cost (more frequent GC) but build at 1536-dim is RAM-bound.
   export GOGC=50
+  # GOMEMLIMIT (Go 1.19+) is a SOFT cap that forces aggressive GC + immediate
+  # page release as live + cached memory approaches the limit. Closes the
+  # gap between Go live heap and OS-visible RSS — the prior runs OOM-killed
+  # at instance RAM cap even though live heap was lower because Go was
+  # holding freed pages under MADV_FREE (lazy reclaim).
+  export GOMEMLIMIT=48GiB
+  # GODEBUG=madvdontneed=1 swaps MADV_FREE → MADV_DONTNEED so the kernel
+  # reclaims pages immediately rather than on memory pressure. Marginal CPU
+  # cost; tightens RSS to match Go live heap.
+  export GODEBUG=madvdontneed=1
   cd /home/ubuntu/opaque
   nproc
   free -h | head -2

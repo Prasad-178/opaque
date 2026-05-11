@@ -46,60 +46,121 @@ func nextPow2(n int) int {
 	return p
 }
 
-// computePaddingTarget returns the target sub-bucket count for the chosen
-// PaddingMode. counts maps bucketKey → real-blob-count.
-func computePaddingTarget(counts map[string]int, mode enterprise.PaddingMode) int {
+// computePaddingTargets returns the target blob count for each bucket under
+// the chosen PaddingMode. counts maps bucketKey → real-blob-count.
+//
+//   - PaddingNone: returns nil (no padding).
+//   - PaddingBucketed: each bucket independently padded to nextPow2(its own
+//     count). Matches the public-API doc on opaque.PaddingBucketed
+//     ("each cluster up to next power-of-2 vector count, ~6-12 % storage
+//     waste"). Earlier versions of this function padded every bucket to
+//     nextPow2(global_max_count) which at imbalanced clusters could ~2× the
+//     total blob count and was the primary cause of the DBpedia 1M @ 1536-dim
+//     OOM saga (see docs/DBPEDIA_OOM_ANALYSIS.md, May 2026).
+//   - PaddingMaxFixed: every bucket padded to global maxCount.
+func computePaddingTargets(counts map[string]int, mode enterprise.PaddingMode) map[string]int {
 	if mode == enterprise.PaddingNone || len(counts) == 0 {
-		return 0
+		return nil
 	}
-	maxCount := 0
-	for _, c := range counts {
-		if c > maxCount {
-			maxCount = c
-		}
-	}
+	targets := make(map[string]int, len(counts))
 	if mode == enterprise.PaddingMaxFixed {
-		return maxCount
+		maxCount := 0
+		for _, c := range counts {
+			if c > maxCount {
+				maxCount = c
+			}
+		}
+		for k := range counts {
+			targets[k] = maxCount
+		}
+		return targets
 	}
-	// PaddingBucketed: round max up to next power of 2.
-	return nextPow2(maxCount)
+	// PaddingBucketed: per-cluster nextPow2.
+	for k, c := range counts {
+		targets[k] = nextPow2(c)
+	}
+	return targets
 }
 
 // generatePaddingBlobs returns dummy AES-GCM-shaped blobs that fill each
-// sub-bucket up to the target count. Each padding blob has a uniformly
+// bucket up to its per-bucket target count. Each padding blob has a uniformly
 // random 32-char hex ID and `ciphertextLen` bytes of crypto/rand-sourced
-// content. Real ciphertexts are AES-GCM with size = 8*dim + 28 bytes (12-byte
-// nonce + 16-byte tag + dim×8-byte plaintext); padding matches that exact
-// shape, so a server cannot distinguish padding from real on the wire.
+// content. Real ciphertexts are AES-GCM with size = 4*dim + 28 bytes (12-byte
+// nonce + 16-byte tag + dim×4-byte float32 plaintext, since commit 7a9a369);
+// padding matches that exact shape so a server cannot distinguish padding
+// from real on the wire.
 //
 // On the client, decryption of a padding blob fails GCM auth and the existing
 // "skip failed decryptions" path silently drops it. No client-side awareness
 // of padding is required.
+//
+// Backward-compat shim — production builders should call
+// streamPaddingBlobs directly (writes to store as they're generated, avoiding
+// the in-memory peak). Kept for tests that snapshot the padding set.
 func generatePaddingBlobs(counts map[string]int, mode enterprise.PaddingMode, dimension int) ([]*blob.Blob, error) {
-	target := computePaddingTarget(counts, mode)
-	if target == 0 {
+	targets := computePaddingTargets(counts, mode)
+	if len(targets) == 0 {
 		return nil, nil
 	}
-	ciphertextLen := dimension*8 + 28
+	ciphertextLen := dimension*4 + 28
 	var pad []*blob.Blob
-	for bucketKey, count := range counts {
-		toAdd := target - count
+	for bucketKey, target := range targets {
+		toAdd := target - counts[bucketKey]
 		if toAdd <= 0 {
 			continue
 		}
 		for i := 0; i < toAdd; i++ {
-			id, err := randomHexID(32)
+			b, err := newPaddingBlob(bucketKey, dimension, ciphertextLen)
 			if err != nil {
-				return nil, fmt.Errorf("padding ID gen: %w", err)
+				return nil, err
 			}
-			ct := make([]byte, ciphertextLen)
-			if _, err := rand.Read(ct); err != nil {
-				return nil, fmt.Errorf("padding ciphertext gen: %w", err)
-			}
-			pad = append(pad, blob.NewBlob(id, bucketKey, ct, dimension))
+			pad = append(pad, b)
 		}
 	}
 	return pad, nil
+}
+
+// newPaddingBlob builds one random-content padding blob shaped exactly like a
+// real AES-GCM-sealed float32-vector ciphertext.
+func newPaddingBlob(bucketKey string, dimension, ciphertextLen int) (*blob.Blob, error) {
+	id, err := randomHexID(32)
+	if err != nil {
+		return nil, fmt.Errorf("padding ID gen: %w", err)
+	}
+	ct := make([]byte, ciphertextLen)
+	if _, err := rand.Read(ct); err != nil {
+		return nil, fmt.Errorf("padding ciphertext gen: %w", err)
+	}
+	return blob.NewBlob(id, bucketKey, ct, dimension), nil
+}
+
+// streamPaddingBlobs generates padding blobs and writes each one to `store`
+// as it's created — without ever accumulating all of them in memory. At
+// 1M × 1536-dim where PaddingBucketed can generate ~50K-1.1M padding blobs,
+// this avoids materialising up to ~14 GB of fake ciphertext in RAM before
+// the disk flush (the third arm of the DBpedia OOM bugs from May 2026).
+func streamPaddingBlobs(ctx context.Context, counts map[string]int, mode enterprise.PaddingMode, dimension int, store blob.Store) error {
+	targets := computePaddingTargets(counts, mode)
+	if len(targets) == 0 {
+		return nil
+	}
+	ciphertextLen := dimension*4 + 28
+	for bucketKey, target := range targets {
+		toAdd := target - counts[bucketKey]
+		if toAdd <= 0 {
+			continue
+		}
+		for i := 0; i < toAdd; i++ {
+			b, err := newPaddingBlob(bucketKey, dimension, ciphertextLen)
+			if err != nil {
+				return err
+			}
+			if err := store.Put(ctx, b); err != nil {
+				return fmt.Errorf("store padding blob: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // randomHexID returns 2*nBytes hex characters from crypto/rand. Used to
@@ -291,21 +352,20 @@ func (b *EnterpriseBuilder) Build(ctx context.Context, ids []string, vectors [][
 	b.enterpriseCfg.SetCentroids(centroids)
 	b.enterpriseCfg.SetBlobIDPermutation(perm)
 
-	// Phase 2.5: Generate constant-volume padding blobs (mode-dependent).
-	// Padding blobs share the storage bucketKey of real blobs but contain
-	// random AES-GCM-shaped bytes; client AES decryption fails GCM auth and
-	// the existing "skip failed decryptions" path drops them silently.
-	paddingBlobs, err := generatePaddingBlobs(b.subBucketCounts, b.enterpriseCfg.PaddingMode, b.config.Dimension)
-	if err != nil {
-		return nil, fmt.Errorf("padding generation: %w", err)
-	}
-	if len(paddingBlobs) > 0 {
-		blobs = append(blobs, paddingBlobs...)
-	}
-
-	// Phase 3: Store all encrypted blobs (real + padding).
+	// Phase 3: Store real blobs first (frees the real-blob accumulator before
+	// padding generation).
 	if err := store.PutBatch(ctx, blobs); err != nil {
 		return nil, fmt.Errorf("failed to store blobs: %w", err)
+	}
+	blobs = nil
+
+	// Phase 4: Generate padding blobs streaming directly into the store.
+	// Avoids the in-memory padding-accumulator peak (~14 GB at 1M × 1536-dim
+	// with PaddingBucketed). See enterprise_builder.go streamPaddingBlobs.
+	if b.enterpriseCfg.PaddingMode != enterprise.PaddingNone {
+		if err := streamPaddingBlobs(ctx, b.subBucketCounts, b.enterpriseCfg.PaddingMode, b.config.Dimension, store); err != nil {
+			return nil, fmt.Errorf("padding generation: %w", err)
+		}
 	}
 
 	// Build index structure

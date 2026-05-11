@@ -28,24 +28,48 @@ func TestNextPow2(t *testing.T) {
 	}
 }
 
-func TestComputePaddingTarget(t *testing.T) {
+func TestComputePaddingTargets_PerBucket(t *testing.T) {
 	counts := map[string]int{
 		"00_00": 100,
 		"00_01": 200,
 		"01_00": 175,
 	}
-	if got := computePaddingTarget(counts, enterprise.PaddingNone); got != 0 {
-		t.Errorf("PaddingNone: got %d, want 0", got)
+
+	if got := computePaddingTargets(counts, enterprise.PaddingNone); got != nil {
+		t.Errorf("PaddingNone: got %v, want nil", got)
 	}
-	if got := computePaddingTarget(counts, enterprise.PaddingMaxFixed); got != 200 {
-		t.Errorf("PaddingMaxFixed: got %d, want 200", got)
+
+	// PaddingMaxFixed: every bucket padded to global max.
+	mf := computePaddingTargets(counts, enterprise.PaddingMaxFixed)
+	if len(mf) != 3 {
+		t.Errorf("PaddingMaxFixed: got %d targets, want 3", len(mf))
 	}
-	if got := computePaddingTarget(counts, enterprise.PaddingBucketed); got != 256 {
-		t.Errorf("PaddingBucketed: got %d, want 256 (next pow2 of 200)", got)
+	for k, v := range mf {
+		if v != 200 {
+			t.Errorf("PaddingMaxFixed[%s]: got %d, want 200", k, v)
+		}
 	}
-	// Empty counts → 0
-	if got := computePaddingTarget(nil, enterprise.PaddingMaxFixed); got != 0 {
-		t.Errorf("empty counts: got %d, want 0", got)
+
+	// PaddingBucketed: per-cluster nextPow2 (NOT global max nextPow2).
+	// This is the fix landed in commit 03b095f follow-up — earlier the
+	// implementation padded every bucket to nextPow2(global_max), which
+	// at imbalanced clusters could ~2× total blob count and caused the
+	// DBpedia 1M @ 1536-dim OOM saga (May 2026).
+	bk := computePaddingTargets(counts, enterprise.PaddingBucketed)
+	expected := map[string]int{
+		"00_00": 128, // nextPow2(100)
+		"00_01": 256, // nextPow2(200)
+		"01_00": 256, // nextPow2(175)
+	}
+	for k, want := range expected {
+		if bk[k] != want {
+			t.Errorf("PaddingBucketed[%s]: got %d, want %d", k, bk[k], want)
+		}
+	}
+
+	// Empty counts → nil
+	if got := computePaddingTargets(nil, enterprise.PaddingMaxFixed); got != nil {
+		t.Errorf("empty counts: got %v, want nil", got)
 	}
 }
 
@@ -75,10 +99,13 @@ func TestGeneratePaddingBlobs_MaxFixed(t *testing.T) {
 	if len(blobs) != 75 {
 		t.Errorf("got %d padding blobs, want 75", len(blobs))
 	}
-	expectedCTLen := dim*8 + 28
+	// Padding now matches real-blob size — float32-encoded ciphertext is
+	// dim*4 + 28 bytes (12-byte nonce + 16-byte GCM tag) since commit
+	// 7a9a369 and the padding fix in this commit.
+	expectedCTLen := dim*4 + 28
 	for i, b := range blobs {
 		if len(b.Ciphertext) != expectedCTLen {
-			t.Errorf("blob[%d] ciphertext len = %d, want %d", i, len(b.Ciphertext), expectedCTLen)
+			t.Errorf("blob[%d] ciphertext len = %d, want %d (float32-encoded vector + 28-byte AES-GCM overhead)", i, len(b.Ciphertext), expectedCTLen)
 		}
 		if len(b.ID) != 64 { // 32 bytes hex-encoded
 			t.Errorf("blob[%d] ID len = %d, want 64", i, len(b.ID))
@@ -86,18 +113,21 @@ func TestGeneratePaddingBlobs_MaxFixed(t *testing.T) {
 	}
 }
 
-func TestGeneratePaddingBlobs_Bucketed(t *testing.T) {
+func TestGeneratePaddingBlobs_Bucketed_PerCluster(t *testing.T) {
+	// Verifies per-cluster nextPow2 semantics. Pre-fix this would have
+	// padded both buckets to nextPow2(global_max=100) = 128. Post-fix
+	// each bucket pads to its own nextPow2 — 50 → 64, 100 → 128.
 	counts := map[string]int{
-		"00_00": 100, // → target 128, add 28
-		"00_01": 50,  // → target 128, add 78
+		"00_00": 100, // → per-cluster target nextPow2(100) = 128, add 28
+		"00_01": 50,  // → per-cluster target nextPow2(50) = 64, add 14
 	}
 	blobs, err := generatePaddingBlobs(counts, enterprise.PaddingBucketed, 128)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	want := 28 + 78
+	want := 28 + 14
 	if len(blobs) != want {
-		t.Errorf("got %d padding blobs, want %d", len(blobs), want)
+		t.Errorf("got %d padding blobs, want %d (per-cluster nextPow2)", len(blobs), want)
 	}
 }
 
