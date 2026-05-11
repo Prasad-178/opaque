@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-// LoadFvecs loads vectors from a .fvecs file (used by SIFT1M, etc.)
+// LoadFvecs loads vectors from a .fvecs file (used by SIFT1M, etc.) as float64.
 //
 // FVECS format:
 // For each vector:
@@ -15,6 +15,10 @@ import (
 //   - dimension * 4 bytes: float32 values (little-endian)
 //
 // All vectors must have the same dimension.
+//
+// Note: fvecs is natively float32. This loader upcasts to float64 for legacy
+// callers; prefer LoadFvecsF32 when downstream is happy with float32 — saves
+// ~50 % memory at load time and avoids a transient float64 peak.
 func LoadFvecs(path string) ([][]float64, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -23,6 +27,51 @@ func LoadFvecs(path string) ([][]float64, error) {
 	defer f.Close()
 
 	return ReadFvecs(f)
+}
+
+// LoadFvecsF32 loads vectors from a .fvecs file as float32 — the native fvecs
+// format, no upcast. At 1M × 1536-dim this returns ~6 GB instead of LoadFvecs'
+// 12 GB. Used by the DBpedia 1M bench's per-config re-load path.
+func LoadFvecsF32(path string) ([][]float32, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open fvecs file: %w", err)
+	}
+	defer f.Close()
+
+	return ReadFvecsF32(f)
+}
+
+// ReadFvecsF32 reads vectors from an io.Reader in FVECS format and returns
+// them as float32 (native fvecs precision, no upcast).
+func ReadFvecsF32(r io.Reader) ([][]float32, error) {
+	var vectors [][]float32
+	var expectedDim int32 = -1
+
+	for {
+		var dim int32
+		err := binary.Read(r, binary.LittleEndian, &dim)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to read dimension: %w", err)
+		}
+
+		if expectedDim == -1 {
+			expectedDim = dim
+		} else if dim != expectedDim {
+			return nil, fmt.Errorf("inconsistent dimensions: expected %d, got %d", expectedDim, dim)
+		}
+
+		vec := make([]float32, dim)
+		if err := binary.Read(r, binary.LittleEndian, vec); err != nil {
+			return nil, fmt.Errorf("failed to read vector values: %w", err)
+		}
+		vectors = append(vectors, vec)
+	}
+
+	return vectors, nil
 }
 
 // ReadFvecs reads vectors from an io.Reader in FVECS format.

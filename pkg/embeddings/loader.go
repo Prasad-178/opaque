@@ -231,6 +231,53 @@ func SIFT10M(dir string) (*Dataset, error) {
 	}, nil
 }
 
+// DBpedia1MF32 is the native float32 variant of DBpedia1M — returns raw
+// base vectors as [][]float32 (no float64 upcast), the query set as
+// [][]float64 (small; kept float64 for caller compatibility), the canonical
+// ids slice and the dimension. At 1M × 1536-dim the base alone is ~6 GB as
+// float32 vs ~12 GB upcast — used by the bench test to halve the AddBatch
+// boundary peak (caller can call AddBatchF32 to skip the second float→float
+// copy entirely).
+//
+// Returns (baseVectors, ids, dimension, error). Queries are loaded via a
+// separate call (DBpedia1MQueries) to keep this function single-purpose and
+// the caller's transient float64 buffer minimal.
+func DBpedia1MF32(dir string) ([][]float32, []string, int, error) {
+	basePath := filepath.Join(dir, "dbpedia_base.fvecs")
+
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		return nil, nil, 0, fmt.Errorf("base vectors not found: %s\nRun scripts/download_dbpedia1m.sh first", basePath)
+	}
+
+	vectors, err := LoadFvecsF32(basePath)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("failed to load base vectors: %w", err)
+	}
+
+	ids := make([]string, len(vectors))
+	for i := range ids {
+		ids[i] = fmt.Sprintf("dbpedia_%d", i)
+	}
+
+	dim := 0
+	if len(vectors) > 0 {
+		dim = len(vectors[0])
+	}
+
+	return vectors, ids, dim, nil
+}
+
+// DBpedia1MQueries loads only the query set as []float64 — small enough
+// (~1K × 1536-dim = ~12 MB) that the float64 upcast is irrelevant.
+// Companion to DBpedia1MF32 for callers that want F32 base + F64 queries.
+func DBpedia1MQueries(dir string) ([][]float64, error) {
+	queryPath := filepath.Join(dir, "dbpedia_query.fvecs")
+	if _, err := os.Stat(queryPath); err != nil {
+		return nil, fmt.Errorf("query file not found: %s", queryPath)
+	}
+	return LoadFvecs(queryPath)
+}
+
 // DBpedia1M loads the DBpedia-OpenAI-1M dataset from the given directory.
 // 1M Wikipedia/DBpedia entity descriptions embedded with OpenAI text-embedding-ada-002
 // (1536-dim float32). Source on HuggingFace: KShivendu/dbpedia-entities-openai-1M.
@@ -241,6 +288,8 @@ func SIFT10M(dir string) (*Dataset, error) {
 //   - dbpedia_query.fvecs: held-out query vectors (typically 1,000 × 1536)
 //
 // No precomputed ground truth — tests compute brute-force cosine GT at run time.
+//
+// Note: prefer DBpedia1MF32 for memory-tight scenarios — saves ~6 GB at 1M scale.
 func DBpedia1M(dir string) (*Dataset, error) {
 	basePath := filepath.Join(dir, "dbpedia_base.fvecs")
 	queryPath := filepath.Join(dir, "dbpedia_query.fvecs")

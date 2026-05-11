@@ -53,15 +53,23 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 
 	ctx := context.Background()
 
-	t.Log("Loading DBpedia1M dataset...")
+	// Native-float32 load — saves ~6 GB at 1M × 1536-dim vs the float64
+	// upcasting Dataset wrapper. We still call the float64 loader once for
+	// the brute-force GT path because bruteForceTopK takes float64; we'll
+	// drop that copy immediately after GT is computed.
+	t.Log("Loading DBpedia1M base (float32 native)...")
 	loadStart := time.Now()
-	dataset, err := embeddings.DBpedia1M(dataPath)
+	baseF32, ids, dim, err := embeddings.DBpedia1MF32(dataPath)
 	if err != nil {
-		t.Fatalf("Failed to load DBpedia1M: %v", err)
+		t.Fatalf("Failed to load DBpedia1M base: %v", err)
 	}
-	t.Logf("Loaded %d vectors (%d-dim) in %v", len(dataset.Vectors), dataset.Dimension, time.Since(loadStart))
+	t.Logf("Loaded %d vectors (%d-dim, float32) in %v", len(baseF32), dim, time.Since(loadStart))
 
-	if len(dataset.Queries) == 0 {
+	queriesF64, err := embeddings.DBpedia1MQueries(dataPath)
+	if err != nil {
+		t.Fatalf("Failed to load DBpedia1M queries: %v", err)
+	}
+	if len(queriesF64) == 0 {
 		t.Fatal("DBpedia1M loader returned no queries — dbpedia_query.fvecs missing or empty")
 	}
 
@@ -69,27 +77,35 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 	numQueries := 50
 	topK := 10
 	numDecoys := 8
-	dim := dataset.Dimension
-	numVectors := len(dataset.Vectors)
+	numVectors := len(baseF32)
 
-	if numQueries > len(dataset.Queries) {
-		numQueries = len(dataset.Queries)
+	if numQueries > len(queriesF64) {
+		numQueries = len(queriesF64)
 	}
 
 	// Brute-force GT on the full base. 1M × 50 × 1536 dot products ≈ 75 GFLOP — minutes.
+	// bruteForceTopK takes float64 — do a one-shot upcast that we drop immediately
+	// after GT is computed. Peaks ~12 GB transient (vs holding it throughout).
 	t.Log("Computing brute-force cosine ground truth (1M × 1536-dim)...")
 	gtStart := time.Now()
-	groundTruth := bruteForceTopK(dataset.Queries[:numQueries], dataset.Vectors, dim, topK)
+	baseF64 := make([][]float64, len(baseF32))
+	for i, v := range baseF32 {
+		row := make([]float64, len(v))
+		for j, x := range v {
+			row[j] = float64(x)
+		}
+		baseF64[i] = row
+	}
+	groundTruth := bruteForceTopK(queriesF64[:numQueries], baseF64, dim, topK)
 	t.Logf("Ground truth computed in %v", time.Since(gtStart))
 
-	// CRITICAL: free dataset.Vectors NOW (12 GB of float64 base vectors). The
-	// per-config loop below re-loads them just before AddBatch and frees again
-	// after, so the test-side memory footprint goes from "12 GB held throughout"
-	// to "12 GB transient per AddBatch + 0 GB during Build". This is what makes
-	// the bench fit on m6i.4xlarge (64 GB) instead of needing 128+ GB.
-	queries := dataset.Queries[:numQueries]
-	ids := dataset.IDs
-	dataset = nil
+	// Drop the f64 GT scratch + our local f32 base — per-config reload below
+	// re-fetches a fresh f32 copy and AddBatchF32 avoids the float64 boundary
+	// transient entirely. Test-side memory: 0 GB held during build phases.
+	baseF64 = nil
+	baseF32 = nil
+	queries := queriesF64[:numQueries]
+	queriesF64 = nil
 	runtime.GC()
 
 	// Trimmed config set — get a few comparison points, not exhaustive.
@@ -149,22 +165,22 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 			t.Fatalf("NewDB failed: %v", err)
 		}
 
-		// Re-load dataset.Vectors freshly per config (the master copy was
+		// Re-load fresh per config in native float32 (the master copy was
 		// freed before the loop). ~14 s per re-load × N configs is small
-		// vs the per-build wall time. After AddBatch, drop the local
-		// reference + GC so the build phase has full instance RAM available.
+		// vs the per-build wall time. AddBatchF32 skips the float64→float32
+		// transient — caller's f32 + db's f32 copy = ~12 GB transient, then
+		// caller's f32 freed → 6 GB during build.
 		freshLoadStart := time.Now()
-		freshDS, err := embeddings.DBpedia1M(dataPath)
+		freshF32, _, _, err := embeddings.DBpedia1MF32(dataPath)
 		if err != nil {
 			t.Fatalf("re-load failed: %v", err)
 		}
-		t.Logf("  re-loaded %d vectors in %v", len(freshDS.Vectors), time.Since(freshLoadStart))
+		t.Logf("  re-loaded %d vectors in %v", len(freshF32), time.Since(freshLoadStart))
 
-		if err := db.AddBatch(ctx, ids, freshDS.Vectors); err != nil {
-			t.Fatalf("AddBatch failed: %v", err)
+		if err := db.AddBatchF32(ctx, ids, freshF32); err != nil {
+			t.Fatalf("AddBatchF32 failed: %v", err)
 		}
-		// AddBatch made a float32 copy; drop our reference and GC eagerly.
-		freshDS = nil
+		freshF32 = nil
 		runtime.GC()
 
 		buildStart := time.Now()
@@ -263,41 +279,53 @@ func TestPQ_DBpedia1M(t *testing.T) {
 
 	ctx := context.Background()
 
-	t.Log("Loading DBpedia1M dataset...")
+	// Native-float32 load — see TestDBpedia1MAccuracy for memory rationale.
+	t.Log("Loading DBpedia1M base (float32 native)...")
 	loadStart := time.Now()
-	dataset, err := embeddings.DBpedia1M(dataPath)
+	baseF32, ids, dim, err := embeddings.DBpedia1MF32(dataPath)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	t.Logf("Loaded %d vectors (%d-dim) in %v", len(dataset.Vectors), dataset.Dimension, time.Since(loadStart))
+	t.Logf("Loaded %d vectors (%d-dim, float32) in %v", len(baseF32), dim, time.Since(loadStart))
 
-	if len(dataset.Queries) == 0 {
+	queriesF64, err := embeddings.DBpedia1MQueries(dataPath)
+	if err != nil {
+		t.Fatalf("Failed to load DBpedia1M queries: %v", err)
+	}
+	if len(queriesF64) == 0 {
 		t.Fatal("DBpedia1M loader returned no queries — dbpedia_query.fvecs missing or empty")
 	}
 
-	N := len(dataset.Vectors)
-	dim := dataset.Dimension
-	ids := dataset.IDs[:N]
+	N := len(baseF32)
 
 	numClusters := 128
 	numQueries := 50
 	topK := 10
 	numDecoys := 8
 
-	if numQueries > len(dataset.Queries) {
-		numQueries = len(dataset.Queries)
+	if numQueries > len(queriesF64) {
+		numQueries = len(queriesF64)
 	}
-	queries := dataset.Queries[:numQueries]
+	queries := queriesF64[:numQueries]
 
+	// One-shot upcast for the brute-force GT path then drop the f64 copy.
 	t.Log("Computing brute-force cosine ground truth (1M × 1536-dim)...")
 	gtStart := time.Now()
-	groundTruth := bruteForceTopK(queries, dataset.Vectors, dim, topK)
+	baseF64 := make([][]float64, len(baseF32))
+	for i, v := range baseF32 {
+		row := make([]float64, len(v))
+		for j, x := range v {
+			row[j] = float64(x)
+		}
+		baseF64[i] = row
+	}
+	groundTruth := bruteForceTopK(queries, baseF64, dim, topK)
 	t.Logf("Ground truth computed in %v", time.Since(gtStart))
 
-	// Free the master dataset.Vectors copy NOW (12 GB float64). Each config's
-	// AddBatch will re-load from disk + free immediately. See
-	// TestDBpedia1MAccuracy for the memory rationale.
-	dataset = nil
+	// Drop everything held in the test's scope before the per-config loop.
+	baseF64 = nil
+	baseF32 = nil
+	queriesF64 = nil
 	runtime.GC()
 
 	t.Log("")
@@ -362,18 +390,19 @@ func TestPQ_DBpedia1M(t *testing.T) {
 			t.Fatalf("NewDB: %v", err)
 		}
 
-		// Re-load fresh per config — see TestDBpedia1MAccuracy.
+		// Re-load fresh per config — float32 native + AddBatchF32 saves the
+		// float64-transient peak. See TestDBpedia1MAccuracy.
 		freshLoadStart := time.Now()
-		freshDS, err := embeddings.DBpedia1M(dataPath)
+		freshF32, _, _, err := embeddings.DBpedia1MF32(dataPath)
 		if err != nil {
 			t.Fatalf("re-load failed: %v", err)
 		}
-		t.Logf("  re-loaded %d vectors in %v", len(freshDS.Vectors), time.Since(freshLoadStart))
+		t.Logf("  re-loaded %d vectors in %v", len(freshF32), time.Since(freshLoadStart))
 
-		if err := db.AddBatch(ctx, ids, freshDS.Vectors); err != nil {
-			t.Fatalf("AddBatch: %v", err)
+		if err := db.AddBatchF32(ctx, ids, freshF32); err != nil {
+			t.Fatalf("AddBatchF32: %v", err)
 		}
-		freshDS = nil
+		freshF32 = nil
 		runtime.GC()
 
 		buildStart := time.Now()

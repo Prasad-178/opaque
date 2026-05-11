@@ -198,9 +198,18 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 	}
 	chunkSize := (len(ids) + numWorkers - 1) / numWorkers
 
+	// Worker chunk-flush size. Each worker accumulates this many blobs locally
+	// before flushing to the store, instead of holding the worker's entire
+	// share (~62.5K blobs at 1M ÷ 16 workers ≈ 380 MB ciphertext per worker)
+	// in memory simultaneously. At chunk=1024 the per-worker peak is ~6 MB
+	// of ciphertext, total concurrent ~100 MB across 16 workers vs the prior
+	// ~6 GB. Store.PutBatch contends on internal mutex but the lock is held
+	// briefly per chunk.
+	const blobFlushChunk = 1024
+
 	type workerResult struct {
-		blobs []*blob.Blob
-		err   error
+		counts map[string]int // per-bucket real-blob count, merged after wg.Wait
+		err    error
 	}
 	results := make([]workerResult, numWorkers)
 
@@ -218,7 +227,18 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 		wg.Add(1)
 		go func(w, start, end int) {
 			defer wg.Done()
-			localBlobs := make([]*blob.Blob, 0, (end-start)*numAssignments)
+			pending := make([]*blob.Blob, 0, blobFlushChunk)
+			localCounts := make(map[string]int)
+			flush := func() error {
+				if len(pending) == 0 {
+					return nil
+				}
+				if err := store.PutBatch(ctx, pending); err != nil {
+					return err
+				}
+				pending = pending[:0] // reset length, keep capacity
+				return nil
+			}
 
 			for i := start; i < end; i++ {
 				id := ids[i]
@@ -274,21 +294,40 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 					if pqCiphertext != nil {
 						newBlob.PQCiphertext = pqCiphertext
 					}
-					localBlobs = append(localBlobs, newBlob)
+					pending = append(pending, newBlob)
+					localCounts[bucketKey]++
+
+					if len(pending) >= blobFlushChunk {
+						if err := flush(); err != nil {
+							results[w] = workerResult{err: fmt.Errorf("flush real blobs worker %d: %w", w, err)}
+							return
+						}
+					}
 				}
 			}
-			results[w] = workerResult{blobs: localBlobs}
+			// Final flush for the tail < blobFlushChunk.
+			if err := flush(); err != nil {
+				results[w] = workerResult{err: fmt.Errorf("final flush worker %d: %w", w, err)}
+				return
+			}
+			results[w] = workerResult{counts: localCounts}
 		}(w, start, end)
 	}
 	wg.Wait()
 
-	// Merge results and check for errors
-	blobs := make([]*blob.Blob, 0, len(ids)*numAssignments)
+	// Merge per-worker count maps. Blobs themselves were already flushed to
+	// store inside each worker via chunked PutBatch — no slice merge needed
+	// and no in-RAM real-blob accumulator peak. This is what makes the
+	// 1M × 1536-dim DBpedia build fit in m6i.4xlarge RAM after the May-2026
+	// OOM saga.
+	counts := make(map[string]int, b.config.NumSuperBuckets)
 	for _, r := range results {
 		if r.err != nil {
 			return nil, r.err
 		}
-		blobs = append(blobs, r.blobs...)
+		for k, v := range r.counts {
+			counts[k] += v
+		}
 	}
 
 	// Extract centroids for enterprise config
@@ -302,25 +341,12 @@ func (b *KMeansBuilder) Build(ctx context.Context, ids []string, vectors [][]flo
 	b.enterpriseCfg.SetCentroids(centroids)
 	b.enterpriseCfg.SetBlobIDPermutation(perm)
 
-	// Phase 3: Store the real encrypted blobs. We flush BEFORE generating
-	// padding so the real-blob accumulator can be released and so the padding
-	// streaming loop has the file store warmed up. Padding blobs share the
-	// storage bucketKey of real blobs but contain random AES-GCM-shaped bytes;
-	// client AES decryption fails GCM auth and the existing "skip failed
-	// decryptions" path drops them silently.
-	counts := make(map[string]int, b.config.NumSuperBuckets)
-	for _, blb := range blobs {
-		counts[blb.LSHBucket]++
-	}
-	if err := store.PutBatch(ctx, blobs); err != nil {
-		return nil, fmt.Errorf("failed to store blobs: %w", err)
-	}
-	blobs = nil // free the real-blob accumulator before generating padding
-
-	// Phase 4: Generate padding directly into the store, one blob at a time.
-	// At 1M × 1536-dim with PaddingBucketed this avoids ~14 GB of in-memory
-	// padding accumulator vs the prior pattern that appended all padding
-	// into the same slice and called PutBatch once.
+	// Phase 3: Generate padding blobs streaming directly into the store.
+	// Real blobs were already flushed by the workers above. Padding blobs
+	// share the storage bucketKey of real blobs but contain random AES-GCM-
+	// shaped bytes; client AES decryption fails GCM auth and the existing
+	// "skip failed decryptions" path drops them silently. Streaming avoids
+	// ~14 GB of in-memory padding accumulator vs the prior pattern.
 	if b.enterpriseCfg.PaddingMode != enterprise.PaddingNone {
 		if err := streamPaddingBlobs(ctx, counts, b.enterpriseCfg.PaddingMode, b.config.Dimension, store); err != nil {
 			return nil, fmt.Errorf("padding generation: %w", err)

@@ -44,6 +44,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	mathrand "math/rand"
 	"os"
 	"runtime"
 	"sync"
@@ -418,11 +419,73 @@ func (db *DB) Add(ctx context.Context, id string, vector []float64) error {
 	return nil
 }
 
+// AddBatchF32 is like AddBatch but accepts float32 vectors directly, avoiding
+// the float64→float32 conversion that the public-API AddBatch does internally.
+// At 1M × 1536-dim scale this saves the ~12 GB transient peak of holding the
+// caller's float64 slice alongside the internal float32 copy.
+//
+// Internally takes a fresh copy of each vector (caller may safely modify their
+// slice after AddBatchF32 returns). For bench scenarios where the caller
+// drops its reference immediately after, this still means the float32 source
+// can be freed and only db.pendingVectors (~6 GB at 1M × 1536-dim) survives.
+func (db *DB) AddBatchF32(ctx context.Context, ids []string, vectors [][]float32) error {
+	if len(ids) != len(vectors) {
+		return fmt.Errorf("opaque: ids length %d does not match vectors length %d", len(ids), len(vectors))
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	for i, v := range vectors {
+		if len(v) != db.cfg.Dimension {
+			return fmt.Errorf("%w: vector %d (id=%q) has %d, want %d", ErrDimensionMismatch, i, ids[i], len(v), db.cfg.Dimension)
+		}
+		if ids[i] == "" {
+			return fmt.Errorf("%w: vector %d", ErrEmptyID, i)
+		}
+	}
+
+	ready := db.state == stateReady
+	for i, v := range vectors {
+		vc := make([]float32, len(v))
+		copy(vc, v)
+		db.pendingIDs = append(db.pendingIDs, ids[i])
+		db.pendingVectors = append(db.pendingVectors, vc)
+
+		if ready {
+			// For the incremental-add path we still upcast this single vector
+			// to float64 because addToIndexLocked uses float64 internally
+			// (~12 KB per-vector transient, GC'd immediately).
+			v64 := make([]float64, len(v))
+			for j, x := range v {
+				v64[j] = float64(x)
+			}
+			if err := db.addToIndexLocked(ctx, ids[i], v64); err != nil {
+				return fmt.Errorf("opaque: incremental add failed for %q: %w", ids[i], err)
+			}
+		}
+	}
+
+	if ready {
+		db.refreshCentroidCaches()
+	}
+
+	if db.state == stateEmpty {
+		db.state = stateBuffered
+	}
+	db.dataVersion += uint64(len(ids))
+	return nil
+}
+
 // AddBatch adds multiple vectors to the DB. The ids and vectors slices must
 // have the same length. Each vector must have exactly [Config.Dimension] elements.
 //
 // This is equivalent to calling [DB.Add] for each vector, but acquires the lock once.
 // After [DB.Build], vectors are immediately indexed and searchable.
+//
+// Note: vectors are downcast to float32 internally (storage tier). Callers
+// that already have float32 should use [DB.AddBatchF32] to avoid holding both
+// representations simultaneously — at 1M × 1536-dim that saves ~6 GB peak.
 func (db *DB) AddBatch(ctx context.Context, ids []string, vectors [][]float64) error {
 	if len(ids) != len(vectors) {
 		return fmt.Errorf("opaque: ids length %d does not match vectors length %d", len(ids), len(vectors))
@@ -991,19 +1054,37 @@ func (db *DB) buildLocked(ctx context.Context) error {
 		if progress != nil {
 			progress("pq_training", 0)
 		}
-		// Normalize vectors for PQ training (cosine similarity = dot product
-		// on unit vectors). Normalize as float32, then convert each vector to
-		// float64 at the pq.Train boundary. At 1M × 1536-dim this costs ~12 GB
-		// in normVecs (float64); the float32 normalized intermediates are GC'd
-		// per-vector. Future PQ refactor can push float32 down to pq.Train.
-		normVecs := make([][]float64, len(indexVectors))
-		for i, v := range indexVectors {
-			normVecs[i] = cluster.AsFloat64One(cluster.NormalizeVector(v))
+		// Subsample-then-normalize-then-upcast. pq.Train internally subsamples
+		// to DefaultTrainingSampleSize=100K (Jegou 2011 / FAISS precedent); doing
+		// the subsample externally avoids materialising the full 1M × 1536-dim
+		// float64 working set just to throw 90 % of it away. At 1M × 1536-dim
+		// peak float64 footprint drops from ~12 GB → ~1.5 GB. Output is
+		// pre-normalized so pq.Train can treat it as raw rows.
+		sampleSize := pq.DefaultTrainingSampleSize
+		if sampleSize <= 0 || sampleSize > len(indexVectors) {
+			sampleSize = len(indexVectors)
 		}
-		pqModel, err := pq.Train(normVecs, indexDim, pq.Config{
-			M:    db.cfg.PQSubspaces,
-			Seed: DefaultPQSeed,
+		var pqIdx []int
+		if sampleSize < len(indexVectors) {
+			rng := mathrand.New(mathrand.NewSource(DefaultPQSeed))
+			pqIdx = rng.Perm(len(indexVectors))[:sampleSize]
+		} else {
+			pqIdx = make([]int, sampleSize)
+			for i := range pqIdx {
+				pqIdx[i] = i
+			}
+		}
+		pqTrainVecs := make([][]float64, sampleSize)
+		for i, idx := range pqIdx {
+			pqTrainVecs[i] = cluster.AsFloat64One(cluster.NormalizeVector(indexVectors[idx]))
+		}
+		pqIdx = nil
+		pqModel, err := pq.Train(pqTrainVecs, indexDim, pq.Config{
+			M:                  db.cfg.PQSubspaces,
+			Seed:               DefaultPQSeed,
+			TrainingSampleSize: -1, // already subsampled
 		})
+		pqTrainVecs = nil // freed by pq.Train return; explicit drop for GC clarity
 		if err != nil {
 			store.Close()
 			return fmt.Errorf("opaque: PQ training failed: %w", err)
@@ -1080,6 +1161,20 @@ func (db *DB) buildLocked(ctx context.Context) error {
 	db.searchClient = searchClient
 	db.state = stateReady
 	db.builtVersion = db.dataVersion
+
+	// Drop the buffered input vectors now that the encrypted index is fully
+	// written to `store`. At 1M × 1536-dim this reclaims ~6 GB of float32
+	// `pendingVectors` + the IDs slice. Future Rebuild calls use the
+	// extract-from-store path (see Rebuild → extractIndexedVectors), gated on
+	// db.loaded — so semantics are preserved while the steady-state RAM
+	// footprint drops to (encrypted blobs on disk via Storage:File + HE
+	// engines + centroid cache).
+	db.pendingIDs = nil
+	db.pendingVectors = nil
+	db.loaded = true
+	indexVectors = nil
+	runtime.GC()
+
 	return nil
 }
 
