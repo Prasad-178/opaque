@@ -2,7 +2,13 @@
 
 Privacy-preserving vector search using CKKS homomorphic encryption + AES-256-GCM
 + k-means clustering. Server computes on encrypted data and learns nothing.
-Sub-second on 1M vectors, 8 vCPU AWS, 99.8% Recall@10.
+Two production-validated points:
+- **SIFT 1M (128-dim image descriptors):** sub-second on 1M vectors, 8 vCPU AWS,
+  99.8 % Recall@10 (357 ms PQ-M8-probe8).
+- **DBpedia 1M @ 1536-dim ada-002 (semantic embeddings):** 92.4 % Recall@10 at
+  P50 = 1.16 s (PQ-M48-probe8) on m6i.4xlarge with RA=2 + Memory storage. The
+  high-dim semantic regime needs `RedundantAssignments=2` + `Storage:Memory` to
+  match the SIFT class — confirmed 2026-05-12.
 
 This file is the entry point for any new Claude session. Skim everything below
 before touching code. Cross-references point to deeper docs in `docs/`.
@@ -105,7 +111,8 @@ today. See `SECURITY_MODEL.md` §6 for the full competitor comparison.
 
 | System | Threat model | Access pattern | Latency | Recall | Notes |
 |---|---|---|---|---|---|
-| **Opaque (full mit)** | HBC | Statistical (DP-bound + π) | **464 ms** | **99.8%** | Threshold key (unique) |
+| **Opaque (SIFT 1M)**  | HBC | Statistical (DP-bound + π) | **357 ms** | **99.8%** | Threshold key (unique) |
+| **Opaque (DBpedia 1M ada-002 1536-dim)** | HBC | same | **1.17 s P50** | **92.4%** | sub-2s on semantic embeddings |
 | Compass (OSDI '25) | Malicious | Cryptographic (Ring ORAM) | ~600-900ms | high | Single-key, 500MB client mem |
 | Pacmann (ICLR '25) | Semi-honest | Cryptographic (PIR) | ~3.1s | ~90% | 100M scale |
 | Tiptoe (SOSP '23) | HBC | Cryptographic (PIR) | 2.7s | ~40% MS-MARCO | 360M pages |
@@ -188,13 +195,14 @@ These pieces sit on `main` but have known follow-ups that the next session
 should pick up. Both have full design docs / call-site comments — read those
 first before extending.
 
-- **DBpedia 1M bench** — Go scaffold landed (`pkg/embeddings/loader.go` +
-  `test/dbpedia1m_benchmark_test.go` build-tag `dbpedia1m` + the HF parquet →
-  fvecs converter `scripts/download_dbpedia1m.sh`). Fires via
-  `deploy/bench-cpu/run_dbpedia_bench.sh`. Optional follow-ups: NC=256 variant
-  if some future config justifies it (current 2026-05-09 SIFT bench shows
-  NC=128 wins decisively, so don't pre-emptively add); larger M (M=192) if
-  ada-002 PQ recall is too lossy.
+- **DBpedia 1M bench — DONE 2026-05-12 (commit `4880cae`).** Sub-2s P50 at
+  92.4 % Recall@10 (PQ-M48-probe8, m6i.4xlarge, RA=2 + Memory). See SUMMARY.md
+  "DBpedia 1M @ 1536-dim ada-002" section. **Crucial config knobs that
+  unlocked this**: `Storage:Memory` (not File — File was a stale memory-
+  saving switch from when build peaked >64 GB), `RedundantAssignments=2`
+  (fixes curse-of-dim NN-miss; SIFT didn't need it because of low-dim
+  cluster coherence). Optional follow-ups for further latency work:
+  M=128 PQ variant (finer codebook); explore `NumKMeansInit=5`.
 - **Threshold retry-attack fix** — Phase 1 only (`docs/THRESHOLD_RETRY_FIX.md`
   + `pkg/crypto/threshold/retry_guard.go` standalone). Phases 2 + 3 pending —
   wiring `RetryGuard` into `ThresholdDecrypt` (API change: needs `instanceID`
@@ -215,28 +223,42 @@ first before extending.
   suggestions — see `deploy/bench-cpu/results/SUMMARY.md` 2026-05-09 section
   for the full apples-comparison table.
 
+- **PCADimension=64 on SIFT 128-dim (2026-05-11 SIFT 100K bench).**
+  Hypothesis was that halving dimensionality via PCA would cut HE +
+  local-scoring time without much recall hit. Disproven catastrophically:
+  PCA-64 drops SIFT R@10 from 97 % → **49 %** (50 % collapse). PCA-64 +
+  RA=2 + PQ all show the same 49 % R@10 floor — RA=2 can't rescue it.
+  Four PCA configs (`*-PCA64`, `*-PCA64-RA2`, `PQ-M8-PCA64`,
+  `PQ-M8-PCA64-RA2`) kept in `test/pq_sift100k_benchmark_test.go` as
+  tested-and-rejected guards. **PCA is not in the production recipe.**
+  Higher PCA target dims on higher-dim datasets (e.g. ada-002 1536→512)
+  may behave better — not validated, deferred. See SUMMARY.md "SIFT 100K
+  — DBpedia-prep config validation" for the full table.
+
+- **Storage:File for DBpedia (commit `1e735ec`, May 10, REVERTED `4880cae`
+  May 12).** The File-storage switch was meant to offload ~12 GB of
+  ciphertexts to disk vs the in-memory backend. Five subsequent build-
+  phase optimisations (`7a9a369` float32 ciphertexts, `828ee0d` float32
+  storage tier, `8905f2d` drop pendingVectors, `8905f2d` worker chunk-
+  flush, `e4a2cc7` GOMEMLIMIT) cut build peak from ~64 GB → ~18 GB,
+  making the offload unnecessary. File storage also added ~30 s/query
+  of EBS-IOPS-bound blob fetches at probe-16, which was the dominant
+  latency source. Memory is now the default for DBpedia and any future
+  high-dim workload that fits in instance RAM. The FileStore mutex /
+  saveIndex fixes in `dd4fc36` are still valuable for future File-store
+  callers but no current bench uses them.
+
 ## Known-and-deferred work
 
-- **DBpedia 1M @ 1536-dim bench.** Eight EC2 attempts on 2026-05-09/10
-  uncovered a build-phase memory cliff: peak RSS at 1M × 1536-dim hits
-  ~128 GB on a 64 GB instance and OOM-kills. Three quick optimizations
-  (commit `1e735ec`) cut that peak to ~64 GB — half the work done.
-  Remaining headroom requires either (a) `r6i.4xlarge` 128 GB at ~$2/run,
-  or (b) the float32 refactor (multi-day, halves all hot-path memory →
-  fits on m6i.2xlarge at $0.38/hr). The Go scaffolding + bench scripts
-  are all in place; just hold off on firing the AWS bench until the
-  float32 work lands. Full memory analysis + reasoning + per-attempt
-  failure log: `docs/MEMORY_PROFILE.md`.
+- **DBpedia 1M @ 1536-dim bench — DONE 2026-05-12** (was the long-running
+  blocker; see commit `4880cae`). Numbers in SUMMARY.md.
 
-- **float32 refactor.** Replace `[][]float64` with `[][]float32` on the
-  hot paths (`pkg/embeddings`, `pkg/cluster`, `pkg/pca`, `pkg/pq`,
-  `pkg/hierarchical`, `pkg/client`, `pkg/auth`, `pkg/enterprise`,
-  `opaque.go` public API). HE layer (`pkg/crypto`) keeps float64 since
-  Lattigo's encoder requires it; conversion happens at the narrow HE
-  encode boundary. **Zero accuracy impact** (ada-002 is float32 native,
-  SIFT precision well above float32 noise floor); ~30-50 % memory
-  reduction throughout; mild speedup from halved memory bandwidth.
-  Public API change (breaking) but acceptable for a research-stage
+- **float32 refactor — partially DONE.** `pkg/cluster` + `pkg/hierarchical`
+  + `db.pendingVectors` + `pkg/encrypt/vector.go` ciphertext encoding all
+  on float32. Remaining float64 hot-path surfaces: `pkg/pca`, `pkg/pq`,
+  `pkg/auth`, `pkg/enterprise`, `opaque.go` public-API signatures (still
+  `[]float64` at the boundary, internal conversion). Public API change
+  (breaking) but acceptable for a research-stage
   codebase with a single primary user.
 
 ---

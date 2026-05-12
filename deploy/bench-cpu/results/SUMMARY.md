@@ -420,3 +420,135 @@ Latency progression:
   and ~10 % more bytes per blob).
 
 Recall identical-to-better at every tier across mitigation deltas.
+
+---
+
+## DBpedia 1M @ 1536-dim ada-002 — Memory + RA=2 (2026-05-12)
+
+The first DBpedia 1M bench to actually produce headline numbers (commit
+`4880cae` switched Storage:File → Storage:Memory and added
+`RedundantAssignments=2`). Earlier runs OOM'd on memory or wedged on
+FileStore-serial-bottlenecks; both root-caused + fixed in the May 11-12
+push. Hardware: `m6i.4xlarge` (16 vCPU, 64 GB). All four mitigations
+live (σ=2^45 + DecodePublic, permutation π, PaddingBucketed,
+TargetEpsilon=2.5). RA=2 = each vector indexed under its top-2 nearest
+clusters — standard fix for the curse-of-dimensionality NN-miss problem
+on dense semantic embeddings.
+
+### `TestDBpedia1MAccuracy` (NC=128, RA=2, Memory, ε=2.5, σ=2^45)
+
+| Config   | Probe | Build  | Recall@1 | Recall@10 | Avg query |
+|----------|-------|--------|----------|-----------|-----------|
+| probe-8  | 6.25 %| 19m32s | 96.0 %   | **94.4 %**| 2.08 s    |
+| probe-16 | 12.5 %| 17m50s | 94.0 %   | **96.0 %**| 3.43 s    |
+
+### `TestPQ_DBpedia1M` (NC=128, RA=2, Memory, ε=2.5, σ=2^45)
+
+| Config                  | PQ  | Probe  | Build  | Recall@1 | Recall@10 | Avg query | P50      |
+|-------------------------|-----|--------|--------|----------|-----------|-----------|----------|
+| **PQ-M48-probe8-eps25** | M48 | 6.25 % | 21m14s | 96.0 %   | **92.4 %**| **1.17 s**| **1.16 s** |
+| PQ-M96-probe16-eps25    | M96 | 12.5 % | 21m58s | 92.0 %   | 92.8 %    | 1.67 s    | 1.66 s   |
+
+`standard-probe8` in the PQ-test config-set was cancelled (redundant
+with the accuracy-test probe-8 above — identical configuration).
+
+### Comparison vs pre-fix (RA=1, File-store) DBpedia bench
+
+| Metric          | Pre-fix (RA=1, File) | Post-fix (RA=2, Memory) | Δ            |
+|-----------------|----------------------|--------------------------|--------------|
+| probe-8 R@10    | 75.2 %               | **94.4 %**               | **+19.2 pp** |
+| probe-8 query   | 18.5 s               | **2.08 s**               | **9× faster**|
+| probe-16 R@10   | 75.0 %               | **96.0 %**               | **+21.0 pp** |
+| probe-16 query  | 30.8 s               | **3.43 s**               | **9× faster**|
+| PQ-M48 query    | n/a (disk-full fail) | **1.17 s**               | **<2 s ✅**  |
+
+### Headline DBpedia number
+
+**PQ-M48-probe8-eps25 on m6i.4xlarge: 92.4 % Recall@10 at P50 = 1.16 s**
+on 1M × 1536-dim ada-002 semantic embeddings, with all four privacy
+mitigations live and tunable ε=2.5 per-query DP bound. Build wall:
+21m14s.
+
+Cost: ~$1.20 (m6i.4xlarge × ~1.5 hr).
+
+### Why the previous DBpedia run was so much slower
+
+The May 10 → May 11 wedge + OOM cascade was three independent issues:
+
+1. `FileStore.PutBatch` held a global mutex across all 1024 file
+   writes → all 16 encrypt workers serialised on one writer.
+2. `FileStore.saveIndex` was called per `PutBatch` → ~1000 full JSON
+   marshals of the ~20 MB index file per build = ~250 sec wasted.
+3. `streamPaddingBlobs` called `Put` per padding blob → each Put
+   eager-flushed the (already huge) index.
+
+All three fixed in `dd4fc36`. With those fixes, File-storage would
+have been usable. But the May 12 SIFT 1M validation showed Memory
+storage easily fits 1M × 1536-dim on m6i.4xlarge (peak ~18 GB build,
+~6.5 GB steady-state) after the additional float32 + drop-pending
+optimisations (`7a9a369` + `828ee0d` + `8905f2d`). Memory is now the
+right default for DBpedia.
+
+---
+
+## SIFT 1M validation (2026-05-12, m6i.2xlarge)
+
+Pre-DBpedia validation: rerun the canonical SIFT 1M bench on current
+HEAD to confirm no regression after the May 11-12 build-phase /
+FileStore optimisations.
+
+### `TestSIFT1MAccuracy` (NC=128, σ=2^45) — May 12 reproduce
+
+| Config     | Probe  | Multi | Recall@1 | Recall@10 | Avg query |
+|------------|--------|-------|----------|-----------|-----------|
+| strict-4   | 3.1 %  | no    | 88.0 %   | 86.0 %    | 248 ms    |
+| strict-8   | 6.25 % | no    | 98.0 %   | 96.4 %    | 302 ms    |
+| strict-16  | 12.5 % | no    | 100.0 %  | 99.8 %    | 399 ms    |
+| probe-8    | 6.25 %+| yes   | 100.0 %  | 99.8 %    | 402 ms    |
+| probe-16   | 12.5 %+| yes   | 100.0 %  | 100.0 %   | 540 ms    |
+
+### `TestPQ_SIFT1M` (NC=128, σ=2^45) — May 12 reproduce
+
+| Config                 | Recall@1 | Recall@10 | Avg query | P50    | Build  |
+|------------------------|----------|-----------|-----------|--------|--------|
+| **PQ-M8-probe8-eps25** | 100.0 %  | 97.6 %    | **357 ms**| 361 ms | 2m52s  |
+| PQ-M8-probe16-eps25    | 100.0 %  | 99.8 %    | 475 ms    | 451 ms | 2m53s  |
+| PQ-M8-probe8-eps271    | 100.0 %  | 97.8 %    | 346 ms    | 351 ms | 2m58s  |
+| PQ-M8-probe8-eps20     | 100.0 %  | 98.2 %    | 419 ms    | 420 ms | 2m52s  |
+| standard-probe8-eps25  | 98.0 %   | 99.6 %    | 397 ms    | 397 ms | 2m13s  |
+
+Numbers match historical SIFT 1M within ±2 pp / ±20 ms sampling noise.
+**Builds ~3× faster than May 9** (PQ ~8m → ~2m52s; standard ~3m28s →
+~2m13s) — driven by the PQ subsample-first fix (`8905f2d`: codebook
+k-means now trains on 100 K subset instead of full 1 M, no recall
+regression because that's standard PQ literature precedent — Jegou et
+al. 2011, FAISS index_factory).
+
+Cost: ~$0.27 (m6i.2xlarge × ~45 min).
+
+---
+
+## SIFT 100K — DBpedia-prep config validation (2026-05-11, m6i.xlarge)
+
+12 configs in one fire (~$0.04, ~10 min wall). Validated:
+
+| Config                  | Recall@1 | Recall@10 | Avg query | Note                       |
+|-------------------------|----------|-----------|-----------|----------------------------|
+| standard (baseline)     | 98 %     | 97.2 %    | 166 ms    | reference                  |
+| **standard-RA2**        | **100 %**| **99.8 %**| 175 ms    | ✅ RA=2 — +2.6 pp R@10     |
+| standard-PCA64          | 80 %     | **49.0 %**| 144 ms    | ❌ PCA-64 destroys SIFT    |
+| standard-PCA64-RA2      | 80 %     | 49.6 %    | 162 ms    | ❌ RA=2 can't rescue PCA   |
+| PQ-M8-PCA64             | 80 %     | 49.4 %    | 140 ms    | ❌ PCA kills PQ too        |
+| PQ-M8-PCA64-RA2         | 80 %     | 49.0 %    | 159 ms    | ❌ full PCA stack broken   |
+
+**Two findings**:
+1. `RedundantAssignments=2` is a real recall win — even on already-
+   maxed SIFT 100K it picked up R@1 100 % (was 98 %) and R@10 99.8 %
+   (was 97.2 %) at +10 ms query cost. Confirmed safe to enable.
+2. `PCADimension=64` destroys recall on SIFT 128-dim — going 128 → 64
+   loses too much information at this scale. **PCA is not in the
+   DBpedia recipe.** (Higher PCA ratios on higher-dim datasets may
+   work; not validated here, deferred.)
+
+The PCA configs are kept in the test file as "tested-and-rejected"
+guards — future runs should not re-test these.

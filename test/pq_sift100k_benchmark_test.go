@@ -92,28 +92,52 @@ func TestPQ_SIFT100K(t *testing.T) {
 	var results []benchResult
 
 	// Configs to test: each with TopClusters=8 (strict) for fair comparison.
+	// The RA=2 / PCA=64 variants below validate the same latency / recall
+	// optimisations we want to apply to DBpedia (1M × 1536-dim ada-002),
+	// where pre-optimisation queries hit 18-30 s and recall stalls at ~75 %.
+	// On SIFT 100K (128-dim, well-clusterable) the absolute latencies are
+	// already low (~150 ms), but the *relative speedups* and the
+	// no-recall-regression check transfer to high-dim semantic workloads.
 	configs := []struct {
 		name        string
 		pqM         int
 		topClusters int
 		probeThresh float64
 		bernoulli   bool
+		pcaDim      int // 0 = disabled
+		redundant   int // 0 → default of 1
 	}{
-		{"standard", 0, 8, 1.0, false},
-		{"PQ-M8", 8, 8, 1.0, false},
-		{"PQ-M16", 16, 8, 1.0, false},
+		{"standard", 0, 8, 1.0, false, 0, 0},
+		{"PQ-M8", 8, 8, 1.0, false, 0, 0},
+		{"PQ-M16", 16, 8, 1.0, false, 0, 0},
 		// Also test with multi-probe to see PQ at higher recall.
-		{"standard-probe16", 0, 16, 0.95, false},
-		{"PQ-M8-probe16", 8, 16, 0.95, false},
+		{"standard-probe16", 0, 16, 0.95, false, 0, 0},
+		{"PQ-M8-probe16", 8, 16, 0.95, false, 0, 0},
 		// Bernoulli decoy sampling for tight (ε,δ)-DP composition. Same
 		// expected K_decoy as the uniform-K default, but K is binomial per
 		// query — recall must be preserved (decoys never affect recall).
-		{"standard-bernoulli", 0, 8, 1.0, true},
-		{"PQ-M8-probe16-bernoulli", 8, 16, 0.95, true},
+		{"standard-bernoulli", 0, 8, 1.0, true, 0, 0},
+		{"PQ-M8-probe16-bernoulli", 8, 16, 0.95, true, 0, 0},
+		// --- DBpedia-prep validation configs (2026-05-11) ---
+		// RA=2 confirmed as a recall win on already-maxed SIFT 100K: bumped
+		// R@1 98 % → 100 % and R@10 97.2 % → 99.8 % at +10 ms query cost.
+		// Now the canonical recipe alongside PQ for DBpedia 1M @ 1536-dim
+		// (commit `4880cae` shipped 92.4 % R@10 / 1.17 s P50 on ada-002).
+		{"standard-RA2", 0, 8, 1.0, false, 0, 2},
+		// PCA-64 configs below are TESTED-AND-REJECTED — kept as guards.
+		// PCA-64 on SIFT 128-dim collapses R@10 from 97 % to **49 %** (50 %
+		// recall loss). RA=2 + PQ both fail to rescue it. PCA is NOT in the
+		// production recipe. See CLAUDE.md "Tested-and-rejected variations"
+		// + SUMMARY.md "SIFT 100K — DBpedia-prep config validation".
+		{"standard-PCA64", 0, 8, 1.0, false, 64, 0},
+		{"standard-PCA64-RA2", 0, 8, 1.0, false, 64, 2},
+		{"PQ-M8-PCA64", 8, 8, 1.0, false, 64, 0},
+		{"PQ-M8-PCA64-RA2", 8, 8, 1.0, false, 64, 2},
 	}
 
 	for _, cfg := range configs {
-		t.Logf("--- %s (TopClusters=%d, PQ=%d) ---", cfg.name, cfg.topClusters, cfg.pqM)
+		t.Logf("--- %s (TopClusters=%d, PQ=%d, PCA=%d, RA=%d) ---",
+			cfg.name, cfg.topClusters, cfg.pqM, cfg.pcaDim, cfg.redundant)
 
 		dbCfg := opaque.Config{
 			Dimension:       dataset.Dimension,
@@ -125,6 +149,12 @@ func TestPQ_SIFT100K(t *testing.T) {
 		}
 		if cfg.pqM > 0 {
 			dbCfg.PQSubspaces = cfg.pqM
+		}
+		if cfg.pcaDim > 0 {
+			dbCfg.PCADimension = cfg.pcaDim
+		}
+		if cfg.redundant > 0 {
+			dbCfg.RedundantAssignments = cfg.redundant
 		}
 
 		db, err := opaque.NewDB(dbCfg)
