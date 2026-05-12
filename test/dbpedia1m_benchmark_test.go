@@ -145,21 +145,27 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 		t.Logf("--- Config: %s (TopClusters=%d, ProbeThreshold=%.2f) ---",
 			cfg.name, cfg.topClusters, cfg.probeThresh)
 
-		// File-backed storage offloads ~12 GB of ciphertexts to disk vs the
-		// default in-memory backend, which is critical at 1M × 1536-dim where
-		// the build path's peak otherwise OOMs a 64 GB instance.
-		storageDir := filepath.Join(os.TempDir(), fmt.Sprintf("opaque-dbpedia-%s", cfg.name))
-		os.RemoveAll(storageDir)
+		// Storage:Memory now — the original File switch (commit 1e735ec, May 10)
+		// was needed when 1M × 1536-dim build peaked at ~50-60 GB. Since then:
+		//   - float32 AES ciphertexts (7a9a369) halved on-disk + in-RAM size
+		//   - float32 storage tier (828ee0d) cut pendingVectors 12 GB → 6 GB
+		//   - drop pendingVectors after Build (8905f2d) reclaims 6 GB at end
+		//   - worker chunk-flush (8905f2d) caps build-phase blob accumulator
+		//   - GOMEMLIMIT=48GiB (e4a2cc7) tightens Go's RSS slack
+		// Current build peak ~18 GB / steady-state ~6.5 GB on m6i.4xlarge (64 GB).
+		// File-backed disk reads were the dominant query-latency cost (~30s/query
+		// at probe-16) — Memory eliminates that. Also closes the "no space left
+		// on device" failure mode that hit cfefdd2.
 		db, err := opaque.NewDB(opaque.Config{
-			Dimension:      dim,
-			NumClusters:    numClusters,
-			TopClusters:    cfg.topClusters,
-			NumDecoys:      numDecoys,
-			ProbeThreshold: cfg.probeThresh,
-			PaddingMode:    opaque.PaddingBucketed,
-			TargetEpsilon:  2.5,
-			Storage:        opaque.File,
-			StoragePath:    storageDir,
+			Dimension:            dim,
+			NumClusters:          numClusters,
+			TopClusters:          cfg.topClusters,
+			NumDecoys:            numDecoys,
+			ProbeThreshold:       cfg.probeThresh,
+			PaddingMode:          opaque.PaddingBucketed,
+			TargetEpsilon:        2.5,
+			RedundantAssignments: 2,
+			// Storage defaults to Memory.
 		})
 		if err != nil {
 			t.Fatalf("NewDB failed: %v", err)
@@ -240,12 +246,9 @@ func TestDBpedia1MAccuracy(t *testing.T) {
 			buildTime.Round(time.Millisecond), r1*100, r10*100, avgLatency)
 
 		db.Close()
-		// Free this config's ~6 GB on-disk blob storage before the next
-		// config's Build allocates its own. Without this, the 50 GB EBS root
-		// fills after 2-3 configs at 1M × 1536-dim (12 GB parquet + 6 GB
-		// fvecs + 5 GB OS + 6 GB per config). Latest run hit "no space left
-		// on device" mid-PQ-M48 build for exactly this reason.
-		os.RemoveAll(storageDir)
+		// Memory store — no disk dir to clean. Close() drops the Memory backend
+		// and the next config's NewDB starts fresh.
+		runtime.GC()
 	}
 
 	t.Log("")
@@ -373,19 +376,16 @@ func TestPQ_DBpedia1M(t *testing.T) {
 		t.Logf("--- %s (TopClusters=%d, PQ=%d, probe=%.2f, eps=%.2f) ---",
 			cfg.name, cfg.topClusters, cfg.pqM, cfg.probeThresh, cfg.epsilon)
 
-		// File-backed storage — see TestDBpedia1MAccuracy for memory rationale.
-		storageDir := filepath.Join(os.TempDir(), fmt.Sprintf("opaque-dbpedia-pq-%s", cfg.name))
-		os.RemoveAll(storageDir)
+		// Storage:Memory + RA=2 — see TestDBpedia1MAccuracy for the rationale.
 		dbCfg := opaque.Config{
-			Dimension:      dim,
-			NumClusters:    numClusters,
-			TopClusters:    cfg.topClusters,
-			NumDecoys:      numDecoys,
-			ProbeThreshold: cfg.probeThresh,
-			PaddingMode:    opaque.PaddingBucketed,
-			TargetEpsilon:  cfg.epsilon,
-			Storage:        opaque.File,
-			StoragePath:    storageDir,
+			Dimension:            dim,
+			NumClusters:          numClusters,
+			TopClusters:          cfg.topClusters,
+			NumDecoys:            numDecoys,
+			ProbeThreshold:       cfg.probeThresh,
+			PaddingMode:          opaque.PaddingBucketed,
+			TargetEpsilon:        cfg.epsilon,
+			RedundantAssignments: 2,
 		}
 		if cfg.pqM > 0 {
 			dbCfg.PQSubspaces = cfg.pqM
@@ -478,9 +478,8 @@ func TestPQ_DBpedia1M(t *testing.T) {
 			avgLatency.Round(time.Millisecond), p50.Round(time.Millisecond))
 
 		db.Close()
-		// Free this config's ~6 GB on-disk blob storage. See the same
-		// cleanup in TestDBpedia1MAccuracy for the disk-budget rationale.
-		os.RemoveAll(storageDir)
+		// Memory store — see TestDBpedia1MAccuracy.
+		runtime.GC()
 	}
 
 	t.Log("")
