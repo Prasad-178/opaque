@@ -207,15 +207,23 @@ func TestThresholdDecrypt_RetryGuardRefusesReplay(t *testing.T) {
 		t.Fatalf("first threshold decrypt must succeed, got %v", err)
 	}
 
-	// Second call with same (instanceID, ct, pk) must be refused. The error
-	// surfaces from the worker goroutine via the standard "share gen failed"
-	// wrapper; we just check that it surfaced and references the guard error.
+	// Second call with same (instanceID, ct, pk) must be refused. Either
+	// layer of the defense-in-depth stack is acceptable:
+	//   - Phase 3b coordinator state machine: ErrInstanceCommitted (the
+	//     instance is in terminal state, refused BEFORE participants are
+	//     contacted) — this is what actually fires after Phase 3b landed.
+	//   - Phase 2 per-participant RetryGuard: ErrShareAlreadyEmitted
+	//     (fingerprint replay refused at the participant) — would fire if
+	//     the coordinator tracker were ever bypassed.
+	// Both close the Mouchet'24 / Okada'25 / Colin de Verdière 2026 family.
+	// `TestChaos_GuardCatchesEvenIfCoordinatorBypassed` exercises the
+	// participant guard in isolation.
 	_, err = committee.ThresholdDecrypt(ct, session.PK, instanceID)
 	if err == nil {
 		t.Fatal("second threshold decrypt with same fingerprint must fail, got nil")
 	}
-	if !errors.Is(err, ErrShareAlreadyEmitted) {
-		t.Errorf("expected error to wrap ErrShareAlreadyEmitted, got %v", err)
+	if !errors.Is(err, ErrInstanceCommitted) && !errors.Is(err, ErrShareAlreadyEmitted) {
+		t.Errorf("expected ErrInstanceCommitted or ErrShareAlreadyEmitted, got %v", err)
 	}
 
 	// Different instanceID with same ct + pk should still succeed (fresh

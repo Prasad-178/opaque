@@ -89,6 +89,13 @@ type Committee struct {
 	// and each node sends back its partial share (1 RTT), all in parallel.
 	// Typical values: 1-2ms (same data center), 50-100ms (cross-region).
 	SimulatedRTT time.Duration
+
+	// tracker is the Phase 3b coordinator-side state machine that prevents
+	// instanceID reuse across ThresholdDecrypt invocations. Together with the
+	// per-participant RetryGuard (Phase 2) and per-round CRS (Phase 3a), it
+	// provides defense in depth against the Mouchet'24 / Okada'25 / Colin de
+	// Verdière 2026 retry-attack family. See docs/THRESHOLD_RETRY_FIX.md §2.3.
+	tracker *instanceTracker
 }
 
 // derivePerRoundCRS returns a fresh sampling.PRNG for a given keygen round,
@@ -168,6 +175,7 @@ func NewCommittee(n, threshold int) (*Committee, error) {
 		Threshold: threshold,
 		params:    params,
 		epochSeed: epochSeed,
+		tracker:   newInstanceTracker(),
 	}
 
 	// Step 1: Each participant generates a local secret key share.
@@ -260,6 +268,42 @@ func (c *Committee) EncryptVector(vector []float64) (*rlwe.Ciphertext, error) {
 	return ct, nil
 }
 
+// BeginInstance mints a fresh instanceID, registers it as active in the
+// coordinator-side state machine, and returns it for use with
+// ThresholdDecrypt. Use this when the caller does not have a domain-specific
+// protocol-instance nonce. Phase 3b of the threshold retry-attack fix —
+// see docs/THRESHOLD_RETRY_FIX.md §2.3.
+//
+// A caller-supplied instanceID also works: passing one to ThresholdDecrypt
+// auto-registers it. BeginInstance is the explicit form, useful when the
+// coordinator needs to track instances before initiating decrypt (e.g. to
+// AbortInstance on detected upstream failure).
+func (c *Committee) BeginInstance() ([]byte, error) {
+	id, err := NewInstanceID()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.tracker.reserve(id); err != nil {
+		// 16-byte random nonce → collision probability ~2^-64 per call.
+		// Reaching here means the tracker rejected a fresh nonce, which
+		// would be a structural bug — return the underlying error.
+		return nil, fmt.Errorf("threshold: failed to register fresh instance: %w", err)
+	}
+	return id, nil
+}
+
+// AbortInstance marks an instanceID as aborted (terminal). Subsequent
+// calls to ThresholdDecrypt with the same instanceID will return
+// ErrInstanceAborted; the caller must mint a fresh instanceID for any
+// retry. Idempotent — calling AbortInstance on an already-aborted or
+// already-committed instance is a no-op.
+//
+// Use when the coordinator detects an upstream failure (e.g., participant
+// timeout, network drop) and wants to refuse any retry under the same ID.
+func (c *Committee) AbortInstance(instanceID []byte) {
+	c.tracker.abort(instanceID)
+}
+
 // ThresholdDecrypt performs threshold decryption of a ciphertext, re-encrypting
 // the result under the client's public key. The client can then decrypt locally.
 //
@@ -267,13 +311,39 @@ func (c *Committee) EncryptVector(vector []float64) (*rlwe.Ciphertext, error) {
 // shares are aggregated, and the result is a ciphertext under clientPK.
 //
 // instanceID is a coordinator-supplied protocol-instance nonce — distinct
-// invocations of the threshold protocol MUST use distinct instanceIDs. Each
-// participant tracks the (instanceID, ct, clientPK) fingerprint via its
-// RetryGuard and refuses to emit a second share for the same fingerprint,
-// closing the Mouchet'24 / Okada'25 / Colin de Verdière 2026 retry-attack
-// family. Use NewInstanceID() if the caller doesn't have a domain-specific
-// nonce — see docs/THRESHOLD_RETRY_FIX.md §2 for the threat model.
+// invocations of the threshold protocol MUST use distinct instanceIDs.
+// The Committee tracks every seen instanceID in a state machine
+// (unknown → active → committed | aborted, terminal); any attempt to reuse
+// a terminal instanceID is refused here at the coordinator BEFORE any
+// participant is contacted (Phase 3b). The per-participant RetryGuard
+// (Phase 2) provides a second layer that also catches duplicate
+// (instanceID, ct, clientPK) fingerprints, closing the
+// Mouchet'24 / Okada'25 / Colin de Verdière 2026 retry-attack family.
+//
+// Use NewInstanceID() if the caller doesn't have a domain-specific nonce,
+// or BeginInstance() to register + receive an ID atomically. See
+// docs/THRESHOLD_RETRY_FIX.md §2 for the threat model.
 func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicKey, instanceID []byte) (*rlwe.Ciphertext, error) {
+	// Phase 3b: coordinator state machine. Refuse reuse of any terminal
+	// instanceID; refuse concurrent active reuse. On success the instance
+	// transitions to committed; on any error it transitions to aborted.
+	if err := c.tracker.activate(instanceID); err != nil {
+		return nil, err
+	}
+
+	ctOut, err := c.runThresholdDecrypt(ct, clientPK, instanceID)
+	if err != nil {
+		c.tracker.abort(instanceID)
+		return nil, err
+	}
+	c.tracker.commit(instanceID)
+	return ctOut, nil
+}
+
+// runThresholdDecrypt is the Phase 1/2/3a decrypt body, wrapped by
+// ThresholdDecrypt with the Phase 3b state machine. Separated to keep the
+// state-machine bookkeeping out of the cryptographic hot path.
+func (c *Committee) runThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicKey, instanceID []byte) (*rlwe.Ciphertext, error) {
 	// No mutex needed: all state created per-call (pcks, shares, activeKeys).
 	// Participant fields (shamirShare, sk) are read-only after setup.
 	// Concurrent calls are safe and simulate real distributed deployment

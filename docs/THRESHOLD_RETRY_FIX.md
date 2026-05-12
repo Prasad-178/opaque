@@ -1,6 +1,6 @@
 # Threshold Retry-Attack Fix — Design
 
-**Status:** Phase 1 + 2 + 3a landed. Phase 3b (coordinator state machine) and Phase 3c (chaos-monkey tests) pending.
+**Status:** All phases landed (1, 2, 3a, 3b, 3c). Named retry-attack family closed.
 **Closes:** Mouchet'24, Okada'25, Colin de Verdière 2026 (one fix, the same retry-family attack). Live attack surface (retry of `ThresholdDecrypt`) closed by Phase 2. Theoretical retry-of-keygen surface structurally bounded by Phase 3a.
 **Branch:** merged into `main` (`1dcd2c4`, `e03c5d5`, plus the Phase-3a commit landing now).
 
@@ -114,13 +114,15 @@ numbers separable:
 | 1 | `docs/THRESHOLD_RETRY_FIX.md`, `pkg/crypto/threshold/retry_guard.go`, `pkg/crypto/threshold/retry_guard_test.go` | Design + standalone guard primitive | ✅ landed (`1dcd2c4`) |
 | 2 | `threshold.go`: wire `RetryGuard` into `Participant`, hash ciphertext+pk into fingerprint, plumb `instanceID` through `ThresholdDecrypt` signature | Per-emission guard live in PCKS path | ✅ landed (`e03c5d5`) |
 | 3a | `threshold.go`: per-round CRS derivation in `genCollectivePublicKey`, `genRelinearizationKey`, `genGaloisKeys` via `derivePerRoundCRS(epochSeed, roundLabel)`. Per-Galois-element sub-derivation. Distinct rounds within an epoch can never share a CRP. | Structural bound on retry-of-single-keygen-round attacks (Colin de Verdière 2026 family) | ✅ landed |
-| 3b | Coordinator state machine: explicit `init → fanout → collect → aggregate → commit \| abort` lifecycle around `ThresholdDecrypt`. Force fresh `instanceID` on retry, refuse to continue an aborted instance. | Operational guarantee that any retry surfaces as a fresh-fingerprint attempt the per-emission guard would catch on duplicate. | ⏳ pending |
-| 3c | Chaos-monkey test harness: simulate participant timeouts, share corruption, partial-failure replay attempts, then assert that no second share is ever emitted for the same fingerprint under any failure path. | Empirical confidence in the Phase 1+2+3a fix under adversarial conditions. | ⏳ pending |
+| 3b | `instance.go`: coordinator state machine (`unknown → reserved → running → committed \| aborted`). `BeginInstance()`, `AbortInstance()` public API. `ThresholdDecrypt` activates the instance, commits on success, aborts on any error. Reuse of a terminal `instanceID` is refused at the coordinator BEFORE any participant is contacted. | Defense-in-depth on top of the Phase 2 per-participant guard. Refuse instanceID reuse at the cheaper coordinator-side gate. | ✅ landed |
+| 3c | `chaos_test.go`: concurrent same-ID hammering (one winner, all participants see exactly 1 fingerprint), N distinct IDs all succeed in parallel, abort-then-retry blocks, malicious-coordinator-bypassed RetryGuard still catches replay, concurrent guard.Admit one-winner stress. | Empirical confidence in the 1+2+3a+3b stack under adversarial conditions. | ✅ landed |
 
 Phase 2 was the API-changing piece (`ThresholdDecrypt` gained an `instanceID`
-argument). Phase 3a is internal. Phases 3b + 3c are the remaining "polish" for
-a paper-grade closure of the named attack family — straightforward engineering
-in 1-2 weeks, but not blocking the live attack-surface fix already shipped.
+argument). Phase 3a was internal. Phases 3b + 3c shipped 2026-05-13 with
+two new files: `pkg/crypto/threshold/instance.go` (state machine) and
+`pkg/crypto/threshold/chaos_test.go` (adversarial-pattern suite). The
+public API gained `Committee.BeginInstance()` (mint + reserve fresh ID)
+and `Committee.AbortInstance(id)` (coordinator-initiated abort).
 
 Each phase preserves existing tests' hardcoded expected values (e.g.,
 `TestThresholdDecryptScalar` expects 0.52 ± 0.01) — that is the strongest

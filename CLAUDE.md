@@ -100,10 +100,14 @@ malicious-server — active tampering / reorder / drop / replay is not detected
 today. See `SECURITY_MODEL.md` §6 for the full competitor comparison.
 
 **Pending** (see `SECURITY_MODEL.md` §8 for the live list):
-- No-retry invariant + fresh CRS per MHE protocol instance — closes
-  Mouchet'24 / Okada'25 / Colin de Verdière 2026 retry attack on threshold mode
 - Ephemeral key rotation for τ-bounded composition
-- Bernoulli per-cluster decoy sampling for tight (ε,δ)-DP
+
+**Recently closed**:
+- ✅ No-retry invariant + fresh CRS per MHE protocol instance (Phases 2+3a
+  shipped May 10; Phases 3b coordinator state machine + 3c chaos suite
+  shipped May 13) — closes Mouchet'24 / Okada'25 / Colin de Verdière 2026
+  retry-attack family. See `docs/THRESHOLD_RETRY_FIX.md`.
+- ✅ Bernoulli per-cluster decoy sampling for tight (ε,δ)-DP (commit `38f678b`)
 
 ---
 
@@ -203,11 +207,13 @@ first before extending.
   (fixes curse-of-dim NN-miss; SIFT didn't need it because of low-dim
   cluster coherence). Optional follow-ups for further latency work:
   M=128 PQ variant (finer codebook); explore `NumKMeansInit=5`.
-- **Threshold retry-attack fix** — Phase 1 only (`docs/THRESHOLD_RETRY_FIX.md`
-  + `pkg/crypto/threshold/retry_guard.go` standalone). Phases 2 + 3 pending —
-  wiring `RetryGuard` into `ThresholdDecrypt` (API change: needs `instanceID`
-  parameter) and per-round CRS for keygen + coordinator abort state machine.
-  See the design doc §3 for the phased plan.
+- **Threshold retry-attack fix — DONE 2026-05-13.** All five phases shipped:
+  Phase 1 (`retry_guard.go` standalone), Phase 2 (RetryGuard wired into
+  `ThresholdDecrypt`, instanceID API), Phase 3a (per-round CRS), Phase 3b
+  (`instance.go` coordinator state machine + BeginInstance/AbortInstance
+  API), Phase 3c (`chaos_test.go` adversarial-pattern suite). Named retry
+  attack family (Mouchet/Okada/CdV) fully closed. See
+  `docs/THRESHOLD_RETRY_FIX.md`.
 
 ## Tested-and-rejected variations (don't re-test)
 
