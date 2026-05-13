@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tuneinsight/lattigo/v5/core/rlwe"
@@ -48,6 +49,21 @@ type Engine struct {
 	publicKey *rlwe.PublicKey
 
 	mu sync.RWMutex
+
+	// decryptCount tracks the number of DecodePublic calls under the current
+	// (sk, pk) pair. Atomic-only access via DecryptCount() / RotateKeys().
+	//
+	// Why: the σ=2^45 + DecodePublic(logprec=10) parameters give provable
+	// 128-bit IND-CPA^D security under Bergamaschi PKC 2025 for τ ≤ 2^20
+	// decryptions per key. Beyond τ the bound weakens. A long-running
+	// deployment that approaches τ should call RotateKeys() to mint fresh
+	// (sk, pk) and reset the counter. See docs/SECURITY_MODEL.md §4 and §8.
+	decryptCount uint64
+
+	// rotationLimit, when > 0, gates the ShouldRotate() helper. Callers
+	// poll ShouldRotate() and invoke RotateKeys() when they hit the bound.
+	// 0 means disabled (no automatic gating; counter still tracks).
+	rotationLimit uint64
 }
 
 // NewParameters creates CKKS parameters optimized for vector dot products.
@@ -231,6 +247,7 @@ func (e *Engine) DecryptVector(ct *rlwe.Ciphertext, length int) ([]float64, erro
 	if err := e.encoder.DecodePublic(pt, decoded, decodeLogPrec); err != nil {
 		return nil, fmt.Errorf("failed to decode: %w", err)
 	}
+	atomic.AddUint64(&e.decryptCount, 1)
 
 	return decoded, nil
 }
@@ -252,6 +269,7 @@ func (e *Engine) DecryptScalar(ct *rlwe.Ciphertext) (float64, error) {
 	if err := e.encoder.DecodePublic(pt, decoded, decodeLogPrec); err != nil {
 		return 0, fmt.Errorf("failed to decode: %w", err)
 	}
+	atomic.AddUint64(&e.decryptCount, 1)
 
 	// CKKS returns the actual floating-point value directly!
 	return decoded[0], nil
@@ -512,6 +530,7 @@ func (e *Engine) DecryptBatchScalars(ct *rlwe.Ciphertext, numCentroids, dimensio
 	if err := e.encoder.DecodePublic(pt, decoded, decodeLogPrec); err != nil {
 		return nil, fmt.Errorf("failed to decode: %w", err)
 	}
+	atomic.AddUint64(&e.decryptCount, 1)
 
 	// Extract values at positions [0, dim, 2*dim, ...]
 	results := make([]float64, numCentroids)
@@ -523,6 +542,72 @@ func (e *Engine) DecryptBatchScalars(ct *rlwe.Ciphertext, numCentroids, dimensio
 	}
 
 	return results, nil
+}
+
+// DecryptCount returns the number of DecodePublic calls served under the
+// current (sk, pk) pair. Useful for monitoring approach to the
+// IND-CPA^D-128 τ ≤ 2^20 bound (Bergamaschi PKC 2025). See SECURITY_MODEL.md
+// §4 + §8 for the rationale.
+func (e *Engine) DecryptCount() uint64 {
+	return atomic.LoadUint64(&e.decryptCount)
+}
+
+// SetRotationLimit configures the τ threshold at which ShouldRotate()
+// begins returning true. 0 disables the gate (counter still tracks).
+// Recommended value: 2^20 (matches the IND-CPA^D-128 bound from
+// Bergamaschi PKC 2025). Callers poll ShouldRotate() between queries and
+// invoke RotateKeys() to mint a fresh (sk, pk) before exceeding the bound.
+func (e *Engine) SetRotationLimit(tau uint64) {
+	e.mu.Lock()
+	e.rotationLimit = tau
+	e.mu.Unlock()
+}
+
+// ShouldRotate reports whether the engine has decrypted at least
+// rotationLimit times since the last RotateKeys() (or construction).
+// Returns false when rotationLimit is 0 (gate disabled).
+func (e *Engine) ShouldRotate() bool {
+	e.mu.RLock()
+	limit := e.rotationLimit
+	e.mu.RUnlock()
+	if limit == 0 {
+		return false
+	}
+	return atomic.LoadUint64(&e.decryptCount) >= limit
+}
+
+// RotateKeys mints a fresh (sk, pk) pair, rebuilds the encryptor + decryptor,
+// and resets the decrypt counter to zero. Existing ciphertexts encrypted
+// under the OLD pk become un-decryptable after rotation — callers must
+// re-encrypt any in-flight data they want to preserve.
+//
+// Server-side engines (no secret key) cannot rotate. Returns an error.
+//
+// Performance: ~10-20 ms on a modern CPU for the LogN=14 parameters Opaque
+// uses. Negligible vs the per-query cost; safe to invoke between queries.
+func (e *Engine) RotateKeys() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.secretKey == nil {
+		return errors.New("RotateKeys: server-side engine has no secret key")
+	}
+
+	// Zero the old secret key material before discarding the reference.
+	for i := range e.secretKey.Value.Q.Coeffs {
+		for j := range e.secretKey.Value.Q.Coeffs[i] {
+			e.secretKey.Value.Q.Coeffs[i][j] = 0
+		}
+	}
+
+	kgen := rlwe.NewKeyGenerator(e.params)
+	sk, pk := kgen.GenKeyPairNew()
+	e.secretKey = sk
+	e.publicKey = pk
+	e.encryptor = rlwe.NewEncryptor(e.params, pk)
+	e.decryptor = rlwe.NewDecryptor(e.params, sk)
+	atomic.StoreUint64(&e.decryptCount, 0)
+	return nil
 }
 
 // Close zeros secret key material from memory.

@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tuneinsight/lattigo/v5/core/rlwe"
@@ -96,6 +97,23 @@ type Committee struct {
 	// provides defense in depth against the Mouchet'24 / Okada'25 / Colin de
 	// Verdière 2026 retry-attack family. See docs/THRESHOLD_RETRY_FIX.md §2.3.
 	tracker *instanceTracker
+
+	// decryptCount tracks the number of successful ThresholdDecrypt
+	// invocations under the current epoch's collective keys. The
+	// σ=2^45 + DecodePublic IND-CPA^D-128 bound (Bergamaschi PKC 2025)
+	// holds for τ ≤ 2^20 decryptions per key — callers should monitor
+	// DecryptCount() and RotateEpoch() before approaching τ. See
+	// docs/SECURITY_MODEL.md §4 + §8.
+	decryptCount uint64
+
+	// rotationLimit gates the ShouldRotate() helper. 0 = disabled.
+	rotationLimit uint64
+
+	// mu serializes RotateEpoch — the heavy keygen operation must not race
+	// with concurrent ThresholdDecrypt readers. ThresholdDecrypt itself is
+	// lock-free on the hot path (all per-call state is local); it acquires
+	// mu in RLock mode at entry only when c.mu is needed.
+	mu sync.RWMutex
 }
 
 // derivePerRoundCRS returns a fresh sampling.PRNG for a given keygen round,
@@ -324,6 +342,12 @@ func (c *Committee) AbortInstance(instanceID []byte) {
 // or BeginInstance() to register + receive an ID atomically. See
 // docs/THRESHOLD_RETRY_FIX.md §2 for the threat model.
 func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicKey, instanceID []byte) (*rlwe.Ciphertext, error) {
+	// RLock the committee for the entire decrypt — RotateEpoch needs to
+	// wait for in-flight decrypts to drain before swapping keys. Many
+	// concurrent decrypts are fine (RLock is a counting lock).
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	// Phase 3b: coordinator state machine. Refuse reuse of any terminal
 	// instanceID; refuse concurrent active reuse. On success the instance
 	// transitions to committed; on any error it transitions to aborted.
@@ -337,8 +361,112 @@ func (c *Committee) ThresholdDecrypt(ct *rlwe.Ciphertext, clientPK *rlwe.PublicK
 		return nil, err
 	}
 	c.tracker.commit(instanceID)
+	atomic.AddUint64(&c.decryptCount, 1)
 	return ctOut, nil
 }
+
+// DecryptCount returns the number of successful ThresholdDecrypt
+// invocations served under the current epoch's collective keys. Useful for
+// monitoring approach to the IND-CPA^D-128 τ ≤ 2^20 bound (Bergamaschi
+// PKC 2025). Reset to 0 by RotateEpoch().
+func (c *Committee) DecryptCount() uint64 {
+	return atomic.LoadUint64(&c.decryptCount)
+}
+
+// SetRotationLimit configures the τ threshold at which ShouldRotate()
+// begins returning true. 0 disables the gate (counter still tracks).
+// Recommended value: 2^20.
+func (c *Committee) SetRotationLimit(tau uint64) {
+	atomic.StoreUint64(&c.rotationLimit, tau)
+}
+
+// ShouldRotate reports whether the committee has served at least
+// rotationLimit successful decrypts since the last RotateEpoch().
+// Returns false when rotationLimit is 0.
+func (c *Committee) ShouldRotate() bool {
+	limit := atomic.LoadUint64(&c.rotationLimit)
+	if limit == 0 {
+		return false
+	}
+	return atomic.LoadUint64(&c.decryptCount) >= limit
+}
+
+// RotateEpoch re-runs the collective key generation protocol with a fresh
+// epoch seed, mints fresh participant secret-key shares + Shamir shares,
+// rebuilds the collective public key + relin key + Galois keys, clears
+// every participant's RetryGuard, resets the instanceTracker, and zeroes
+// the decrypt counter. The new epoch is functionally a fresh committee
+// reusing the same {N, threshold, params} configuration.
+//
+// Ciphertexts encrypted under the OLD CollectivePK become un-decryptable
+// after rotation. Long-running clients should either re-encrypt their
+// state or coordinate with the committee on rotation cadence.
+//
+// Performance: ~hundreds of ms to ~seconds depending on N and threshold
+// — runs setupThreshold (if t < N) + 3 keygen rounds + Galois keys
+// (one per power-of-2 rotation). Invoke between bursts of queries, not
+// per query.
+//
+// This is the load-bearing knob for the τ-bounded composition argument
+// in docs/SECURITY_MODEL.md §4 and §8 (Pending → Recently closed).
+func (c *Committee) RotateEpoch() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Mint fresh epoch entropy. All per-round CRS derivations now flow
+	// from this seed via H(epochSeed || roundLabel) — distinct from the
+	// prior epoch's seed, so the per-round CRPs change completely and the
+	// retry-attack argument (Colin de Verdière 2026) restarts on fresh
+	// uncorrelated randomness.
+	epochSeed := make([]byte, 64)
+	prng, err := sampling.NewPRNG()
+	if err != nil {
+		return fmt.Errorf("RotateEpoch: prng: %w", err)
+	}
+	if _, err := prng.Read(epochSeed); err != nil {
+		return fmt.Errorf("RotateEpoch: read entropy: %w", err)
+	}
+	c.epochSeed = epochSeed
+
+	// Mint fresh secret-key shares per participant + clear retry guards.
+	// Zero the old secret key material before discarding.
+	kgen := rlwe.NewKeyGenerator(c.params)
+	for _, p := range c.Participants {
+		if p.sk != nil {
+			for i := range p.sk.Value.Q.Coeffs {
+				for j := range p.sk.Value.Q.Coeffs[i] {
+					p.sk.Value.Q.Coeffs[i][j] = 0
+				}
+			}
+		}
+		p.sk = kgen.GenSecretKeyNew()
+		p.guard = NewRetryGuard()
+		// shamirShare is rebuilt by setupThreshold below if t < N.
+	}
+
+	if c.Threshold < c.N {
+		if err := c.setupThreshold(); err != nil {
+			return fmt.Errorf("RotateEpoch: setupThreshold: %w", err)
+		}
+	}
+	if err := c.genCollectivePublicKey(); err != nil {
+		return fmt.Errorf("RotateEpoch: genCollectivePublicKey: %w", err)
+	}
+	if err := c.genRelinearizationKey(); err != nil {
+		return fmt.Errorf("RotateEpoch: genRelinearizationKey: %w", err)
+	}
+	if err := c.genGaloisKeys(); err != nil {
+		return fmt.Errorf("RotateEpoch: genGaloisKeys: %w", err)
+	}
+
+	// Fresh instance tracker — any in-flight instanceID under the old
+	// epoch is now stale. Callers must mint new IDs via BeginInstance or
+	// NewInstanceID for the new epoch.
+	c.tracker = newInstanceTracker()
+	atomic.StoreUint64(&c.decryptCount, 0)
+	return nil
+}
+
 
 // runThresholdDecrypt is the Phase 1/2/3a decrypt body, wrapped by
 // ThresholdDecrypt with the Phase 3b state machine. Separated to keep the

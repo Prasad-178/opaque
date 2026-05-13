@@ -99,10 +99,14 @@ Opaque ships with **all of these mitigations live by default in the public API**
 malicious-server — active tampering / reorder / drop / replay is not detected
 today. See `SECURITY_MODEL.md` §6 for the full competitor comparison.
 
-**Pending** (see `SECURITY_MODEL.md` §8 for the live list):
-- Ephemeral key rotation for τ-bounded composition
+**Pending** (see `SECURITY_MODEL.md` §8 for the live list): no named attack-
+surface items remain in the HBC threat model.
 
 **Recently closed**:
+- ✅ Ephemeral key rotation for τ-bounded composition (shipped May 13) —
+  `Engine.RotateKeys()` / `Committee.RotateEpoch()` + `DecryptCount()` +
+  `SetRotationLimit(tau)` + `ShouldRotate()`. Opt-in (default τ=0).
+  Caller picks cadence; recommended τ=2^20 per Bergamaschi PKC 2025.
 - ✅ No-retry invariant + fresh CRS per MHE protocol instance (Phases 2+3a
   shipped May 10; Phases 3b coordinator state machine + 3c chaos suite
   shipped May 13) — closes Mouchet'24 / Okada'25 / Colin de Verdière 2026

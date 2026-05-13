@@ -124,10 +124,16 @@ key epoch.
 In practice this is enforced by:
 - **DecodePublic(logprec=10)** rounding away the residual noise that the
   attack uses (independent of τ);
-- **Planned key rotation** (roadmap item) to bound τ explicitly.
-
-Without explicit key rotation, a long-running deployment with many queries
-under the same key will slowly accumulate the attack surface.
+- **Ephemeral key rotation** (shipped 2026-05-13). Both
+  `pkg/crypto.Engine` (direct mode) and
+  `pkg/crypto/threshold.Committee` (threshold mode) track decrypt counts
+  via `DecryptCount()`, expose a `SetRotationLimit(tau)` gate that
+  drives `ShouldRotate()`, and offer `RotateKeys()` /
+  `RotateEpoch()` to mint fresh keys + reset the counter. Default τ=0
+  (gate disabled); recommended τ=2^20 per Bergamaschi PKC 2025.
+  Rotation is opt-in and caller-paced — typical patterns are:
+  1. Poll `ShouldRotate()` between queries and rotate when it fires; or
+  2. Rotate on a wall-clock schedule (e.g., daily).
 
 ## 5. Access-Pattern Privacy: Statistical, Not Cryptographic
 
@@ -340,7 +346,7 @@ hidden hardware effects).
 | DP-grounded decoy mechanism with tunable ε | **Done (commit `990e2be`)** | — |
 | DP formalization writeup in security model doc | **Done (this commit)** | — |
 | No-retry invariant + fresh CRS per MHE protocol instance | Planned | High (Mouchet'24 / Colin de Verdière 2026) |
-| Ephemeral-key rotation policy with bounded τ | Planned | Medium |
+| Ephemeral-key rotation policy with bounded τ | **Done 2026-05-13** — `Engine.RotateKeys()` / `Committee.RotateEpoch()` + `DecryptCount()` + `SetRotationLimit(tau)` + `ShouldRotate()`. Caller-paced, default off. | Medium |
 | Bernoulli per-cluster decoy sampling for tight (ε,δ)-DP | **Done** (commit landing now — `Config.BernoulliDecoys` flag, off by default) | Low |
 | PIR backend as opt-in alternative to decoys | Deferred (statistical hiding + permutation + padding + tunable ε deemed sufficient for HBC; PIR remains research direction for Compass-tier malicious-server deployments) | Low |
 | Pin Lattigo to v6.x line for security patches | Deferred (v6 is breaking; v5 doesn't bootstrap during search) | Low |
