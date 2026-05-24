@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -124,6 +125,21 @@ func (s *inProcessGPUServer) HealthCheck(_ context.Context, _ *pb.GPUHealthCheck
 	}, nil
 }
 
+// skipUnlessRealGPUServer skips BatchDotProduct path tests by default.
+// The in-process stub is intentionally minimal (no InitContext, no HEonGPU
+// NTT-root negotiation, no HEonGPU eval-key format). It exercises only the
+// local-pool encrypt/decrypt surface. To run these tests, set OPAQUE_RUN_GPU=1
+// against a process that does serve InitContext + the new BatchDotProduct
+// proto, and update startTestServer to either dial that process or implement
+// the missing RPCs in the stub.
+func skipUnlessRealGPUServer(t *testing.T) {
+	t.Helper()
+	if os.Getenv("OPAQUE_RUN_GPU") == "1" {
+		return
+	}
+	t.Skip("OPAQUE_RUN_GPU not set; in-process stub does not implement InitContext")
+}
+
 // startTestServer starts an in-process GPU stub server and returns the address.
 func startTestServer(t *testing.T) string {
 	t.Helper()
@@ -182,6 +198,9 @@ func TestGPUProvider_EncryptDecrypt(t *testing.T) {
 }
 
 func TestGPUProvider_BatchDotProduct(t *testing.T) {
+	// The in-process stub doesn't implement InitContext / HEonGPU NTT
+	// conversion. Run only against a real HEonGPU server.
+	skipUnlessRealGPUServer(t)
 	addr := startTestServer(t)
 
 	provider, err := NewGPUHEProvider(GPUHEProviderConfig{
@@ -264,6 +283,7 @@ func TestGPUProvider_BatchDotProduct(t *testing.T) {
 
 func TestGPUProvider_MatchesDirect(t *testing.T) {
 	// Verify GPU provider gives same results as DirectHEProvider.
+	skipUnlessRealGPUServer(t)
 	addr := startTestServer(t)
 
 	gpuProvider, err := NewGPUHEProvider(GPUHEProviderConfig{
