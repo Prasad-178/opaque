@@ -242,8 +242,8 @@ func TestSIFT1MScaling(t *testing.T) {
 
 	// Production-realistic config
 	numClusters := 128
-	topClusters := 8  // 6.2% probe — realistic
-	numDecoys := 8    // production decoy count
+	topClusters := 8 // 6.2% probe — realistic
+	numDecoys := 8   // production decoy count
 	numQueries := 20
 	topK := 10
 	sizes := []int{100000, 500000, 1000000}

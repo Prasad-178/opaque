@@ -810,13 +810,13 @@ func TestE2E(t *testing.T) {
 		var errMu sync.Mutex
 
 		db, err := NewDB(Config{
-			Dimension:        dim,
-			NumClusters:      clusters,
-			TopClusters:      4,
-			NumDecoys:        2,
-			WorkerPoolSize:   2,
-			AutoIndexEnabled: true,
-			AutoIndexInterval: 500 * time.Millisecond,
+			Dimension:           dim,
+			NumClusters:         clusters,
+			TopClusters:         4,
+			NumDecoys:           2,
+			WorkerPoolSize:      2,
+			AutoIndexEnabled:    true,
+			AutoIndexInterval:   500 * time.Millisecond,
 			AutoIndexMinChanges: 1,
 			OnAutoIndexError: func(err error) {
 				errMu.Lock()

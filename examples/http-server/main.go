@@ -66,9 +66,9 @@ type addRequest struct {
 }
 
 type vectorEntry struct {
-	ID       string            `json:"id"`
-	Values   []float64         `json:"values"`
-	Metadata map[string]any    `json:"metadata,omitempty"`
+	ID       string         `json:"id"`
+	Values   []float64      `json:"values"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 type searchRequest struct {

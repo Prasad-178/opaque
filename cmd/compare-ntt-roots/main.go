@@ -67,7 +67,7 @@ func main() {
 // Find smallest primitive root g of Z/pZ*, compute psi = g^((p-1)/(2N)) mod p.
 func computeHEonGPURoot(p, N uint64) uint64 {
 	pBig := new(big.Int).SetUint64(p)
-	pm1 := new(big.Int).Sub(pBig, big.NewInt(1)) // p-1
+	pm1 := new(big.Int).Sub(pBig, big.NewInt(1))              // p-1
 	exp := new(big.Int).Div(pm1, new(big.Int).SetUint64(2*N)) // (p-1)/(2N)
 
 	// Find smallest primitive root of Z/pZ*

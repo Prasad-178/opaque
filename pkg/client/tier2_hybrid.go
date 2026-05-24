@@ -168,17 +168,17 @@ type HybridSearchResult struct {
 	Results []Result
 
 	// Timing breakdown
-	LSHTime       time.Duration
-	FetchTime     time.Duration
-	DecryptTime   time.Duration
-	CoarseTime    time.Duration // Time for initial scoring (plaintext)
-	HEScoreTime   time.Duration // Time for HE scoring (if enabled)
-	TotalTime     time.Duration
+	LSHTime     time.Duration
+	FetchTime   time.Duration
+	DecryptTime time.Duration
+	CoarseTime  time.Duration // Time for initial scoring (plaintext)
+	HEScoreTime time.Duration // Time for HE scoring (if enabled)
+	TotalTime   time.Duration
 
 	// Stats
-	BlobsFetched    int
+	BlobsFetched     int
 	CoarseCandidates int
-	HEOperations    int
+	HEOperations     int
 }
 
 // Search performs hybrid search with configurable privacy levels.

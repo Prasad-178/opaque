@@ -19,9 +19,9 @@ import (
 // PrivacyConfig holds privacy-related configuration.
 type PrivacyConfig struct {
 	// Timing obfuscation
-	MinLatency   time.Duration // Minimum response time (pad short queries)
-	MaxLatency   time.Duration // Maximum latency cap
-	JitterRange  time.Duration // Random jitter added to responses
+	MinLatency  time.Duration // Minimum response time (pad short queries)
+	MaxLatency  time.Duration // Maximum latency cap
+	JitterRange time.Duration // Random jitter added to responses
 
 	// Query obfuscation
 	DecoyBuckets int  // Number of random buckets to fetch
@@ -207,8 +207,8 @@ func shuffleSlice[T any](slice []T) {
 
 // PrivacyMetrics tracks privacy-related statistics.
 type PrivacyMetrics struct {
-	TotalQueries       int64
-	DummyQueries       int64
+	TotalQueries        int64
+	DummyQueries        int64
 	DecoyBucketsFetched int64
 	AvgObfuscationDelay time.Duration
 

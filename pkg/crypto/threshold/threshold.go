@@ -467,7 +467,6 @@ func (c *Committee) RotateEpoch() error {
 	return nil
 }
 
-
 // runThresholdDecrypt is the Phase 1/2/3a decrypt body, wrapped by
 // ThresholdDecrypt with the Phase 3b state machine. Separated to keep the
 // state-machine bookkeeping out of the cryptographic hot path.
@@ -728,9 +727,9 @@ func (c *Committee) genRelinearizationKey() error {
 
 	// Allocate shares and ephemeral keys for each participant.
 	type rkgState struct {
-		ephSK      *rlwe.SecretKey
-		round1     mhe.RelinearizationKeyGenShare
-		round2     mhe.RelinearizationKeyGenShare
+		ephSK  *rlwe.SecretKey
+		round1 mhe.RelinearizationKeyGenShare
+		round2 mhe.RelinearizationKeyGenShare
 	}
 	states := make([]rkgState, c.N)
 	roundCRS, err := derivePerRoundCRS(c.epochSeed, "relin")

@@ -144,15 +144,15 @@ type Config struct {
 // With 64 super-buckets and no sub-buckets: ~1562 vectors per bucket.
 func DefaultConfig() Config {
 	return Config{
-		Dimension:          128,
-		NumSuperBuckets:    64,  // 2^6, for HE scoring (64 HE ops)
-		NumSubBuckets:      1,   // No sub-buckets = ~1562 vectors per bucket for 100K
-		TopSuperBuckets:    32,  // Select top 32 after HE (gives ~90%+ recall)
-		SubBucketsPerSuper: 1,   // Just the primary bucket
-		NumDecoys:            8,   // 8 decoy buckets for privacy
+		Dimension:            128,
+		NumSuperBuckets:      64,   // 2^6, for HE scoring (64 HE ops)
+		NumSubBuckets:        1,    // No sub-buckets = ~1562 vectors per bucket for 100K
+		TopSuperBuckets:      32,   // Select top 32 after HE (gives ~90%+ recall)
+		SubBucketsPerSuper:   1,    // Just the primary bucket
+		NumDecoys:            8,    // 8 decoy buckets for privacy
 		ProbeThreshold:       0.95, // Include clusters within 5% of Kth score
-		MaxProbeClusters:     48,  // Allow up to 48 clusters with multi-probe
-		RedundantAssignments: 1,   // Single assignment (no redundancy)
+		MaxProbeClusters:     48,   // Allow up to 48 clusters with multi-probe
+		RedundantAssignments: 1,    // Single assignment (no redundancy)
 		LSHSuperSeed:         42,
 		LSHSubSeed:           137, // Different seed (unused with NumSubBuckets=1)
 	}
@@ -162,15 +162,15 @@ func DefaultConfig() Config {
 // Fewer, larger buckets = better k-anonymity.
 func HighPrivacyConfig() Config {
 	return Config{
-		Dimension:          128,
-		NumSuperBuckets:    32,  // Fewer buckets = ~3125 vectors per bucket for 100K
-		NumSubBuckets:      1,   // No sub-buckets
-		TopSuperBuckets:    16,  // Select top 16 after HE (~80% recall)
-		SubBucketsPerSuper: 1,   // Just the primary bucket
-		NumDecoys:            12,  // More decoys
+		Dimension:            128,
+		NumSuperBuckets:      32,   // Fewer buckets = ~3125 vectors per bucket for 100K
+		NumSubBuckets:        1,    // No sub-buckets
+		TopSuperBuckets:      16,   // Select top 16 after HE (~80% recall)
+		SubBucketsPerSuper:   1,    // Just the primary bucket
+		NumDecoys:            12,   // More decoys
 		ProbeThreshold:       0.98, // Stricter threshold for privacy
-		MaxProbeClusters:     24,  // Limit probe clusters for privacy
-		RedundantAssignments: 1,   // Single assignment (no redundancy for privacy)
+		MaxProbeClusters:     24,   // Limit probe clusters for privacy
+		RedundantAssignments: 1,    // Single assignment (no redundancy for privacy)
 		LSHSuperSeed:         42,
 		LSHSubSeed:           137,
 	}
@@ -180,15 +180,15 @@ func HighPrivacyConfig() Config {
 // Uses more clusters for higher coverage.
 func HighRecallConfig() Config {
 	return Config{
-		Dimension:          128,
-		NumSuperBuckets:    64,  // 64 HE ops
-		NumSubBuckets:      1,   // No sub-buckets
-		TopSuperBuckets:    48,  // Select 48/64 = 75% of clusters (~96% recall)
-		SubBucketsPerSuper: 1,   // Just the primary bucket
-		NumDecoys:            8,   // 8 decoy buckets
+		Dimension:            128,
+		NumSuperBuckets:      64,   // 64 HE ops
+		NumSubBuckets:        1,    // No sub-buckets
+		TopSuperBuckets:      48,   // Select 48/64 = 75% of clusters (~96% recall)
+		SubBucketsPerSuper:   1,    // Just the primary bucket
+		NumDecoys:            8,    // 8 decoy buckets
 		ProbeThreshold:       0.90, // More aggressive probing
-		MaxProbeClusters:     56,  // Allow up to 56 clusters (87.5% coverage)
-		RedundantAssignments: 2,   // Assign to 2 clusters for better recall
+		MaxProbeClusters:     56,   // Allow up to 56 clusters (87.5% coverage)
+		RedundantAssignments: 2,    // Assign to 2 clusters for better recall
 		LSHSuperSeed:         42,
 		LSHSubSeed:           137,
 	}
@@ -202,7 +202,7 @@ func HighRecallConfig() Config {
 // S of size K_real + K_decoy cannot distinguish "real cluster is c" from
 // "real cluster is c' ∈ S" with probability ratio greater than
 //
-//   (N - K_real) / K_decoy
+//	(N - K_real) / K_decoy
 //
 // where N is the total number of super-buckets. Setting this ratio ≤ e^ε
 // gives K_decoy ≥ (N - K_real) · e^(-ε), rounded up.
@@ -363,23 +363,23 @@ type ClusterDiagnostics struct {
 	GTClusterSelected bool    // Was the #1 GT vector's cluster selected?
 
 	// HE vs Plaintext comparison
-	PlaintextTopK    []int   // Clusters that plaintext scoring would select
-	HETopK           []int   // Clusters that HE scoring actually selected
-	SelectionMatch   int     // How many clusters match between HE and plaintext
-	SelectionDivergence int  // How many clusters differ
+	PlaintextTopK       []int // Clusters that plaintext scoring would select
+	HETopK              []int // Clusters that HE scoring actually selected
+	SelectionMatch      int   // How many clusters match between HE and plaintext
+	SelectionDivergence int   // How many clusters differ
 
 	// Per-cluster scores (for debugging)
-	ClusterScoresHE       []float64 // HE-decrypted scores for each cluster
-	ClusterScoresPlain    []float64 // Plaintext scores for each cluster
+	ClusterScoresHE    []float64 // HE-decrypted scores for each cluster
+	ClusterScoresPlain []float64 // Plaintext scores for each cluster
 }
 
 // IndexStats provides statistics about the index.
 type IndexStats struct {
-	TotalVectors      int
-	NumSuperBuckets   int
-	NumSubBuckets     int // Total across all super-buckets
-	AvgVectorsPerSub  float64
-	MinVectorsPerSub  int
-	MaxVectorsPerSub  int
-	EmptySubBuckets   int
+	TotalVectors     int
+	NumSuperBuckets  int
+	NumSubBuckets    int // Total across all super-buckets
+	AvgVectorsPerSub float64
+	MinVectorsPerSub int
+	MaxVectorsPerSub int
+	EmptySubBuckets  int
 }

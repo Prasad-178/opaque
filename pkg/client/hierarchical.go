@@ -190,9 +190,9 @@ func (c *HierarchicalClient) Search(ctx context.Context, query []float64, topK i
 	// Decrypt all vectors
 	startAES := time.Now()
 	type decryptedVec struct {
-		id       string // Original ID (without _dupN suffix)
-		blobID   string // Blob ID (may have _dupN suffix)
-		vector   []float64
+		id     string // Original ID (without _dupN suffix)
+		blobID string // Blob ID (may have _dupN suffix)
+		vector []float64
 	}
 	decrypted := make([]decryptedVec, 0, len(blobs))
 

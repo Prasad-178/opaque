@@ -234,7 +234,7 @@ func TestMultiProbeSearch(t *testing.T) {
 	rand.Seed(789)
 
 	for i := 0; i < n; i++ {
-		ids[i] = string(rune('A' + i%26)) + string(rune('0'+i/26))
+		ids[i] = string(rune('A'+i%26)) + string(rune('0'+i/26))
 		vectors[i] = make([]float64, 128)
 		for j := 0; j < 128; j++ {
 			vectors[i][j] = rand.NormFloat64()

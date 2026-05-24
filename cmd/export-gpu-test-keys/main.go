@@ -5,9 +5,10 @@
 // encrypt and decrypt with the SAME secret key that generated the Galois keys.
 //
 // Outputs:
-//   galois_keys.bin — Galois keys in HEonGPU format (NTT-domain converted)
-//   secret_key.bin  — Raw secret key coefficients (for testing only)
-//   public_key.bin  — Raw public key coefficients
+//
+//	galois_keys.bin — Galois keys in HEonGPU format (NTT-domain converted)
+//	secret_key.bin  — Raw secret key coefficients (for testing only)
+//	public_key.bin  — Raw public key coefficients
 package main
 
 import (
@@ -109,7 +110,10 @@ func main() {
 	fmt.Printf("\nSecret key levels: Q=%d P=%d\n", qLevels, pLevels)
 }
 
-func galoisElements(params interface{ LogN() int; GaloisElement(int) uint64 }) []uint64 {
+func galoisElements(params interface {
+	LogN() int
+	GaloisElement(int) uint64
+}) []uint64 {
 	logN := params.LogN()
 	elements := make([]uint64, logN)
 	for i := 0; i < logN; i++ {

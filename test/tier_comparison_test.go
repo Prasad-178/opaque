@@ -86,16 +86,16 @@ func TestTier1VsTier2Comparison(t *testing.T) {
 }
 
 type benchmarkResults struct {
-	name              string
-	indexBuildTime    time.Duration
-	avgQueryTime      time.Duration
-	minQueryTime      time.Duration
-	maxQueryTime      time.Duration
-	recall            float64
-	memoryUsed        uint64
-	privacyFeatures   []string
-	serverSees        []string
-	serverDoesNotSee  []string
+	name             string
+	indexBuildTime   time.Duration
+	avgQueryTime     time.Duration
+	minQueryTime     time.Duration
+	maxQueryTime     time.Duration
+	recall           float64
+	memoryUsed       uint64
+	privacyFeatures  []string
+	serverSees       []string
+	serverDoesNotSee []string
 }
 
 func benchmarkTier1(ctx context.Context, vectors [][]float64, ids []string, queries [][]float64, targets []int, dimension, topK int) benchmarkResults {

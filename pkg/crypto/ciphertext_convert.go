@@ -4,8 +4,9 @@
 // HEonGPU stores ciphertexts in standard-NTT domain (different NTT roots, no Montgomery).
 //
 // The conversion reuses the NTTConverter for the heavy lifting:
-//   Lattigo → HEonGPU: INTT_L → remove Montgomery → NTT_H
-//   HEonGPU → Lattigo: INTT_H → add Montgomery → NTT_L
+//
+//	Lattigo → HEonGPU: INTT_L → remove Montgomery → NTT_H
+//	HEonGPU → Lattigo: INTT_H → add Montgomery → NTT_L
 //
 // Privacy: ciphertexts are encrypted data. Converting between formats
 // does not decrypt or reveal any information about the plaintext.

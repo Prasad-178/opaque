@@ -2,7 +2,8 @@
 // and exports Galois keys converted to the server's NTT domain.
 //
 // Usage:
-//   go run ./cmd/export-gpu-keys-with-roots/ -server localhost:50052 -out galois_keys.bin
+//
+//	go run ./cmd/export-gpu-keys-with-roots/ -server localhost:50052 -out galois_keys.bin
 package main
 
 import (
@@ -111,7 +112,10 @@ func main() {
 	log.Printf("Written to: %s", *outPath)
 }
 
-func galoisElements(params interface{ LogN() int; GaloisElement(int) uint64 }) []uint64 {
+func galoisElements(params interface {
+	LogN() int
+	GaloisElement(int) uint64
+}) []uint64 {
 	logN := params.LogN()
 	elements := make([]uint64, logN)
 	for i := 0; i < logN; i++ {

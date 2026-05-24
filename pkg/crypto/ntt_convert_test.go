@@ -294,7 +294,7 @@ func TestNTTConversion_RoundTrip(t *testing.T) {
 		// Create test data
 		data := make([]uint64, N)
 		for i := range data {
-			data[i] = uint64(i + 1) % p
+			data[i] = uint64(i+1) % p
 		}
 		original := make([]uint64, N)
 		copy(original, data)

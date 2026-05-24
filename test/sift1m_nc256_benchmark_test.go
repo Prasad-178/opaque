@@ -20,8 +20,9 @@ import (
 // fetch + local-scoring time, possibly winning latency at equal recall.
 //
 // TopClusters values are scaled 2x relative to NC=128 to keep coverage % equal.
-//   NC=128 probe-8 (6.25%)  ↔  NC=256 probe-16 (6.25%)
-//   NC=128 probe-16 (12.5%) ↔  NC=256 probe-32 (12.5%)
+//
+//	NC=128 probe-8 (6.25%)  ↔  NC=256 probe-16 (6.25%)
+//	NC=128 probe-16 (12.5%) ↔  NC=256 probe-32 (12.5%)
 func TestSIFT1MAccuracy_NC256(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping SIFT1M NC=256 benchmark in short mode")
@@ -62,11 +63,11 @@ func TestSIFT1MAccuracy_NC256(t *testing.T) {
 		topClusters int
 		probeThresh float64
 	}{
-		{"strict-8", 8, 1.0},     // 3.1% — mirrors NC=128 strict-4
-		{"strict-16", 16, 1.0},   // 6.2% — mirrors NC=128 strict-8
-		{"strict-32", 32, 1.0},   // 12.5% — mirrors NC=128 strict-16
-		{"probe-16", 16, 0.95},   // 6.2%+ — mirrors NC=128 probe-8 (HEADLINE comparison)
-		{"probe-32", 32, 0.95},   // 12.5%+ — mirrors NC=128 probe-16
+		{"strict-8", 8, 1.0},   // 3.1% — mirrors NC=128 strict-4
+		{"strict-16", 16, 1.0}, // 6.2% — mirrors NC=128 strict-8
+		{"strict-32", 32, 1.0}, // 12.5% — mirrors NC=128 strict-16
+		{"probe-16", 16, 0.95}, // 6.2%+ — mirrors NC=128 probe-8 (HEADLINE comparison)
+		{"probe-32", 32, 0.95}, // 12.5%+ — mirrors NC=128 probe-16
 	}
 
 	t.Log("")

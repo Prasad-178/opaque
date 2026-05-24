@@ -3,12 +3,13 @@
 // where the bridged ciphertext diverges.
 //
 // Outputs (all under /tmp by default, override with -out):
-//   bridge_sk.bin       — secret key in HEonGPU NTT domain (Go-converted)
-//   bridge_galois.bin   — Galois keys in HEonGPU binary format
-//   bridge_test.bin     — packed tests: query vector, plaintext centroids,
-//                         Lattigo-encrypted c0/c1 (coefficient domain),
-//                         Lattigo-encoded plaintext polynomial (coefficient
-//                         domain), and the expected batched dot-product scores.
+//
+//	bridge_sk.bin       — secret key in HEonGPU NTT domain (Go-converted)
+//	bridge_galois.bin   — Galois keys in HEonGPU binary format
+//	bridge_test.bin     — packed tests: query vector, plaintext centroids,
+//	                      Lattigo-encrypted c0/c1 (coefficient domain),
+//	                      Lattigo-encoded plaintext polynomial (coefficient
+//	                      domain), and the expected batched dot-product scores.
 //
 // The secret key export is for diagnostic use only; in production the secret
 // key never leaves the client.

@@ -188,12 +188,12 @@ type LoginRequest struct {
 }
 
 type LoginResponse struct {
-	Token      string      `json:"token"`
-	ExpiresAt  time.Time   `json:"expires_at"`
-	AESKey     string      `json:"aes_key"`      // Base64
-	Centroids  [][]float64 `json:"centroids"`
-	Dimension  int         `json:"dimension"`
-	NumClusters int        `json:"num_clusters"`
+	Token       string      `json:"token"`
+	ExpiresAt   time.Time   `json:"expires_at"`
+	AESKey      string      `json:"aes_key"` // Base64
+	Centroids   [][]float64 `json:"centroids"`
+	Dimension   int         `json:"dimension"`
+	NumClusters int         `json:"num_clusters"`
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {

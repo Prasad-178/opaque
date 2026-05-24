@@ -30,11 +30,11 @@ func main() {
 	// For larger datasets, increase NumClusters for faster search
 	// and WorkerPoolSize for parallel decryption.
 	db, err := opaque.NewDB(opaque.Config{
-		Dimension:   dim,
-		NumClusters: 64, // More clusters = faster search, fewer vectors per cluster
-		TopClusters: 8,  // Probe 8 of 64 clusters (~12.5% of data)
-		NumDecoys:   4,  // Privacy: fetch 4 extra random clusters as cover traffic
-		WorkerPoolSize: 4, // Parallel AES decryption
+		Dimension:      dim,
+		NumClusters:    64, // More clusters = faster search, fewer vectors per cluster
+		TopClusters:    8,  // Probe 8 of 64 clusters (~12.5% of data)
+		NumDecoys:      4,  // Privacy: fetch 4 extra random clusters as cover traffic
+		WorkerPoolSize: 4,  // Parallel AES decryption
 	})
 	if err != nil {
 		log.Fatal(err)

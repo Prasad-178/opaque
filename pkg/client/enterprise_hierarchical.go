@@ -1,13 +1,13 @@
 package client
 
 import (
+	"container/heap"
 	"context"
 	"crypto/rand"
 	"fmt"
 	"math"
 	"math/big"
 	"runtime"
-	"container/heap"
 	"strings"
 	"sync"
 	"time"
@@ -43,7 +43,7 @@ type EnterpriseHierarchicalClient struct {
 	credentials *auth.ClientCredentials
 
 	// Derived from credentials
-	encryptor *encrypt.AESGCM
+	encryptor  *encrypt.AESGCM
 	heProvider crypto.HEProvider // Pluggable HE backend (direct or threshold)
 
 	// Centroid cache for faster HE operations
@@ -616,9 +616,9 @@ func (c *EnterpriseHierarchicalClient) pqAcceleratedScoring(
 	adcTable := c.pqModel.BuildADCTable(normalizedQuery)
 
 	type pqScoredBlob struct {
-		id       string
-		blobIdx  int // index into realBlobs for full vector re-rank
-		score    float64
+		id      string
+		blobIdx int // index into realBlobs for full vector re-rank
+		score   float64
 	}
 
 	// Parallel PQ code decryption and ADC scoring.
@@ -857,9 +857,9 @@ type scoredItem struct {
 type minScoreHeap []scoredItem
 
 func (h minScoreHeap) Len() int            { return len(h) }
-func (h minScoreHeap) Less(i, j int) bool   { return h[i].score < h[j].score } // min-heap
-func (h minScoreHeap) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
-func (h *minScoreHeap) Push(x interface{})  { *h = append(*h, x.(scoredItem)) }
+func (h minScoreHeap) Less(i, j int) bool  { return h[i].score < h[j].score } // min-heap
+func (h minScoreHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *minScoreHeap) Push(x interface{}) { *h = append(*h, x.(scoredItem)) }
 func (h *minScoreHeap) Pop() interface{} {
 	old := *h
 	n := len(old)

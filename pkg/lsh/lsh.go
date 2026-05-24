@@ -17,8 +17,8 @@ import (
 
 // Index is a locality-sensitive hash index using random hyperplanes.
 type Index struct {
-	planes    [][]float64         // Random hyperplanes for hashing
-	buckets   map[uint64][]string // Hash -> document IDs
+	planes    [][]float64          // Random hyperplanes for hashing
+	buckets   map[uint64][]string  // Hash -> document IDs
 	vectors   map[string][]float64 // ID -> vector (for optional re-ranking)
 	numBits   int
 	dimension int

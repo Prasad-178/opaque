@@ -81,7 +81,10 @@ func main() {
 	}
 }
 
-func galoisElements(params interface{ LogN() int; GaloisElement(int) uint64 }) []uint64 {
+func galoisElements(params interface {
+	LogN() int
+	GaloisElement(int) uint64
+}) []uint64 {
 	logN := params.LogN()
 	elements := make([]uint64, logN)
 	for i := 0; i < logN; i++ {

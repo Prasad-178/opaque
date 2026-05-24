@@ -104,10 +104,10 @@ func TestGPU_E2E_SIFT100K(t *testing.T) {
 	var results []benchResult
 
 	configs := []struct {
-		name           string
-		topClusters    int
-		probeThresh    float64
-		gpuServer      string
+		name        string
+		topClusters int
+		probeThresh float64
+		gpuServer   string
 	}{
 		// CPU baseline
 		{"cpu-strict8", 8, 1.0, ""},

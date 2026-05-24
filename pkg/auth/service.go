@@ -139,8 +139,8 @@ func (s *Service) Authenticate(ctx context.Context, userID string, password []by
 	)
 
 	return &ClientCredentials{
-		Token:           tokenID,
-		TokenExpiry:     token.ExpiresAt,
+		Token:             tokenID,
+		TokenExpiry:       token.ExpiresAt,
 		AESKey:            enterpriseCfg.AESKey,
 		LSHHyperplanes:    hyperplanes,
 		Centroids:         enterpriseCfg.Centroids,

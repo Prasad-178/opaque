@@ -46,7 +46,7 @@ type GPUHEProviderConfig struct {
 // GPUHEProvider implements HEProvider by offloading batch HE operations to a GPU server.
 // Encryption, decryption, and key management remain local.
 type GPUHEProvider struct {
-	localPool *EnginePool   // For encrypt/decrypt (local, has secret key)
+	localPool *EnginePool // For encrypt/decrypt (local, has secret key)
 	conn      *grpc.ClientConn
 	client    pb.GPUHEServiceClient
 	sessionID string
@@ -190,10 +190,10 @@ func (p *GPUHEProvider) RegisterEvalKeys() error {
 	defer regCancel()
 
 	resp, err := p.client.RegisterEvalKeys(regCtx, &pb.RegisterEvalKeysRequest{
-		SessionId:             p.sessionID,
-		Params:                ckksParams,
-		GaloisElements:        galoisElems,
-		GaloisKeysHeongpu:     galoisKeysHEonGPU,
+		SessionId:         p.sessionID,
+		Params:            ckksParams,
+		GaloisElements:    galoisElems,
+		GaloisKeysHeongpu: galoisKeysHEonGPU,
 	})
 	if err != nil {
 		return fmt.Errorf("RegisterEvalKeys RPC failed: %w", err)

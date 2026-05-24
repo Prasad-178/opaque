@@ -91,12 +91,12 @@ func TestRecoveryUnaryInterceptor_HandlerError(t *testing.T) {
 
 type fakeStream struct{ ctx context.Context }
 
-func (f *fakeStream) SetHeader(_ any) error          { return nil }
-func (f *fakeStream) SendHeader(_ any) error         { return nil }
-func (f *fakeStream) SetTrailer(_ any)               {}
-func (f *fakeStream) Context() context.Context       { return f.ctx }
-func (f *fakeStream) SendMsg(_ any) error            { return nil }
-func (f *fakeStream) RecvMsg(_ any) error            { return io.EOF }
+func (f *fakeStream) SetHeader(_ any) error    { return nil }
+func (f *fakeStream) SendHeader(_ any) error   { return nil }
+func (f *fakeStream) SetTrailer(_ any)         {}
+func (f *fakeStream) Context() context.Context { return f.ctx }
+func (f *fakeStream) SendMsg(_ any) error      { return nil }
+func (f *fakeStream) RecvMsg(_ any) error      { return io.EOF }
 
 // satisfy grpc.ServerStream
 func (f *fakeStream) SetHeaderMD(md any) error { return nil }
@@ -175,13 +175,13 @@ func writeTestCert(t *testing.T, dir string) (certPath, keyPath string) {
 		t.Fatalf("genkey: %v", err)
 	}
 	tmpl := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IsCA:         true,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IsCA:                  true,
 		BasicConstraintsValid: true,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)

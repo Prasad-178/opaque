@@ -129,9 +129,9 @@ func inspectParams(params hefloat.Parameters, err error) {
 		len(galoisElems), float64(totalUint64*8*len(galoisElems))/(1024*1024))
 
 	// HEonGPU comparison values
-	Q_size := params.MaxLevelQ() + 1        // number of Q primes
+	Q_size := params.MaxLevelQ() + 1                // number of Q primes
 	Q_prime_size := Q_size + params.MaxLevelP() + 1 // Q + P primes
-	d := Q_size // RNS decomposition (one per Q prime, standard approach)
+	d := Q_size                                     // RNS decomposition (one per Q prime, standard approach)
 	galoiskey_size_heongpu := 2 * d * Q_prime_size * (1 << params.LogN())
 
 	fmt.Printf("\n=== HEonGPU Expected Layout (estimated) ===\n")

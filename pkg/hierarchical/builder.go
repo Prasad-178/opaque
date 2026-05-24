@@ -18,8 +18,8 @@ type Builder struct {
 	encryptor *encrypt.AESGCM
 
 	// Building state
-	superBuckets []*SuperBucket
-	vectorLocs   map[string]*VectorLocation
+	superBuckets    []*SuperBucket
+	vectorLocs      map[string]*VectorLocation
 	subBucketCounts map[string]int // bucketKey -> vector count
 }
 

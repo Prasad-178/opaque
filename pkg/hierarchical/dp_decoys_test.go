@@ -60,8 +60,8 @@ func TestResolveDecoyCount_TargetEpsilonOverrides(t *testing.T) {
 	cfg := Config{
 		NumSuperBuckets: 128,
 		TopSuperBuckets: 8,
-		NumDecoys:       8,    // would be used if TargetEpsilon == 0
-		TargetEpsilon:   2.0,  // overrides → ~17
+		NumDecoys:       8,   // would be used if TargetEpsilon == 0
+		TargetEpsilon:   2.0, // overrides → ~17
 	}
 	got := ResolveDecoyCount(cfg)
 	if got < 16 || got > 18 {

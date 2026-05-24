@@ -101,9 +101,9 @@ func (idx *Index) GetVectorCount() int {
 // GetStats returns statistics about the index.
 func (idx *Index) GetStats() IndexStats {
 	stats := IndexStats{
-		TotalVectors:    len(idx.VectorLocations),
-		NumSuperBuckets: idx.Config.NumSuperBuckets,
-		NumSubBuckets:   len(idx.SubBucketCounts),
+		TotalVectors:     len(idx.VectorLocations),
+		NumSuperBuckets:  idx.Config.NumSuperBuckets,
+		NumSubBuckets:    len(idx.SubBucketCounts),
 		MinVectorsPerSub: -1,
 		MaxVectorsPerSub: 0,
 	}

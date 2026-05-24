@@ -299,7 +299,7 @@ func profileHESubPhases(t *testing.T, dim int, trainingVectors [][]float64) {
 	t.Log("")
 
 	// GPU projection.
-	gpuMul := avgMul / 30     // Conservative 30x for NTT
+	gpuMul := avgMul / 30 // Conservative 30x for NTT
 	gpuRescale := avgRescale / 8
 	gpuRotate := avgRotate / 15
 	gpuAdd := avgAdd / 2

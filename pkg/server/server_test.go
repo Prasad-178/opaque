@@ -168,7 +168,7 @@ func TestHandleRefresh_Success(t *testing.T) {
 
 	authCfg := auth.DefaultServiceConfig()
 	authCfg.TokenTTL = 10 * time.Minute      // Short TTL
-	authCfg.RefreshWindow = 15 * time.Minute  // Window > TTL means always refreshable
+	authCfg.RefreshWindow = 15 * time.Minute // Window > TTL means always refreshable
 	authSvc := auth.NewService(authCfg, entStore)
 	authSvc.RegisterUser(ctx, testUserID, testEnterpriseID, []byte(testPassword), []string{auth.ScopeSearch})
 

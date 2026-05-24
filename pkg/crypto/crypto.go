@@ -85,10 +85,10 @@ type Engine struct {
 // Older 8-prime chain was over-provisioned for our shallow circuits.
 func NewParameters() (hefloat.Parameters, error) {
 	params, err := hefloat.NewParametersFromLiteral(hefloat.ParametersLiteral{
-		LogN:            14,                         // Ring degree 2^14 = 16384
-		LogQ:            []int{60, 60, 60, 60, 60},  // Ciphertext modulus chain (300 bits)
-		LogP:            []int{61, 61},              // Special primes for key-switching
-		LogDefaultScale: 60,                         // Scale for encoding (2^60)
+		LogN:            14,                        // Ring degree 2^14 = 16384
+		LogQ:            []int{60, 60, 60, 60, 60}, // Ciphertext modulus chain (300 bits)
+		LogP:            []int{61, 61},             // Special primes for key-switching
+		LogDefaultScale: 60,                        // Scale for encoding (2^60)
 	})
 	if err != nil {
 		return hefloat.Parameters{}, fmt.Errorf("failed to create CKKS parameters: %w", err)

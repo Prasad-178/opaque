@@ -7,8 +7,8 @@ import (
 	"log"
 	"math"
 
-	"github.com/Prasad-178/opaque/pkg/crypto"
 	pb "github.com/Prasad-178/opaque/api/proto/gpuhe"
+	"github.com/Prasad-178/opaque/pkg/crypto"
 	"github.com/tuneinsight/lattigo/v5/he/hefloat"
 )
 
@@ -32,7 +32,7 @@ func main() {
 	dim := 128
 	query := make([]float64, params.MaxSlots())
 	for i := 0; i < dim; i++ {
-		query[i] = float64(i + 1) / 10.0 // [0.1, 0.2, 0.3, ...]
+		query[i] = float64(i+1) / 10.0 // [0.1, 0.2, 0.3, ...]
 	}
 
 	ct, err := engine.EncryptVector(query)

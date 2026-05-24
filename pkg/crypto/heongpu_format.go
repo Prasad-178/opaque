@@ -22,9 +22,9 @@ import (
 // HEonGPU binary format constants.
 // These enums are all uint8_t in HEonGPU (1 byte each).
 const (
-	heongpuSchemeTypeCKKS       uint8 = 2 // scheme_type::ckks
-	heongpuKeySwitchingMethodI  uint8 = 1 // keyswitching_type::KEYSWITCHING_METHOD_I
-	heongpuStorageTypeHost      uint8 = 1 // storage_type::HOST
+	heongpuSchemeTypeCKKS      uint8 = 2 // scheme_type::ckks
+	heongpuKeySwitchingMethodI uint8 = 1 // keyswitching_type::KEYSWITCHING_METHOD_I
+	heongpuStorageTypeHost     uint8 = 1 // storage_type::HOST
 )
 
 // SerializeGaloisKeysHEonGPU converts Lattigo Galois keys to HEonGPU's binary format.
@@ -79,16 +79,16 @@ func SerializeGaloisKeysHEonGPU(
 	binary.Write(&buf, binary.LittleEndian, heongpuSchemeTypeCKKS)      // scheme_type (uint8, 1B)
 	binary.Write(&buf, binary.LittleEndian, heongpuKeySwitchingMethodI) // keyswitching_type (uint8, 1B)
 	binary.Write(&buf, binary.LittleEndian, int32(ringSize))            // ring_size (int, 4B)
-	binary.Write(&buf, binary.LittleEndian, int32(qPrimeSize))         // Q_prime_size_ (int, 4B)
-	binary.Write(&buf, binary.LittleEndian, int32(qSize))              // Q_size_ (int, 4B)
-	binary.Write(&buf, binary.LittleEndian, int32(d))                  // d_ (int, 4B)
+	binary.Write(&buf, binary.LittleEndian, int32(qPrimeSize))          // Q_prime_size_ (int, 4B)
+	binary.Write(&buf, binary.LittleEndian, int32(qSize))               // Q_size_ (int, 4B)
+	binary.Write(&buf, binary.LittleEndian, int32(d))                   // d_ (int, 4B)
 	// customized = false — use the galois_elt map format.
 	// (HEonGPU's load() has a bug in the customized=true path: it passes
 	// the uninitialized size variable as the read length instead of sizeof.)
-	binary.Write(&buf, binary.LittleEndian, uint8(0))                  // customized (bool, 1B) = false
-	binary.Write(&buf, binary.LittleEndian, groupOrder)                // group_order_ (int, 4B)
-	binary.Write(&buf, binary.LittleEndian, heongpuStorageTypeHost)    // storage_type (uint8, 1B)
-	binary.Write(&buf, binary.LittleEndian, uint8(1))                  // galois_key_generated_ (bool, 1B) = true
+	binary.Write(&buf, binary.LittleEndian, uint8(0))               // customized (bool, 1B) = false
+	binary.Write(&buf, binary.LittleEndian, groupOrder)             // group_order_ (int, 4B)
+	binary.Write(&buf, binary.LittleEndian, heongpuStorageTypeHost) // storage_type (uint8, 1B)
+	binary.Write(&buf, binary.LittleEndian, uint8(1))               // galois_key_generated_ (bool, 1B) = true
 
 	// Galois element map: pairs of {shift_step (int) → galois_element (int)}.
 	// HEonGPU's load() reads: uint32 count, then count × (int first, int second).
@@ -176,8 +176,10 @@ func SerializeGaloisKeysHEonGPU(
 //
 // The exact ordering within the flat array:
 // [decomp0_poly0_level0[N] | decomp0_poly0_level1[N] | ... | decomp0_poly0_levelQP-1[N] |
-//  decomp0_poly1_level0[N] | ... | decomp0_poly1_levelQP-1[N] |
-//  decomp1_poly0_level0[N] | ... ]
+//
+//	decomp0_poly1_level0[N] | ... | decomp0_poly1_levelQP-1[N] |
+//	decomp1_poly0_level0[N] | ... ]
+//
 // extractGadgetDataConverted extracts coefficients and converts them from
 // Lattigo's NTT domain directly to HEonGPU's NTT domain.
 // The full conversion (Lattigo INTT → coeff → HEonGPU NTT) is done in Go.

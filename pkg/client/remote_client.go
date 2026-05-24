@@ -49,11 +49,11 @@ type RemoteClient struct {
 	config hierarchical.Config
 
 	// Credentials data
-	centroids     [][]float64
-	dimension     int
-	numClusters   int
-	enterpriseID  string
-	tokenExpiry   time.Time
+	centroids    [][]float64
+	dimension    int
+	numClusters  int
+	enterpriseID string
+	tokenExpiry  time.Time
 
 	mu sync.RWMutex
 }

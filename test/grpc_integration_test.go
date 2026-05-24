@@ -15,8 +15,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	pb "github.com/Prasad-178/opaque/api/proto"
 	opaque "github.com/Prasad-178/opaque"
+	pb "github.com/Prasad-178/opaque/api/proto"
 	"github.com/Prasad-178/opaque/pkg/grpcserver"
 )
 

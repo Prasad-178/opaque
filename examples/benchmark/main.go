@@ -271,10 +271,10 @@ func main() {
 	printSection("8. PCA Dimensionality Reduction")
 
 	dbPCA, err := opaque.NewDB(opaque.Config{
-		Dimension:   dim,
-		NumClusters: numClusters,
-		TopClusters: topClusters,
-		NumDecoys:   numDecoys,
+		Dimension:    dim,
+		NumClusters:  numClusters,
+		TopClusters:  topClusters,
+		NumDecoys:    numDecoys,
 		PCADimension: pcaDim,
 	})
 	must(err)

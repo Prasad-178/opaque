@@ -25,11 +25,11 @@ func TestClusterSelectionDiagnostics(t *testing.T) {
 	// Configuration
 	// Note: HE operations are slow (~3s per query due to serialized ops)
 	// Using smaller numbers for diagnostic purposes
-	numVectors := 10000  // Use 10K for faster diagnostics
+	numVectors := 10000 // Use 10K for faster diagnostics
 	dimension := 128
 	numClusters := 64
 	topSelect := 16
-	numQueries := 10     // Reduced to 10 for speed (HE is ~3s per query)
+	numQueries := 10 // Reduced to 10 for speed (HE is ~3s per query)
 	topK := 10
 
 	t.Logf("Configuration: %d vectors, %d clusters, top-%d selection, %d queries",
@@ -403,7 +403,7 @@ func TestTopSelectImpact(t *testing.T) {
 	numVectors := 10000
 	dimension := 128
 	numClusters := 64
-	numQueries := 5     // Keep low due to slow HE (~3s per query)
+	numQueries := 5 // Keep low due to slow HE (~3s per query)
 	topK := 10
 
 	ctx := context.Background()

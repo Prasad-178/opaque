@@ -3,7 +3,8 @@
 //
 // Both libraries use the same NTT algorithm (Cooley-Tukey butterfly) but with
 // different primitive roots of unity (ψ). This converter applies:
-//   Lattigo INTT → coefficient domain → HEonGPU NTT
+//
+//	Lattigo INTT → coefficient domain → HEonGPU NTT
 //
 // This is needed for evaluation key transfer: the keys are generated in Lattigo's
 // NTT domain but must be in HEonGPU's NTT domain to work correctly on the GPU.
@@ -234,10 +235,10 @@ func subModU(a, b, m uint64) uint64 {
 // computeHEonGPUPsi finds HEonGPU's primitive 2N-th root of unity for prime p.
 //
 // HEonGPU's algorithm (find_minimal_primitive_root):
-// 1. Find ANY primitive (2N)-th root by: random^((p-1)/(2N)) mod p,
-//    checking that the result has exact order 2N (is_primitive_root).
-// 2. Then find the SMALLEST such root by iterating through all (2N)-th
-//    roots of unity (there are phi(2N) = N of them) and keeping the minimum.
+//  1. Find ANY primitive (2N)-th root by: random^((p-1)/(2N)) mod p,
+//     checking that the result has exact order 2N (is_primitive_root).
+//  2. Then find the SMALLEST such root by iterating through all (2N)-th
+//     roots of unity (there are phi(2N) = N of them) and keeping the minimum.
 //
 // This is deterministic because the minimal root is unique.
 func computeHEonGPUPsi(p, N uint64) uint64 {

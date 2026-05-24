@@ -150,9 +150,9 @@ func TestBatchCentroidCache_ShortCentroidPadsZero(t *testing.T) {
 	// Mix of short, exact, and oversized vectors — must not panic and must
 	// truncate / pad to dim.
 	centroids := [][]float64{
-		make([]float64, dim/2),     // short → tail zeros
-		make([]float64, dim),       // exact
-		make([]float64, dim*2),     // longer → truncated to dim
+		make([]float64, dim/2), // short → tail zeros
+		make([]float64, dim),   // exact
+		make([]float64, dim*2), // longer → truncated to dim
 	}
 	if err := cache.LoadCentroids(centroids, params.MaxLevel()); err != nil {
 		t.Fatalf("LoadCentroids: %v", err)
