@@ -35,7 +35,8 @@ notes.txt
 *ARTICLE*.md
 
 # Private meeting notes
-GUY_MEETING_NOTES.md
+*_MEETING_NOTES.md
+*ETS.md
 *.out
 third_party/
 
