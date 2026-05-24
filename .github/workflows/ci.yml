@@ -18,35 +18,188 @@ on:
       - "LICENSE*"
       - ".gitignore"
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25"
+  GOTOOLCHAIN: local
+
 jobs:
-  lint:
-    name: Lint
+  fmt:
+    name: gofmt
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: gofmt check
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-clean:"
+            echo "$unformatted"
+            echo "::group::diff"
+            gofmt -d $unformatted
+            echo "::endgroup::"
+            exit 1
+          fi
+
+  vet:
+    name: go vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
       - run: go vet ./...
 
-  unit-tests:
-    name: Unit tests
+  build:
+    name: build
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
-      - run: go test -short -timeout 10m ./...
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: build all packages
+        run: go build ./...
+      - name: build all cmd binaries
+        run: |
+          for d in cmd/*/; do
+            echo "building $d"
+            go build -o /tmp/$(basename "$d") "./$d"
+          done
+      - name: build all examples
+        run: |
+          for d in examples/*/; do
+            echo "building $d"
+            go build -o /tmp/example-$(basename "$d") "./$d"
+          done
+
+  staticcheck:
+    name: staticcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+      - name: run staticcheck
+        run: staticcheck ./...
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: run govulncheck
+        run: govulncheck ./...
+
+  unit-tests:
+    name: unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [fmt, vet, build]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: go test -short
+        run: go test -short -timeout 10m ./...
+
+  race-tests:
+    name: race detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [unit-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: go test -race (concurrency-sensitive packages)
+        # Limit to packages with goroutines / shared state — full-tree -race
+        # is too slow for PR feedback. The threshold and client packages own
+        # the lock discipline that matters; pkg/crypto/threshold has a chaos
+        # suite that benefits the most.
+        run: |
+          go test -race -short -timeout 25m \
+            ./pkg/crypto/... \
+            ./pkg/crypto/threshold/... \
+            ./pkg/client/... \
+            ./pkg/hierarchical/... \
+            ./pkg/enterprise/... \
+            ./pkg/blob/... \
+            ./pkg/cache/... \
+            ./pkg/grpcserver/... \
+            ./internal/store/... \
+            ./internal/session/...
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [unit-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: collect coverage
+        run: |
+          go test -short -timeout 10m -coverprofile=coverage.out \
+            -coverpkg=./... ./...
+      - name: coverage summary
+        run: |
+          echo "## Coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          go tool cover -func=coverage.out | tail -30 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-profile
+          path: coverage.out
+          retention-days: 14
 
   integration-tests:
-    name: Integration tests
+    name: integration tests
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    needs: [lint, unit-tests]
+    needs: [unit-tests]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
       - run: go test -tags integration -short -timeout 30m ./...
