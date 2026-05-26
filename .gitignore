@@ -31,6 +31,26 @@ notes.txt
 /file-storage
 /http-server
 
+# Compiled cmd binaries (built by `make build` / `go build ./cmd/...`)
+/cli
+/devserver
+/gpu-server
+/search-service
+/bridge-export
+/check-key-layout
+/compare-ntt-roots
+/dump-intt-ordering
+/dump-key-format
+/dump-ntt-roots
+/encode-compare-diff
+/encode-compare-go
+/export-gpu-keys
+/export-gpu-keys-with-roots
+/export-gpu-test-keys
+/test-ct-convert
+/test-intt
+/verify-ntt-go
+
 # Ignore articles
 *ARTICLE*.md
 
