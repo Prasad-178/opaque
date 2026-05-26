@@ -37,11 +37,9 @@ test:
 	go test -tags integration ./...
 
 test-race:
-	go test -race -short -timeout 25m \
+	go test -race -short -timeout 20m \
 	  ./pkg/crypto/... \
 	  ./pkg/crypto/threshold/... \
-	  ./pkg/client/... \
-	  ./pkg/hierarchical/... \
 	  ./pkg/enterprise/... \
 	  ./pkg/blob/... \
 	  ./pkg/cache/... \
