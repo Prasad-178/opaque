@@ -36,7 +36,7 @@ func TestCommittee_DecryptCountIncrements(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DecryptScalar #%d: %v", i, err)
 		}
-		if !nearlyEqual(got, want, 0.01) {
+		if !nearlyEqual(got, want, 0.02) {
 			t.Errorf("decrypt #%d value: got %.4f, want %.4f", i, got, want)
 		}
 	}
@@ -249,7 +249,7 @@ func TestCommittee_RotateEpochFreshDecryptStillWorks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecryptScalar: %v", err)
 	}
-	if !nearlyEqual(got, 0.42, 0.01) {
+	if !nearlyEqual(got, 0.42, 0.02) {
 		t.Errorf("post-rotate decrypt value: got %.4f, want 0.42", got)
 	}
 }

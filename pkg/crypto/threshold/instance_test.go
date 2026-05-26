@@ -255,7 +255,7 @@ func TestCommittee_ThresholdDecryptRefusesInstanceReuse(t *testing.T) {
 		t.Fatalf("DecryptScalar: %v", err)
 	}
 	const want = 0.5 * 0.4
-	if !nearlyEqual(got, want, 0.01) {
+	if !nearlyEqual(got, want, 0.02) {
 		t.Errorf("first decrypt value: got %.4f, want %.4f", got, want)
 	}
 

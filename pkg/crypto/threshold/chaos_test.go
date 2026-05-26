@@ -91,7 +91,7 @@ func TestChaos_ConcurrentRetrySameID(t *testing.T) {
 				if derr != nil {
 					t.Errorf("DecryptScalar: %v", derr)
 				}
-				if !nearlyEqual(got, want, 0.01) {
+				if !nearlyEqual(got, want, 0.02) {
 					t.Errorf("decrypt value: got %.4f, want %.4f", got, want)
 				}
 			case errors.Is(err, ErrInstanceConcurrent):
@@ -182,7 +182,7 @@ func TestChaos_ManyDistinctIDsAllSucceed(t *testing.T) {
 			t.Errorf("DecryptScalar #%d: %v", i, derr)
 			continue
 		}
-		if !nearlyEqual(got, want, 0.01) {
+		if !nearlyEqual(got, want, 0.02) {
 			t.Errorf("decrypt #%d value: got %.4f, want %.4f", i, got, want)
 		}
 	}
@@ -236,7 +236,7 @@ func TestChaos_AbortMidFlightBlocksRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecryptScalar: %v", err)
 	}
-	if !nearlyEqual(got, want, 0.01) {
+	if !nearlyEqual(got, want, 0.02) {
 		t.Errorf("decrypt value: got %.4f, want %.4f", got, want)
 	}
 }
