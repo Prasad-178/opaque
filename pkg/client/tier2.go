@@ -129,13 +129,11 @@ func (c *Tier2Client) InsertBatch(ctx context.Context, ids []string, vectors [][
 		// Create blob
 		b := blob.NewBlob(id, bucket, ciphertext, c.config.Dimension)
 
-		// Encrypt metadata if provided
-		if metadata != nil && i < len(metadata) && metadata[i] != nil {
-			// For now, skip metadata encryption (can add later)
-			// metaBytes, _ := json.Marshal(metadata[i])
-			// metaCiphertext, _ := c.encryptor.Encrypt(metaBytes)
-			// b.WithMetadata(metaCiphertext)
-		}
+		// Encrypt metadata if provided.
+		// TODO: metadata encryption is unimplemented in tier2; the public
+		// metadata path lives on the main DB instead. Drop this empty branch
+		// once tier2 either gains a metadata pipeline or is retired.
+		_ = metadata
 
 		blobs[i] = b
 	}

@@ -34,10 +34,11 @@ func TestReadFvecs_TruncatedTail(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on truncated payload")
 	}
-	if errors.Is(err, io.EOF) {
-		// Acceptable — io.ErrUnexpectedEOF is wrapped, EOF on header-only is
-		// handled separately.
-	}
+	// io.EOF on header-only is handled separately by ReadFvecs (returns nil,
+	// nil at EOF). A truncated payload mid-vector should surface as some
+	// non-nil error — either io.ErrUnexpectedEOF or the wrapped binary.Read
+	// error. We only assert the latter.
+	_ = errors.Is(err, io.EOF)
 }
 
 func TestReadFvecsF32_RoundtripVsReadFvecs(t *testing.T) {
