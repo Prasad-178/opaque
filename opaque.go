@@ -699,10 +699,28 @@ func (db *DB) Search(ctx context.Context, query []float64, topK int) ([]Result, 
 }
 
 // Size returns the total number of vectors in the DB (both pending and indexed).
+//
+// Build clears the pending buffer once vectors are persisted to the blob
+// store, so a naive `len(pendingIDs)` would drop to 0 right after Build. To
+// stay accurate across the buffered → ready transition we also query the
+// blob store and return the larger of the two — matching the logic in Stats.
 func (db *DB) Size() int {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
-	return len(db.pendingIDs)
+
+	pending := len(db.pendingIDs)
+	if db.blobStore == nil {
+		return pending
+	}
+	stats, err := db.blobStore.Stats(context.Background())
+	if err != nil {
+		return pending
+	}
+	indexed := int(stats.TotalBlobs)
+	if indexed > pending {
+		return indexed
+	}
+	return pending
 }
 
 // IsReady reports whether the index has been built and the DB is ready for search.
