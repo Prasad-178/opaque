@@ -10,7 +10,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
-	"io"
 	"log"
 	"math/big"
 	"os"
@@ -88,18 +87,6 @@ func TestRecoveryUnaryInterceptor_HandlerError(t *testing.T) {
 		t.Fatalf("err=%v want %v", err, want)
 	}
 }
-
-type fakeStream struct{ ctx context.Context }
-
-func (f *fakeStream) SetHeader(_ any) error    { return nil }
-func (f *fakeStream) SendHeader(_ any) error   { return nil }
-func (f *fakeStream) SetTrailer(_ any)         {}
-func (f *fakeStream) Context() context.Context { return f.ctx }
-func (f *fakeStream) SendMsg(_ any) error      { return nil }
-func (f *fakeStream) RecvMsg(_ any) error      { return io.EOF }
-
-// satisfy grpc.ServerStream
-func (f *fakeStream) SetHeaderMD(md any) error { return nil }
 
 func TestRecoveryStreamInterceptor_Recovers(t *testing.T) {
 	flush := captureLogs(t)

@@ -227,7 +227,7 @@ func NewCommittee(n, threshold int) (*Committee, error) {
 
 	// Step 5: Collective Galois key generation (for dot product rotations).
 	if err := c.genGaloisKeys(); err != nil {
-		return nil, fmt.Errorf("Galois key generation failed: %w", err)
+		return nil, fmt.Errorf("galois key generation failed: %w", err)
 	}
 
 	return c, nil
@@ -798,7 +798,7 @@ func (c *Committee) genGaloisKeys() error {
 		for i, p := range c.Participants {
 			shares[i] = gkg.AllocateShare()
 			if err := gkg.GenShare(p.sk, galEl, crp, &shares[i]); err != nil {
-				return fmt.Errorf("Galois key share gen failed for element %d: %w", galEl, err)
+				return fmt.Errorf("galois key share gen failed for element %d: %w", galEl, err)
 			}
 		}
 
@@ -806,14 +806,14 @@ func (c *Committee) genGaloisKeys() error {
 		aggregated := shares[0]
 		for i := 1; i < c.N; i++ {
 			if err := gkg.AggregateShares(aggregated, shares[i], &aggregated); err != nil {
-				return fmt.Errorf("Galois key aggregation failed: %w", err)
+				return fmt.Errorf("galois key aggregation failed: %w", err)
 			}
 		}
 
 		// Generate Galois key.
 		gk := rlwe.NewGaloisKey(c.params)
 		if err := gkg.GenGaloisKey(aggregated, crp, gk); err != nil {
-			return fmt.Errorf("Galois key gen failed: %w", err)
+			return fmt.Errorf("galois key gen failed: %w", err)
 		}
 		c.GaloisKeys[idx] = gk
 	}

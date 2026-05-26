@@ -179,7 +179,7 @@ func main() {
 	printTable([]string{"Metric", "Value"}, [][]string{
 		{"Vectors added", fmt.Sprintf("%d", incrementalAdd)},
 		{"Total add time", incTime.String()},
-		{"Per-vector time", fmt.Sprintf("%s", incTime/time.Duration(incrementalAdd))},
+		{"Per-vector time", (incTime / time.Duration(incrementalAdd)).String()},
 		{"Immediately searchable", boolStr(incFound)},
 		{"Centroid updates", "Incremental (running mean)"},
 		{"Full rebuild needed", "NO"},

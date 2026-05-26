@@ -126,9 +126,9 @@ func TestNormalizeVector(t *testing.T) {
 func BenchmarkEncryption(b *testing.B) {
 	engine, _ := NewClientEngine()
 	vector := make([]float64, 128)
-	rand.Seed(42)
+	rng := rand.New(rand.NewSource(42))
 	for i := range vector {
-		vector[i] = rand.Float64()*2 - 1
+		vector[i] = rng.Float64()*2 - 1
 	}
 	vector = NormalizeVector(vector)
 
@@ -141,9 +141,9 @@ func BenchmarkEncryption(b *testing.B) {
 func BenchmarkDecryption(b *testing.B) {
 	engine, _ := NewClientEngine()
 	vector := make([]float64, 128)
-	rand.Seed(42)
+	rng := rand.New(rand.NewSource(42))
 	for i := range vector {
-		vector[i] = rand.Float64()*2 - 1
+		vector[i] = rng.Float64()*2 - 1
 	}
 	vector = NormalizeVector(vector)
 
@@ -158,9 +158,9 @@ func BenchmarkDecryption(b *testing.B) {
 func BenchmarkSerialization(b *testing.B) {
 	engine, _ := NewClientEngine()
 	vector := make([]float64, 128)
-	rand.Seed(42)
+	rng := rand.New(rand.NewSource(42))
 	for i := range vector {
-		vector[i] = rand.Float64()*2 - 1
+		vector[i] = rng.Float64()*2 - 1
 	}
 
 	ct, _ := engine.EncryptVector(vector)

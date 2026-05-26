@@ -467,7 +467,7 @@ func serializeGaloisKeys(engine *Engine, elements []uint64) ([][]byte, error) {
 	for i, el := range elements {
 		gk, err := engine.evalKeys.GetGaloisKey(el)
 		if err != nil {
-			return nil, fmt.Errorf("Galois key for element %d: %w", el, err)
+			return nil, fmt.Errorf("galois key for element %d: %w", el, err)
 		}
 		buf := new(bytes.Buffer)
 		if _, err := gk.WriteTo(buf); err != nil {

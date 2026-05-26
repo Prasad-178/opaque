@@ -88,9 +88,9 @@ func TestHashConsistency(t *testing.T) {
 
 	// Same vector should produce same hash
 	vec := make([]float64, 128)
-	rand.Seed(123)
+	rng := rand.New(rand.NewSource(123))
 	for i := range vec {
-		vec[i] = rand.NormFloat64()
+		vec[i] = rng.NormFloat64()
 	}
 
 	hash1 := idx.HashBytes(vec)
@@ -110,21 +110,21 @@ func TestSimilarVectorsCloseHashes(t *testing.T) {
 
 	// Create a base vector
 	base := make([]float64, 128)
-	rand.Seed(456)
+	rng := rand.New(rand.NewSource(456))
 	for i := range base {
-		base[i] = rand.NormFloat64()
+		base[i] = rng.NormFloat64()
 	}
 
 	// Create a similar vector (small perturbation)
 	similar := make([]float64, 128)
 	for i := range similar {
-		similar[i] = base[i] + rand.NormFloat64()*0.1
+		similar[i] = base[i] + rng.NormFloat64()*0.1
 	}
 
 	// Create a random vector
 	random := make([]float64, 128)
 	for i := range random {
-		random[i] = rand.NormFloat64()
+		random[i] = rng.NormFloat64()
 	}
 
 	hashBase := idx.HashBytes(base)
@@ -231,13 +231,13 @@ func TestMultiProbeSearch(t *testing.T) {
 	n := 1000
 	ids := make([]string, n)
 	vectors := make([][]float64, n)
-	rand.Seed(789)
+	rng := rand.New(rand.NewSource(789))
 
 	for i := 0; i < n; i++ {
 		ids[i] = string(rune('A'+i%26)) + string(rune('0'+i/26))
 		vectors[i] = make([]float64, 128)
 		for j := 0; j < 128; j++ {
-			vectors[i][j] = rand.NormFloat64()
+			vectors[i][j] = rng.NormFloat64()
 		}
 	}
 	idx.Add(ids, vectors)
@@ -245,7 +245,7 @@ func TestMultiProbeSearch(t *testing.T) {
 	// Query
 	query := make([]float64, 128)
 	for i := range query {
-		query[i] = rand.NormFloat64()
+		query[i] = rng.NormFloat64()
 	}
 	queryHash := idx.HashBytes(query)
 
@@ -270,9 +270,9 @@ func BenchmarkHash(b *testing.B) {
 	})
 
 	vec := make([]float64, 128)
-	rand.Seed(111)
+	rng := rand.New(rand.NewSource(111))
 	for i := range vec {
-		vec[i] = rand.NormFloat64()
+		vec[i] = rng.NormFloat64()
 	}
 
 	b.ResetTimer()
@@ -292,20 +292,20 @@ func BenchmarkSearch(b *testing.B) {
 	n := 10000
 	ids := make([]string, n)
 	vectors := make([][]float64, n)
-	rand.Seed(222)
+	rng := rand.New(rand.NewSource(222))
 
 	for i := 0; i < n; i++ {
 		ids[i] = string(rune(i))
 		vectors[i] = make([]float64, 128)
 		for j := 0; j < 128; j++ {
-			vectors[i][j] = rand.NormFloat64()
+			vectors[i][j] = rng.NormFloat64()
 		}
 	}
 	idx.Add(ids, vectors)
 
 	query := make([]float64, 128)
 	for i := range query {
-		query[i] = rand.NormFloat64()
+		query[i] = rng.NormFloat64()
 	}
 	queryHash := idx.HashBytes(query)
 

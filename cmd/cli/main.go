@@ -27,7 +27,7 @@ func main() {
 	fmt.Println("=== Opaque CLI - Privacy-Preserving Vector Search ===")
 	fmt.Println()
 
-	rand.Seed(42)
+	rng := rand.New(rand.NewSource(42))
 
 	// Create opaque DB
 	db, err := opaque.NewDB(opaque.Config{
@@ -41,7 +41,7 @@ func main() {
 
 	// Generate test data
 	fmt.Printf("Generating %d vectors of dimension %d...\n", *numVectors, *dimension)
-	ids, vectors := generateVectors(*numVectors, *dimension)
+	ids, vectors := generateVectors(rng, *numVectors, *dimension)
 
 	// Add to DB
 	ctx := context.Background()
@@ -63,8 +63,8 @@ func main() {
 
 	for i := 0; i < *numQueries; i++ {
 		// Create query similar to a random vector
-		targetIdx := rand.Intn(*numVectors)
-		query := addNoise(vectors[targetIdx], 0.1)
+		targetIdx := rng.Intn(*numVectors)
+		query := addNoise(rng, vectors[targetIdx], 0.1)
 
 		fmt.Printf("Query %d (similar to %s):\n", i+1, ids[targetIdx])
 
@@ -94,7 +94,7 @@ func main() {
 	fmt.Println("=== Done ===")
 }
 
-func generateVectors(n, dim int) ([]string, [][]float64) {
+func generateVectors(rng *rand.Rand, n, dim int) ([]string, [][]float64) {
 	ids := make([]string, n)
 	vectors := make([][]float64, n)
 
@@ -103,7 +103,7 @@ func generateVectors(n, dim int) ([]string, [][]float64) {
 		vec := make([]float64, dim)
 		var norm float64
 		for j := 0; j < dim; j++ {
-			vec[j] = rand.NormFloat64()
+			vec[j] = rng.NormFloat64()
 			norm += vec[j] * vec[j]
 		}
 		norm = math.Sqrt(norm)
@@ -116,11 +116,11 @@ func generateVectors(n, dim int) ([]string, [][]float64) {
 	return ids, vectors
 }
 
-func addNoise(vec []float64, scale float64) []float64 {
+func addNoise(rng *rand.Rand, vec []float64, scale float64) []float64 {
 	noisy := make([]float64, len(vec))
 	var norm float64
 	for i, v := range vec {
-		noisy[i] = v + rand.NormFloat64()*scale
+		noisy[i] = v + rng.NormFloat64()*scale
 		norm += noisy[i] * noisy[i]
 	}
 	norm = math.Sqrt(norm)
