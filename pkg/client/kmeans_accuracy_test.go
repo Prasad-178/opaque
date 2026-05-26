@@ -9,6 +9,7 @@ import (
 
 	"github.com/Prasad-178/opaque/pkg/auth"
 	"github.com/Prasad-178/opaque/pkg/blob"
+	"github.com/Prasad-178/opaque/pkg/cluster"
 	"github.com/Prasad-178/opaque/pkg/crypto"
 	"github.com/Prasad-178/opaque/pkg/embeddings"
 	"github.com/Prasad-178/opaque/pkg/encrypt"
@@ -58,7 +59,7 @@ func TestSIFTKMeansEndToEnd(t *testing.T) {
 	cfg.NumDecoys = 0          // No decoys for clean measurement
 
 	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-	idx, _ := builder.Build(ctx, dataset.IDs, dataset.Vectors, store)
+	idx, _ := builder.Build(ctx, dataset.IDs, cluster.AsFloat32(dataset.Vectors), store)
 	enterpriseCfg = builder.GetEnterpriseConfig()
 
 	clusterStats := builder.GetClusterStats()
@@ -396,7 +397,7 @@ func TestSIFTKMeansCentroidQuality(t *testing.T) {
 	cfg := hierarchical.ConfigFromEnterprise(enterpriseCfg)
 
 	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-	builder.Build(ctx, dataset.IDs, dataset.Vectors, store)
+	builder.Build(ctx, dataset.IDs, cluster.AsFloat32(dataset.Vectors), store)
 	enterpriseCfg = builder.GetEnterpriseConfig()
 	centroids := enterpriseCfg.Centroids
 
@@ -486,7 +487,7 @@ func runClusteringTest(
 	var idx *hierarchical.Index
 	if useKMeans {
 		builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-		idx, _ = builder.Build(ctx, dataset.IDs, dataset.Vectors, store)
+		idx, _ = builder.Build(ctx, dataset.IDs, cluster.AsFloat32(dataset.Vectors), store)
 		enterpriseCfg = builder.GetEnterpriseConfig()
 	} else {
 		builder, _ := hierarchical.NewEnterpriseBuilder(cfg, enterpriseCfg)
@@ -591,7 +592,7 @@ func TestSIFTKMeansClusterSelection(t *testing.T) {
 	kmStore := blob.NewMemoryStore()
 	kmCfg := hierarchical.ConfigFromEnterprise(kmEntCfg)
 	kmBuilder, _ := hierarchical.NewKMeansBuilder(kmCfg, kmEntCfg)
-	kmIdx, _ := kmBuilder.Build(ctx, dataset.IDs, dataset.Vectors, kmStore)
+	kmIdx, _ := kmBuilder.Build(ctx, dataset.IDs, cluster.AsFloat32(dataset.Vectors), kmStore)
 	kmEntCfg = kmBuilder.GetEnterpriseConfig()
 
 	// Get centroids

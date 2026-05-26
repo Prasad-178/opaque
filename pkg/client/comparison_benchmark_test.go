@@ -15,6 +15,7 @@ import (
 
 	"github.com/Prasad-178/opaque/pkg/auth"
 	"github.com/Prasad-178/opaque/pkg/blob"
+	"github.com/Prasad-178/opaque/pkg/cluster"
 	"github.com/Prasad-178/opaque/pkg/enterprise"
 	"github.com/Prasad-178/opaque/pkg/hierarchical"
 )
@@ -517,7 +518,7 @@ func benchmarkOpaque(ctx context.Context, t *testing.T, ids []string, vectors, q
 	cfg.NumDecoys = 0
 
 	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-	builder.Build(ctx, ids, vectors, store)
+	builder.Build(ctx, ids, cluster.AsFloat32(vectors), store)
 	enterpriseCfg = builder.GetEnterpriseConfig()
 
 	enterpriseStore := enterprise.NewMemoryStore()

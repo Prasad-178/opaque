@@ -9,6 +9,7 @@ import (
 
 	"github.com/Prasad-178/opaque/pkg/auth"
 	"github.com/Prasad-178/opaque/pkg/blob"
+	"github.com/Prasad-178/opaque/pkg/cluster"
 	"github.com/Prasad-178/opaque/pkg/crypto"
 	"github.com/Prasad-178/opaque/pkg/embeddings"
 	"github.com/Prasad-178/opaque/pkg/encrypt"
@@ -41,7 +42,7 @@ func TestDebugAccuracy(t *testing.T) {
 	cfg.NumDecoys = 0
 
 	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-	idx, _ := builder.Build(ctx, dataset.IDs, dataset.Vectors, store)
+	idx, _ := builder.Build(ctx, dataset.IDs, cluster.AsFloat32(dataset.Vectors), store)
 	enterpriseCfg = builder.GetEnterpriseConfig()
 
 	// Get query 0

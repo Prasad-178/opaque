@@ -12,6 +12,7 @@ import (
 
 	"github.com/Prasad-178/opaque/pkg/auth"
 	"github.com/Prasad-178/opaque/pkg/blob"
+	"github.com/Prasad-178/opaque/pkg/cluster"
 	"github.com/Prasad-178/opaque/pkg/enterprise"
 	"github.com/Prasad-178/opaque/pkg/hierarchical"
 )
@@ -113,7 +114,7 @@ func TestBenchmark100K(t *testing.T) {
 
 	// Track sub-phases
 	kmeansStart := time.Now()
-	_, err = builder.Build(ctx, ids, vectors, store)
+	_, err = builder.Build(ctx, ids, cluster.AsFloat32(vectors), store)
 	if err != nil {
 		t.Fatalf("Failed to build index: %v", err)
 	}
@@ -442,7 +443,7 @@ func TestBenchmark100KWithRecall(t *testing.T) {
 	cfg.NumDecoys = 0
 
 	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-	_, _ = builder.Build(ctx, ids, vectors, store)
+	_, _ = builder.Build(ctx, ids, cluster.AsFloat32(vectors), store)
 	enterpriseCfg = builder.GetEnterpriseConfig()
 
 	// Setup client
@@ -603,7 +604,7 @@ func TestBenchmark100KOptimized(t *testing.T) {
 	cfg.MaxProbeClusters = 48                       // Max clusters to probe
 
 	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-	_, _ = builder.Build(ctx, ids, vectors, store)
+	_, _ = builder.Build(ctx, ids, cluster.AsFloat32(vectors), store)
 	enterpriseCfg = builder.GetEnterpriseConfig()
 	buildTime := time.Since(startBuild)
 

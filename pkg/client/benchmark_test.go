@@ -9,6 +9,7 @@ import (
 
 	"github.com/Prasad-178/opaque/pkg/auth"
 	"github.com/Prasad-178/opaque/pkg/blob"
+	"github.com/Prasad-178/opaque/pkg/cluster"
 	"github.com/Prasad-178/opaque/pkg/embeddings"
 	"github.com/Prasad-178/opaque/pkg/enterprise"
 	"github.com/Prasad-178/opaque/pkg/hierarchical"
@@ -42,7 +43,7 @@ func TestSearchTimingBreakdown(t *testing.T) {
 	cfg.NumDecoys = 0
 
 	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-	builder.Build(ctx, dataset.IDs, dataset.Vectors, store)
+	builder.Build(ctx, dataset.IDs, cluster.AsFloat32(dataset.Vectors), store)
 	enterpriseCfg = builder.GetEnterpriseConfig()
 
 	// Setup client
@@ -146,7 +147,7 @@ func BenchmarkSearch(b *testing.B) {
 	cfg.NumDecoys = 0
 
 	builder, _ := hierarchical.NewKMeansBuilder(cfg, enterpriseCfg)
-	builder.Build(ctx, dataset.IDs, dataset.Vectors, store)
+	builder.Build(ctx, dataset.IDs, cluster.AsFloat32(dataset.Vectors), store)
 	enterpriseCfg = builder.GetEnterpriseConfig()
 
 	enterpriseStore := enterprise.NewMemoryStore()
