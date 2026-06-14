@@ -150,11 +150,26 @@ func NewClientEngineWithParams(params hefloat.Parameters) (*Engine, error) {
 
 // NewServerEngine creates an encryption engine for server-side operations.
 // Does not have access to the secret key - can only perform homomorphic operations.
-func NewServerEngine(publicKeyBytes []byte) (*Engine, error) {
+// The public key bytes arrive from the client over the wire, so deserialization
+// validates input size and recovers from panics in Lattigo's ReadFrom — a
+// malformed key must surface as an error, not crash the server.
+func NewServerEngine(publicKeyBytes []byte) (eng *Engine, err error) {
+	if len(publicKeyBytes) == 0 {
+		return nil, errors.New("empty public key data")
+	}
+
 	params, err := NewParameters()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create parameters: %w", err)
 	}
+
+	// Lattigo's ReadFrom can panic on malformed input; recover gracefully.
+	defer func() {
+		if r := recover(); r != nil {
+			eng = nil
+			err = fmt.Errorf("public key deserialization panic: %v", r)
+		}
+	}()
 
 	// Deserialize public key
 	pk := rlwe.NewPublicKey(params)

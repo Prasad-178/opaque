@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"bytes"
 	"math"
 	"math/rand"
 	"testing"
@@ -95,6 +96,44 @@ func TestCiphertextSerialization(t *testing.T) {
 		if math.Abs(decrypted[i]-original[i]) > tolerance {
 			t.Errorf("value %d mismatch: got %.6f, want %.6f", i, decrypted[i], original[i])
 		}
+	}
+}
+
+func TestNewServerEngineMalformedKey(t *testing.T) {
+	// Valid round-trip: a real serialized public key must deserialize cleanly.
+	client, err := NewClientEngine()
+	if err != nil {
+		t.Fatalf("failed to create client engine: %v", err)
+	}
+	pkBytes, err := client.GetPublicKeyBytes()
+	if err != nil {
+		t.Fatalf("failed to get public key bytes: %v", err)
+	}
+	if _, err := NewServerEngine(pkBytes); err != nil {
+		t.Fatalf("valid public key should deserialize: %v", err)
+	}
+
+	// Malformed inputs must surface as errors, never panic the server. The bytes
+	// arrive over the wire from an untrusted client, and Lattigo's ReadFrom can
+	// panic on garbage — the recover guard must convert that into a clean error.
+	bad := map[string][]byte{
+		"empty":            {},
+		"nil":              nil,
+		"short garbage":    {0x01, 0x02, 0x03},
+		"random bytes":     bytes.Repeat([]byte{0xAB}, 64),
+		"truncated valid":  pkBytes[:len(pkBytes)/2],
+		"oversized length": {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
+	}
+	for name, data := range bad {
+		t.Run(name, func(t *testing.T) {
+			eng, err := NewServerEngine(data) // must not panic
+			if err == nil {
+				t.Fatalf("expected error for malformed key %q, got nil", name)
+			}
+			if eng != nil {
+				t.Fatalf("expected nil engine on error for %q, got %v", name, eng)
+			}
+		})
 	}
 }
 
