@@ -67,3 +67,7 @@ terraform.tfstate
 .env
 .env.local
 *.env
+
+# Go fuzzing corpus — machine-generated crashers (can be large / OOM on replay).
+# Seed corpus lives in the _test.go files via f.Add; this dir is regenerated.
+**/testdata/fuzz/

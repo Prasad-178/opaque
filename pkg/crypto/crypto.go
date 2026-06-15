@@ -157,6 +157,9 @@ func NewServerEngine(publicKeyBytes []byte) (eng *Engine, err error) {
 	if len(publicKeyBytes) == 0 {
 		return nil, errors.New("empty public key data")
 	}
+	if len(publicKeyBytes) > maxPublicKeyBytes {
+		return nil, fmt.Errorf("public key data too large: %d bytes (max %d)", len(publicKeyBytes), maxPublicKeyBytes)
+	}
 
 	params, err := NewParameters()
 	if err != nil {
@@ -395,11 +398,27 @@ func (e *Engine) SerializeCiphertext(ct *rlwe.Ciphertext) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// Upper bounds on accepted serialized inputs, used to reject oversized blobs
+// before they reach Lattigo's ReadFrom. For our fixed params a max-level
+// ciphertext serializes to ~1.25 MB and a public key to ~1.75 MB; server-side
+// result ciphertexts are smaller (lower level after rescale), so there is no
+// lower bound. These caps close the oversized-input DoS variant. They do NOT
+// fully close resource exhaustion from a malformed *declared length* embedded
+// in a plausibly-sized input — Lattigo trusts stream length fields and may
+// allocate before reading. See docs/SECURITY_MODEL.md §8.
+const (
+	maxCiphertextBytes = 2 << 20 // 2 MiB (max-level ct ~1.25 MB for current params)
+	maxPublicKeyBytes  = 2 << 20 // 2 MiB (public key ~1.75 MB for current params)
+)
+
 // DeserializeCiphertext deserializes bytes to a ciphertext.
 // Validates input size and recovers from panics in Lattigo's ReadFrom.
 func (e *Engine) DeserializeCiphertext(data []byte) (ct *rlwe.Ciphertext, err error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty ciphertext data")
+	}
+	if len(data) > maxCiphertextBytes {
+		return nil, fmt.Errorf("ciphertext data too large: %d bytes (max %d)", len(data), maxCiphertextBytes)
 	}
 
 	// Lattigo's ReadFrom can panic on malformed input; recover gracefully.

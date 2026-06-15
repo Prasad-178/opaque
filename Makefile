@@ -1,4 +1,4 @@
-.PHONY: build fmt fmt-check vet lint staticcheck govulncheck test-unit test-integration test-fast test test-race test-cover test-bench test-sift test-100k test-sift1m proto ci
+.PHONY: build fmt fmt-check vet lint staticcheck govulncheck test-unit test-integration test-fast test test-race test-cover test-bench test-sift test-100k test-sift1m fuzz proto ci
 
 build:
 	go build ./...
@@ -53,6 +53,15 @@ test-cover:
 
 test-bench:
 	go test -bench=. -benchmem ./pkg/crypto/... ./pkg/lsh/...
+
+# Fuzz the deserialization boundary (untrusted public-key / ciphertext bytes).
+# go test runs one -fuzz target per invocation, so run them sequentially.
+# NOTE: active fuzzing can surface the documented unbounded-allocation residual
+# (SECURITY_MODEL.md §8) as an OOM/`signal: killed` — that is the harness doing
+# its job, not a flake. The seed corpus (run by `make test-unit`) stays green.
+fuzz:
+	go test ./pkg/crypto/ -run=^$$ -fuzz=FuzzDeserializeCiphertext -fuzztime=20s
+	go test ./pkg/crypto/ -run=^$$ -fuzz=FuzzNewServerEngine -fuzztime=20s
 
 test-sift:
 	go test -tags integration -v -run TestSIFTKMeansEndToEnd ./pkg/client/ -timeout 5m

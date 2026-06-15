@@ -351,6 +351,7 @@ hidden hardware effects).
 | PIR backend as opt-in alternative to decoys | Deferred (statistical hiding + permutation + padding + tunable ε deemed sufficient for HBC; PIR remains research direction for Compass-tier malicious-server deployments) | Low |
 | Pin Lattigo to v6.x line for security patches | Deferred (v6 is breaking; v5 doesn't bootstrap during search) | Low |
 | Active-server integrity for cluster-index metadata | Not yet planned | Low (out of scope under HBC) |
+| Bounded deserialization of untrusted CKKS blobs | **Partial** — empty/oversized-input + panic-recover guards on `NewServerEngine` (public key) and `DeserializeCiphertext` (`maxPublicKeyBytes` / `maxCiphertextBytes` = 4 MiB), surfaced by `make fuzz`. **Residual:** Lattigo's `ReadFrom` trusts a stream-declared poly length and may allocate before reading, so a malformed length inside a plausibly-sized blob can still drive a large/OOM allocation (`makeslice: len out of range` is recovered; a sub-`maxInt` huge length is not). Fully closing it needs params-derived validation of the binary section length before the poly read. | Low (availability only; confidentiality unaffected, outside the HBC confidentiality model) |
 
 ## 9. References
 
