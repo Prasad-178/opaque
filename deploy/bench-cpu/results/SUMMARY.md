@@ -23,6 +23,36 @@ CKKS `LogN=14` (128-bit security). Dataset: SIFT 1M (1,000,000 × 128-dim),
 
 ---
 
+## m6i.2xlarge (8 vCPU, 32 GB) — ε-SWEEP: access-pattern privacy vs latency (2026-08-17)
+
+The "tunable knob" money figure for the paper (`TestSIFT1M_EpsilonSweep`,
+`run_eps_sweep.sh`). Search config held FIXED (NC=128, strict top-8, no PQ,
+Bucketed padding, 50 queries); only `TargetEpsilon` swept. Decoys derived
+deterministically as `NumDecoys = ⌈(128−8)·e^(−ε)⌉`, so ε maps 1:1 to decoy
+count; per-query distinguishability bounded by e^ε. Recall is ε-independent
+(decoys never change which real clusters are fetched) — the ±1.5 pp R@10 wobble
+is build-to-build k-means variance, not a privacy cost.
+
+| ε   | decoys | ≤ e^ε  | R@1   | R@10  | avg query | P50    |
+|-----|--------|--------|-------|-------|-----------|--------|
+| 0.5 | 73     | 1.65   | 96.0% | 97.6% | 612 ms    | 600 ms |
+| 1.0 | 45     | 2.72   | 98.0% | 95.0% | 544 ms    | 531 ms |
+| 1.5 | 27     | 4.48   | 96.0% | 96.4% | 414 ms    | 405 ms |
+| 2.0 | 17     | 7.39   | 96.0% | 96.8% | 366 ms    | 356 ms |
+| 2.5 | 10     | 12.18  | 96.0% | 97.0% | 317 ms    | 307 ms |
+| 3.0 | 6      | 20.09  | 98.0% | 94.8% | 289 ms    | 282 ms |
+| 4.0 | 3      | 54.60  | 96.0% | 96.0% | 282 ms    | 270 ms |
+| 5.0 | 1      | 148.41 | 98.0% | 96.8% | 267 ms    | 255 ms |
+
+**Takeaway:** latency falls monotonically 612 → 267 ms as ε grows (privacy
+weakens, decoys 73 → 1) at flat ~96% R@10. Access-pattern privacy is bought
+purely with latency, not accuracy — the core "tunable knob" result. Plotted as
+Figure 1 in `paper/opaque.tex` (pgfplots, data from this run). Reproduce:
+`deploy/bench-cpu/run_eps_sweep.sh m6i.2xlarge`. Instance auto-destroyed;
+teardown independently verified (no residual instance / key-pair / security-group).
+
+---
+
 ## m6i.xlarge (4 vCPU, 16 GB, Intel Ice Lake) — float32-ciphertext validation (2026-05-10)
 
 Quick-and-cheap regression check (~$0.03/run) after the float32 AES
